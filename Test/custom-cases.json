@@ -1,0 +1,12 @@
+{
+    "run": [
+        { "attributes": { "id": "1" } },
+        {
+            "key": "my-test",
+            "variations": [ 0, 1 ]
+        },
+        1,
+        true,
+        true
+    ]
+}
