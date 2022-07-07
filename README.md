@@ -1,5 +1,5 @@
-# growthbook-c-sharp
-Powerful Feature flagging and A/B testing for C# apps using [GrowthBook](https://www.growthbook.io/)
+# growthbook-csharp
+Powerful feature flagging and A/B testing for C# apps using [GrowthBook](https://www.growthbook.io/)
 
 ## Usage
 This library is based on the [GrowthBook SDK specs](https://docs.growthbook.io/lib/build-your-own) and should be compatible
