@@ -8,10 +8,10 @@
     <PackageLicenseFile>LICENSE</PackageLicenseFile>
     <Copyright>Copyright (c) 2022 GrowthBook</Copyright>
     <PackageId>growthbook-c-sharp</PackageId>
-    <RepositoryUrl>https://github.com/darklordzw/growthbook-csharp.git</RepositoryUrl>
+    <RepositoryUrl>https://github.com/growthbook/growthbook-csharp.git</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageTags>GrowthBook,A/B test,feature toggle</PackageTags>
-    <Version>0.0.5</Version>
+    <Version>0.0.6</Version>
   </PropertyGroup>
 
   <ItemGroup>
