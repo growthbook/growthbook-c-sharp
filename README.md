@@ -1,3 +1,5 @@
+![](https://docs.growthbook.io/images/hero-csharp-sdk.png)
+
 # growthbook-c-sharp
 Powerful feature flagging and A/B testing for C# apps using [GrowthBook](https://www.growthbook.io/)
 
