@@ -1,11 +1,13 @@
-﻿using Newtonsoft.Json;
+﻿using System;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Newtonsoft.Json.Serialization;
-using System;
 
-namespace GrowthBook {
+namespace GrowthBook
+{
     [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
-    public class FeatureResult {
+    public class FeatureResult
+    {
         /// <summary>
         /// The assigned value of the feature.
         /// </summary>
@@ -14,9 +16,12 @@ namespace GrowthBook {
         /// <summary>
         /// The assigned value cast to a boolean.
         /// </summary>
-        public bool On {
-            get {
-                if (Value == null || Value.Type == JTokenType.Null) {
+        public bool On
+        {
+            get
+            {
+                if (Value == null || Value.Type == JTokenType.Null)
+                {
                     return false;
                 }
                 string strValue = Value.ToString();
@@ -49,12 +54,15 @@ namespace GrowthBook {
         /// </summary>
         /// <typeparam name="T"></typeparam>
         /// <returns>The value of the feature cast to the specified type.</returns>
-        public T GetValue<T>() {
+        public T GetValue<T>()
+        {
             return Value.ToObject<T>();
         }
 
-        public override bool Equals(object obj) {
-            if (obj.GetType() == typeof(FeatureResult)) {
+        public override bool Equals(object obj)
+        {
+            if (obj.GetType() == typeof(FeatureResult))
+            {
                 FeatureResult objResult = (FeatureResult)obj;
                 return object.Equals(Experiment, objResult.Experiment)
                     && object.Equals(ExperimentResult, objResult.ExperimentResult)
@@ -66,7 +74,8 @@ namespace GrowthBook {
             return false;
         }
 
-        public override int GetHashCode() {
+        public override int GetHashCode()
+        {
             throw new NotImplementedException();
         }
     }

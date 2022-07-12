@@ -1,15 +1,17 @@
-﻿using Newtonsoft.Json;
+﻿using System;
+using System.Collections.Generic;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Newtonsoft.Json.Serialization;
-using System;
-using System.Collections.Generic;
 
-namespace GrowthBook {
+namespace GrowthBook
+{
     /// <summary>
     /// Represents a parameter object passed into the GrowthBook constructor.
     /// </summary>
     [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
-    public class Context {
+    public class Context
+    {
         /// <summary>
         /// Switch to globally disable all experiments. Default true.
         /// </summary>

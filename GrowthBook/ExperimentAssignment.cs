@@ -1,12 +1,14 @@
 ﻿using Newtonsoft.Json;
 using Newtonsoft.Json.Serialization;
 
-namespace GrowthBook {
+namespace GrowthBook
+{
     /// <summary>
     /// Represents a mapping of an experiment to an assigned result.
     /// </summary>
     [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
-    public class ExperimentAssignment {
+    public class ExperimentAssignment
+    {
         /// <summary>
         /// The experiment the user is assigned to.
         /// </summary>

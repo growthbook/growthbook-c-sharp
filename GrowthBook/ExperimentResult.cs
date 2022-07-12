@@ -1,14 +1,16 @@
-﻿using Newtonsoft.Json;
+﻿using System;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Newtonsoft.Json.Serialization;
-using System;
 
-namespace GrowthBook {
+namespace GrowthBook
+{
     /// <summary>
     /// The result of running an experiment given a specific context.
     /// </summary>
     [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
-    public class ExperimentResult {
+    public class ExperimentResult
+    {
         /// <summary>
         /// Whether or not the user is part of the experiment.
         /// </summary>
@@ -44,12 +46,15 @@ namespace GrowthBook {
         /// </summary>
         /// <typeparam name="T"></typeparam>
         /// <returns>The value of the assigned variation cast to the specified type.</returns>
-        public T GetValue<T>() {
+        public T GetValue<T>()
+        {
             return Value.ToObject<T>();
         }
 
-        public override bool Equals(object obj) {
-            if (obj.GetType() == typeof(ExperimentResult)) {
+        public override bool Equals(object obj)
+        {
+            if (obj.GetType() == typeof(ExperimentResult))
+            {
                 ExperimentResult objResult = (ExperimentResult)obj;
                 return InExperiment == objResult.InExperiment
                     && HashAttribute == objResult.HashAttribute
@@ -61,7 +66,8 @@ namespace GrowthBook {
             return false;
         }
 
-        public override int GetHashCode() {
+        public override int GetHashCode()
+        {
             throw new NotImplementedException();
         }
     }

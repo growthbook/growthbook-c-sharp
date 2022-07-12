@@ -1,14 +1,16 @@
-﻿using Newtonsoft.Json;
+﻿using System.Collections.Generic;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Newtonsoft.Json.Serialization;
-using System.Collections.Generic;
 
-namespace GrowthBook {
+namespace GrowthBook
+{
     /// <summary>
     /// Overrides the defaultValue of a Feature.
     /// </summary>
     [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
-    public class FeatureRule {
+    public class FeatureRule
+    {
         /// <summary>
         /// Optional targeting condition.
         /// </summary>
@@ -54,7 +56,8 @@ namespace GrowthBook {
         /// </summary>
         /// <typeparam name="T"></typeparam>
         /// <returns>The variations cast as the specified type.</returns>
-        public T GetVariations<T>() {
+        public T GetVariations<T>()
+        {
             return Variations.ToObject<T>();
         }
     }
