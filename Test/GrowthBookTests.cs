@@ -1,20 +1,24 @@
-﻿using GrowthBook;
-using Microsoft.VisualStudio.TestTools.UnitTesting;
-using Newtonsoft.Json.Linq;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
+using GrowthBook;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Newtonsoft.Json.Linq;
 
-namespace Growthbook.Tests {
+namespace Growthbook.Tests
+{
     [TestClass]
-    public class GrowthBookTests {
+    public class GrowthBookTests
+    {
         public static JObject testCases;
         public static JObject customCases;
 
         [ClassInitialize]
-        public static void TestFixtureSetup(TestContext context) {
-            if (context is null) {
+        public static void TestFixtureSetup(TestContext context)
+        {
+            if (context is null)
+            {
                 throw new ArgumentNullException(nameof(context));
             }
 
@@ -22,14 +26,17 @@ namespace Growthbook.Tests {
             customCases = JObject.Parse(File.ReadAllText("../../custom-cases.json"));
         }
 
-        public static string GetTestNames(MethodInfo methodInfo, object[] values) {
+        public static string GetTestNames(MethodInfo methodInfo, object[] values)
+        {
             return $"{methodInfo.Name} - { values[0] }";
         }
 
         [TestMethod]
         [DynamicData(nameof(RunTests), DynamicDataSourceType.Method, DynamicDataDisplayName = nameof(GetTestNames))]
-        public void Run(string testname, Context context, Experiment experiment, JToken expectedValue, bool inExperiment, bool hashUsed) {
-            if (testname is null) {
+        public void Run(string testname, Context context, Experiment experiment, JToken expectedValue, bool inExperiment, bool hashUsed)
+        {
+            if (testname is null)
+            {
                 throw new ArgumentNullException(nameof(testname));
             }
 
@@ -40,8 +47,10 @@ namespace Growthbook.Tests {
             Assert.IsTrue(JToken.DeepEquals(actual.Value, expectedValue));
         }
 
-        public static IEnumerable<object[]> RunTests() {
-            foreach (JArray testCase in (JArray)testCases["run"]) {
+        public static IEnumerable<object[]> RunTests()
+        {
+            foreach (JArray testCase in (JArray)testCases["run"])
+            {
                 yield return new object[] {
                     testCase[0].ToString(),
                     testCase[1].ToObject<Context>(),
@@ -54,12 +63,14 @@ namespace Growthbook.Tests {
         }
 
         [TestMethod]
-        public void Run_ShouldCallTrackingCallbackOnce() {
+        public void Run_ShouldCallTrackingCallbackOnce()
+        {
             JArray testCase = (JArray)customCases["run"];
             int trackingCounter = 0;
 
             Context context = testCase[0].ToObject<Context>();
-            context.TrackingCallback = (Experiment experiment, ExperimentResult result) => {
+            context.TrackingCallback = (Experiment experiment, ExperimentResult result) =>
+            {
                 Assert.IsTrue(JToken.DeepEquals(result.Value, testCase[2]));
                 Assert.AreEqual(testCase[3].ToObject<bool>(), result.InExperiment);
                 Assert.AreEqual(testCase[4].ToObject<bool>(), result.HashUsed);
@@ -73,12 +84,14 @@ namespace Growthbook.Tests {
         }
 
         [TestMethod]
-        public void Run_ShouldCallSubscribedCallbacks() {
+        public void Run_ShouldCallSubscribedCallbacks()
+        {
             JArray testCase = (JArray)customCases["run"];
             GrowthBook.GrowthBook gb = new GrowthBook.GrowthBook(testCase[0].ToObject<Context>());
 
             int subCounterOne = 0;
-            gb.Subscribe((Experiment experiment, ExperimentResult result) => {
+            gb.Subscribe((Experiment experiment, ExperimentResult result) =>
+            {
                 Assert.IsTrue(JToken.DeepEquals(result.Value, testCase[2]));
                 Assert.AreEqual(testCase[3].ToObject<bool>(), result.InExperiment);
                 Assert.AreEqual(testCase[4].ToObject<bool>(), result.HashUsed);
@@ -86,7 +99,8 @@ namespace Growthbook.Tests {
             });
 
             int subCounterTwo = 0;
-            Action unsubscribe = gb.Subscribe((Experiment experiment, ExperimentResult result) => {
+            Action unsubscribe = gb.Subscribe((Experiment experiment, ExperimentResult result) =>
+            {
                 Assert.IsTrue(JToken.DeepEquals(result.Value, testCase[2]));
                 Assert.AreEqual(testCase[3].ToObject<bool>(), result.InExperiment);
                 Assert.AreEqual(testCase[4].ToObject<bool>(), result.HashUsed);
@@ -95,7 +109,8 @@ namespace Growthbook.Tests {
             unsubscribe();
 
             int subCounterThree = 0;
-            gb.Subscribe((Experiment experiment, ExperimentResult result) => {
+            gb.Subscribe((Experiment experiment, ExperimentResult result) =>
+            {
                 Assert.IsTrue(JToken.DeepEquals(result.Value, testCase[2]));
                 Assert.AreEqual(testCase[3].ToObject<bool>(), result.InExperiment);
                 Assert.AreEqual(testCase[4].ToObject<bool>(), result.HashUsed);
@@ -112,8 +127,10 @@ namespace Growthbook.Tests {
 
         [TestMethod]
         [DynamicData(nameof(EvalFeatureTests), DynamicDataSourceType.Method, DynamicDataDisplayName = nameof(GetTestNames))]
-        public void EvalFeature(string testname, Context context, string key, FeatureResult expected) {
-            if (testname is null) {
+        public void EvalFeature(string testname, Context context, string key, FeatureResult expected)
+        {
+            if (testname is null)
+            {
                 throw new ArgumentNullException(nameof(testname));
             }
 
@@ -122,8 +139,10 @@ namespace Growthbook.Tests {
             Assert.AreEqual(expected, actual);
         }
 
-        public static IEnumerable<object[]> EvalFeatureTests() {
-            foreach (JArray testCase in (JArray)testCases["feature"]) {
+        public static IEnumerable<object[]> EvalFeatureTests()
+        {
+            foreach (JArray testCase in (JArray)testCases["feature"])
+            {
                 yield return new object[] {
                     testCase[0].ToString(),
                     testCase[1].ToObject<Context>(),

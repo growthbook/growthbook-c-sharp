@@ -1,45 +1,55 @@
-﻿using GrowthBook;
-using Microsoft.VisualStudio.TestTools.UnitTesting;
-using Newtonsoft.Json.Linq;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using GrowthBook;
+using Microsoft.VisualStudio.TestTools.UnitTesting;
+using Newtonsoft.Json.Linq;
 
-namespace Growthbook.Tests {
+namespace Growthbook.Tests
+{
     [TestClass]
-    public class Utilities {
+    public class Utilities
+    {
         public static JObject testCases;
 
         [ClassInitialize]
-        public static void TestFixtureSetup(TestContext context) {
-            if (context is null) {
+        public static void TestFixtureSetup(TestContext context)
+        {
+            if (context is null)
+            {
                 throw new ArgumentNullException(nameof(context));
             }
 
             testCases = JObject.Parse(File.ReadAllText("../../standard-cases.json"));
         }
 
-        public static string GetTestNames(MethodInfo methodInfo, object[] values) {
+        public static string GetTestNames(MethodInfo methodInfo, object[] values)
+        {
             return $"{methodInfo.Name} - { values[0] }";
         }
 
-        public double RoundStandard(double input) {
+        public double RoundStandard(double input)
+        {
             return Math.Round(input, 6);
         }
 
-        public IList<double> RoundArray(IList<double> input) {
+        public IList<double> RoundArray(IList<double> input)
+        {
             List<double> results = new List<double>();
-            for (int i = 0; i < input.Count; i++) {
+            for (int i = 0; i < input.Count; i++)
+            {
                 results.Add(RoundStandard(input[i]));
             }
             return results;
         }
 
-        public IList<BucketRange> RoundBucketRanges(IList<BucketRange> input) {
+        public IList<BucketRange> RoundBucketRanges(IList<BucketRange> input)
+        {
             List<BucketRange> results = new List<BucketRange>();
-            foreach (BucketRange range in input) {
+            foreach (BucketRange range in input)
+            {
                 results.Add(new BucketRange(RoundStandard(range.Start), RoundStandard(range.End)));
             }
             return results;
@@ -47,13 +57,16 @@ namespace Growthbook.Tests {
 
         [TestMethod]
         [DynamicData(nameof(HashTests), DynamicDataSourceType.Method, DynamicDataDisplayName = nameof(GetTestNames))]
-        public void Hash(string input, double expected) {
+        public void Hash(string input, double expected)
+        {
             double actual = GrowthBook.Utilities.Hash(input);
             Assert.AreEqual(expected, actual);
         }
 
-        public static IEnumerable<object[]> HashTests() {
-            foreach (JArray testCase in (JArray)testCases["hash"]) {
+        public static IEnumerable<object[]> HashTests()
+        {
+            foreach (JArray testCase in (JArray)testCases["hash"])
+            {
                 yield return new object[] {
                     testCase[0].ToString(),
                     testCase[1].ToObject<double>()
@@ -63,8 +76,10 @@ namespace Growthbook.Tests {
 
         [TestMethod]
         [DynamicData(nameof(InNamespaceTests), DynamicDataSourceType.Method, DynamicDataDisplayName = nameof(GetTestNames))]
-        public void InNamespace(string testName, string userId, string id, double start, double end, bool expected) {
-            if (testName is null) {
+        public void InNamespace(string testName, string userId, string id, double start, double end, bool expected)
+        {
+            if (testName is null)
+            {
                 throw new ArgumentNullException(nameof(testName));
             }
 
@@ -72,8 +87,10 @@ namespace Growthbook.Tests {
             Assert.AreEqual(expected, actual);
         }
 
-        public static IEnumerable<object[]> InNamespaceTests() {
-            foreach (JArray testCase in (JArray)testCases["inNamespace"]) {
+        public static IEnumerable<object[]> InNamespaceTests()
+        {
+            foreach (JArray testCase in (JArray)testCases["inNamespace"])
+            {
                 yield return new object[] {
                     testCase[0].ToString(),
                     testCase[1].ToString(),
@@ -87,13 +104,16 @@ namespace Growthbook.Tests {
 
         [TestMethod]
         [DynamicData(nameof(GetEqualWeightsTests), DynamicDataSourceType.Method, DynamicDataDisplayName = nameof(GetTestNames))]
-        public void GetEqualWeights(int input, IList<double> expected) {
+        public void GetEqualWeights(int input, IList<double> expected)
+        {
             IList<double> actual = GrowthBook.Utilities.GetEqualWeights(input);
             Assert.IsTrue(RoundArray(expected).SequenceEqual(RoundArray(actual)));
         }
 
-        public static IEnumerable<object[]> GetEqualWeightsTests() {
-            foreach (JArray testCase in (JArray)testCases["getEqualWeights"]) {
+        public static IEnumerable<object[]> GetEqualWeightsTests()
+        {
+            foreach (JArray testCase in (JArray)testCases["getEqualWeights"])
+            {
                 yield return new object[] {
                     testCase[0].ToObject<int>(),
                     testCase[1].ToObject<double[]>(),
@@ -103,8 +123,10 @@ namespace Growthbook.Tests {
 
         [TestMethod]
         [DynamicData(nameof(GetBucketRangeTests), DynamicDataSourceType.Method, DynamicDataDisplayName = nameof(GetTestNames))]
-        public void GetBucketRanges(string testName, int numVariations, double coverage, double[] weights, List<BucketRange> expected) {
-            if (testName is null) {
+        public void GetBucketRanges(string testName, int numVariations, double coverage, double[] weights, List<BucketRange> expected)
+        {
+            if (testName is null)
+            {
                 throw new ArgumentNullException(nameof(testName));
             }
 
@@ -112,10 +134,13 @@ namespace Growthbook.Tests {
             Assert.IsTrue(RoundBucketRanges(expected).SequenceEqual(RoundBucketRanges(actual)));
         }
 
-        public static IEnumerable<object[]> GetBucketRangeTests() {
-            foreach (JArray testCase in (JArray)testCases["getBucketRange"]) {
+        public static IEnumerable<object[]> GetBucketRangeTests()
+        {
+            foreach (JArray testCase in (JArray)testCases["getBucketRange"])
+            {
                 List<BucketRange> expected = new List<BucketRange>();
-                foreach (JArray jArray in testCase[2]) {
+                foreach (JArray jArray in testCase[2])
+                {
                     expected.Add(new BucketRange(jArray[0].ToObject<double>(), jArray[1].ToObject<double>()));
                 }
                 yield return new object[] {
@@ -130,8 +155,10 @@ namespace Growthbook.Tests {
 
         [TestMethod]
         [DynamicData(nameof(ChooseVariationTests), DynamicDataSourceType.Method, DynamicDataDisplayName = nameof(GetTestNames))]
-        public void ChooseVariation(string testName, double n, List<BucketRange> ranges, int expected) {
-            if (testName is null) {
+        public void ChooseVariation(string testName, double n, List<BucketRange> ranges, int expected)
+        {
+            if (testName is null)
+            {
                 throw new ArgumentNullException(nameof(testName));
             }
 
@@ -139,10 +166,13 @@ namespace Growthbook.Tests {
             Assert.AreEqual(expected, actual);
         }
 
-        public static IEnumerable<object[]> ChooseVariationTests() {
-            foreach (JArray testCase in (JArray)testCases["chooseVariation"]) {
+        public static IEnumerable<object[]> ChooseVariationTests()
+        {
+            foreach (JArray testCase in (JArray)testCases["chooseVariation"])
+            {
                 List<BucketRange> ranges = new List<BucketRange>();
-                foreach (JArray jArray in testCase[2]) {
+                foreach (JArray jArray in testCase[2])
+                {
                     ranges.Add(new BucketRange(jArray[0].ToObject<double>(), jArray[1].ToObject<double>()));
                 }
                 yield return new object[] {
@@ -156,8 +186,10 @@ namespace Growthbook.Tests {
 
         [TestMethod]
         [DynamicData(nameof(GetQueryStringOverrideTests), DynamicDataSourceType.Method, DynamicDataDisplayName = nameof(GetTestNames))]
-        public void GetQueryStringOverride(string testName, string id, string url, int numVariations, int? expected) {
-            if (testName is null) {
+        public void GetQueryStringOverride(string testName, string id, string url, int numVariations, int? expected)
+        {
+            if (testName is null)
+            {
                 throw new ArgumentNullException(nameof(testName));
             }
 
@@ -165,8 +197,10 @@ namespace Growthbook.Tests {
             Assert.AreEqual(expected, actual);
         }
 
-        public static IEnumerable<object[]> GetQueryStringOverrideTests() {
-            foreach (JArray testCase in (JArray)testCases["getQueryStringOverride"]) {
+        public static IEnumerable<object[]> GetQueryStringOverrideTests()
+        {
+            foreach (JArray testCase in (JArray)testCases["getQueryStringOverride"])
+            {
                 yield return new object[] {
                     testCase[0].ToString(),
                     testCase[1].ToString(),
@@ -179,8 +213,10 @@ namespace Growthbook.Tests {
 
         [TestMethod]
         [DynamicData(nameof(EvalConditionTests), DynamicDataSourceType.Method, DynamicDataDisplayName = nameof(GetTestNames))]
-        public void EvalCondition(string testName, JObject condition, JToken attributes, bool expected) {
-            if (testName is null) {
+        public void EvalCondition(string testName, JObject condition, JToken attributes, bool expected)
+        {
+            if (testName is null)
+            {
                 throw new ArgumentNullException(nameof(testName));
             }
 
@@ -188,8 +224,10 @@ namespace Growthbook.Tests {
             Assert.AreEqual(expected, actual);
         }
 
-        public static IEnumerable<object[]> EvalConditionTests() {
-            foreach (JArray testCase in (JArray)testCases["evalCondition"]) {
+        public static IEnumerable<object[]> EvalConditionTests()
+        {
+            foreach (JArray testCase in (JArray)testCases["evalCondition"])
+            {
                 yield return new object[] {
                     testCase[0].ToString(),
                     testCase[1],
