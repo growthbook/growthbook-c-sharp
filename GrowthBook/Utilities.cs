@@ -144,9 +144,8 @@ namespace GrowthBook
             }
 
             string variation = qs.Get(id);
-            int varId;
 
-            if (!int.TryParse(variation, out varId))
+            if (!int.TryParse(variation, out int varId))
             {
                 return null;
             }
@@ -350,10 +349,8 @@ namespace GrowthBook
             {
                 return !conditionValue.Equals(attributeValue);
             }
-            if (attributeValue is IComparable)
+            if (attributeValue is IComparable attrComp)
             {
-                IComparable attrComp = (IComparable)attributeValue;
-
                 if (op == "$lt")
                 {
                     return attrComp.CompareTo(conditionValue) < 0;

@@ -13,17 +13,12 @@ namespace GrowthBook
     {
         // #region Private Members
 
-        bool enabled;
-        JObject attributes;
-        string url;
-        IDictionary<string, Feature> features;
-        JObject forcedVariations;
-        bool qaMode;
-        Action<Experiment, ExperimentResult> trackingCallback;
-        Dictionary<string, ExperimentAssignment> assigned;
-        HashSet<string> tracked;
-        List<Action<Experiment, ExperimentResult>> subscriptions;
-        bool disposedValue;
+        readonly bool _qaMode;
+        readonly Dictionary<string, ExperimentAssignment> _assigned;
+        readonly HashSet<string> _tracked;
+        Action<Experiment, ExperimentResult> _trackingCallback;
+        readonly List<Action<Experiment, ExperimentResult>> _subscriptions;
+        bool _disposedValue;
 
         // #endregion
 
@@ -33,16 +28,16 @@ namespace GrowthBook
         /// <param name="context">The GrowthBook Context object.</param>
         public GrowthBook(Context context)
         {
-            enabled = context.Enabled;
-            attributes = context.Attributes;
-            url = context.Url;
-            features = context.Features;
-            forcedVariations = context.ForcedVariations;
-            qaMode = context.QaMode;
-            trackingCallback = context.TrackingCallback;
-            tracked = new HashSet<string>();
-            assigned = new Dictionary<string, ExperimentAssignment>();
-            subscriptions = new List<Action<Experiment, ExperimentResult>>();
+            Enabled = context.Enabled;
+            Attributes = context.Attributes;
+            Url = context.Url;
+            Features = context.Features;
+            ForcedVariations = context.ForcedVariations;
+            _qaMode = context.QaMode;
+            _trackingCallback = context.TrackingCallback;
+            _tracked = new HashSet<string>();
+            _assigned = new Dictionary<string, ExperimentAssignment>();
+            _subscriptions = new List<Action<Experiment, ExperimentResult>>();
         }
 
         // #region Properties
@@ -50,47 +45,27 @@ namespace GrowthBook
         /// <summary>
         /// Arbitrary JSON object containing user and request attributes.
         /// </summary>
-        public JObject Attributes
-        {
-            get { return attributes; }
-            set { attributes = value; }
-        }
+        public JObject Attributes { get; set; }
 
         /// <summary>
         /// Dictionary of the currently loaded feature objects.
         /// </summary>
-        public IDictionary<string, Feature> Features
-        {
-            get { return features; }
-            set { features = value; }
-        }
+        public IDictionary<string, Feature> Features { get; set; }
 
         /// <summary>
         /// Listing of specific experiments to always assign a specific variation (used for QA).
         /// </summary>
-        public JObject ForcedVariations
-        {
-            get { return forcedVariations; }
-            set { forcedVariations = value; }
-        }
+        public JObject ForcedVariations { get; set; }
 
         /// <summary>
         /// The URL of the current page.
         /// </summary>
-        public string Url
-        {
-            get { return url; }
-            set { url = value; }
-        }
+        public string Url { get; set; }
 
         /// <summary>
         ///  Switch to globally disable all experiments. Default true.
         /// </summary>
-        public bool Enabled
-        {
-            get { return enabled; }
-            set { enabled = value; }
-        }
+        public bool Enabled { get; set; }
 
         // #endregion
 
@@ -102,20 +77,20 @@ namespace GrowthBook
         /// <param name="disposing">If true, dispose of large objects.</param>
         protected virtual void Dispose(bool disposing)
         {
-            if (!disposedValue)
+            if (!_disposedValue)
             {
                 if (disposing)
                 {
-                    attributes = null;
-                    features.Clear();
-                    forcedVariations = null;
-                    trackingCallback = null;
-                    tracked.Clear();
-                    assigned.Clear();
-                    subscriptions.Clear();
+                    Attributes = null;
+                    Features.Clear();
+                    ForcedVariations = null;
+                    _trackingCallback = null;
+                    _tracked.Clear();
+                    _assigned.Clear();
+                    _subscriptions.Clear();
                 }
 
-                disposedValue = true;
+                _disposedValue = true;
             }
         }
 
@@ -181,7 +156,7 @@ namespace GrowthBook
         /// <returns></returns>
         public IDictionary<string, ExperimentAssignment> GetAllResults()
         {
-            return assigned;
+            return _assigned;
         }
 
         /// <summary>
@@ -192,8 +167,8 @@ namespace GrowthBook
         /// <returns>An action callback that can be used to unsubscribe.</returns>
         public Action Subscribe(Action<Experiment, ExperimentResult> callback)
         {
-            subscriptions.Add(callback);
-            return () => subscriptions.Remove(callback);
+            _subscriptions.Add(callback);
+            return () => _subscriptions.Remove(callback);
         }
 
         /// <summary>
@@ -203,15 +178,14 @@ namespace GrowthBook
         /// <returns>The feature result.</returns>
         public FeatureResult EvalFeature(string key)
         {
-            Feature feature;
-            if (!features.TryGetValue(key, out feature))
+            if (!Features.TryGetValue(key, out Feature feature))
             {
                 return new FeatureResult { Source = "unknownFeature" };
             }
 
             foreach (FeatureRule rule in feature.Rules)
             {
-                if (rule.Condition != null && rule.Condition.Type != JTokenType.Null && !Utilities.EvalCondition(attributes, rule.Condition))
+                if (rule.Condition != null && rule.Condition.Type != JTokenType.Null && !Utilities.EvalCondition(Attributes, rule.Condition))
                 {
                     continue;
                 }
@@ -272,13 +246,12 @@ namespace GrowthBook
         {
             ExperimentResult result = RunExperiment(experiment);
 
-            ExperimentAssignment prev;
-            if (!assigned.TryGetValue(experiment.Key, out prev)
+            if (!_assigned.TryGetValue(experiment.Key, out ExperimentAssignment prev)
                 || prev.Result.InExperiment != result.InExperiment
                 || prev.Result.VariationId != result.VariationId)
             {
-                assigned.Add(experiment.Key, new ExperimentAssignment { Experiment = experiment, Result = result });
-                foreach (Action<Experiment, ExperimentResult> cb in subscriptions)
+                _assigned.Add(experiment.Key, new ExperimentAssignment { Experiment = experiment, Result = result });
+                foreach (Action<Experiment, ExperimentResult> cb in _subscriptions)
                 {
                     try
                     {
@@ -307,21 +280,20 @@ namespace GrowthBook
             }
 
             // 2. If growthbook is disabled, return immediately
-            if (!enabled)
+            if (!Enabled)
             {
                 return GetExperimentResult(experiment);
             }
 
             // 3. If experiment is forced via a querystring in the url
-            int? queryString = Utilities.GetQueryStringOverride(experiment.Key, url, experiment.Variations.Count);
+            int? queryString = Utilities.GetQueryStringOverride(experiment.Key, Url, experiment.Variations.Count);
             if (queryString != null)
             {
                 return GetExperimentResult(experiment, (int)queryString);
             }
 
             // 4. If variation is forced in the context
-            JToken forcedVariation;
-            if (forcedVariations.TryGetValue(experiment.Key, out forcedVariation))
+            if (ForcedVariations.TryGetValue(experiment.Key, out JToken forcedVariation))
             {
                 return GetExperimentResult(experiment, forcedVariation.ToObject<int>());
             }
@@ -347,7 +319,7 @@ namespace GrowthBook
             }
 
             // 8. Exclude if condition is false
-            if (experiment.Condition != null && experiment.Condition.Type != JTokenType.Null && !Utilities.EvalCondition(attributes, experiment.Condition))
+            if (experiment.Condition != null && experiment.Condition.Type != JTokenType.Null && !Utilities.EvalCondition(Attributes, experiment.Condition))
             {
                 return GetExperimentResult(experiment);
             }
@@ -370,7 +342,7 @@ namespace GrowthBook
             }
 
             // 12. Exclude if in QA mode
-            if (qaMode)
+            if (_qaMode)
             {
                 return GetExperimentResult(experiment);
             }
@@ -379,7 +351,7 @@ namespace GrowthBook
             ExperimentResult result = GetExperimentResult(experiment, assigned, true);
 
             // 14. Fire the tracking callback if set
-            if (trackingCallback != null)
+            if (_trackingCallback != null)
             {
                 Track(experiment, result);
             }
@@ -424,9 +396,9 @@ namespace GrowthBook
         /// <returns>The attribute value.</returns>
         string GetHashValue(string attr)
         {
-            if (attributes.ContainsKey(attr))
+            if (Attributes.ContainsKey(attr))
             {
-                return attributes[attr].ToString();
+                return Attributes[attr].ToString();
             }
             return string.Empty;
         }
@@ -438,18 +410,18 @@ namespace GrowthBook
         /// <param name="result">The result of the assignment.</param>
         void Track(Experiment experiment, ExperimentResult result)
         {
-            if (trackingCallback == null)
+            if (_trackingCallback == null)
             {
                 return;
             }
 
             string key = result.HashAttribute + result.HashValue + experiment.Key + result.VariationId;
-            if (!tracked.Contains(key))
+            if (!_tracked.Contains(key))
             {
                 try
                 {
-                    trackingCallback(experiment, result);
-                    tracked.Add(key);
+                    _trackingCallback(experiment, result);
+                    _tracked.Add(key);
                 }
                 catch (Exception) { }
             }

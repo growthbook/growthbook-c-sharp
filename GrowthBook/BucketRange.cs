@@ -31,7 +31,7 @@ namespace GrowthBook
             if (obj.GetType() == typeof(BucketRange))
             {
                 BucketRange objRange = (BucketRange)obj;
-                return this.Start == objRange.Start && this.End == objRange.End;
+                return Start == objRange.Start && End == objRange.End;
             }
             return false;
         }

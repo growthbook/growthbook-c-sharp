@@ -14,6 +14,10 @@ namespace Growthbook.Tests {
 
         [ClassInitialize]
         public static void TestFixtureSetup(TestContext context) {
+            if (context is null) {
+                throw new ArgumentNullException(nameof(context));
+            }
+
             testCases = JObject.Parse(File.ReadAllText("../../standard-cases.json"));
             customCases = JObject.Parse(File.ReadAllText("../../custom-cases.json"));
         }
@@ -25,6 +29,10 @@ namespace Growthbook.Tests {
         [TestMethod]
         [DynamicData(nameof(RunTests), DynamicDataSourceType.Method, DynamicDataDisplayName = nameof(GetTestNames))]
         public void Run(string testname, Context context, Experiment experiment, JToken expectedValue, bool inExperiment, bool hashUsed) {
+            if (testname is null) {
+                throw new ArgumentNullException(nameof(testname));
+            }
+
             GrowthBook.GrowthBook gb = new GrowthBook.GrowthBook(context);
             ExperimentResult actual = gb.Run(experiment);
             Assert.AreEqual(inExperiment, actual.InExperiment);
@@ -105,6 +113,10 @@ namespace Growthbook.Tests {
         [TestMethod]
         [DynamicData(nameof(EvalFeatureTests), DynamicDataSourceType.Method, DynamicDataDisplayName = nameof(GetTestNames))]
         public void EvalFeature(string testname, Context context, string key, FeatureResult expected) {
+            if (testname is null) {
+                throw new ArgumentNullException(nameof(testname));
+            }
+
             GrowthBook.GrowthBook gb = new GrowthBook.GrowthBook(context);
             FeatureResult actual = gb.EvalFeature(key);
             Assert.AreEqual(expected, actual);

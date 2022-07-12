@@ -14,6 +14,10 @@ namespace Growthbook.Tests {
 
         [ClassInitialize]
         public static void TestFixtureSetup(TestContext context) {
+            if (context is null) {
+                throw new ArgumentNullException(nameof(context));
+            }
+
             testCases = JObject.Parse(File.ReadAllText("../../standard-cases.json"));
         }
 
@@ -60,6 +64,10 @@ namespace Growthbook.Tests {
         [TestMethod]
         [DynamicData(nameof(InNamespaceTests), DynamicDataSourceType.Method, DynamicDataDisplayName = nameof(GetTestNames))]
         public void InNamespace(string testName, string userId, string id, double start, double end, bool expected) {
+            if (testName is null) {
+                throw new ArgumentNullException(nameof(testName));
+            }
+
             bool actual = GrowthBook.Utilities.InNamespace(userId, new GrowthBook.Namespace(id, start, end));
             Assert.AreEqual(expected, actual);
         }
@@ -96,6 +104,10 @@ namespace Growthbook.Tests {
         [TestMethod]
         [DynamicData(nameof(GetBucketRangeTests), DynamicDataSourceType.Method, DynamicDataDisplayName = nameof(GetTestNames))]
         public void GetBucketRanges(string testName, int numVariations, double coverage, double[] weights, List<BucketRange> expected) {
+            if (testName is null) {
+                throw new ArgumentNullException(nameof(testName));
+            }
+
             IList<BucketRange> actual = GrowthBook.Utilities.GetBucketRanges(numVariations, coverage, weights);
             Assert.IsTrue(RoundBucketRanges(expected).SequenceEqual(RoundBucketRanges(actual)));
         }
@@ -119,6 +131,10 @@ namespace Growthbook.Tests {
         [TestMethod]
         [DynamicData(nameof(ChooseVariationTests), DynamicDataSourceType.Method, DynamicDataDisplayName = nameof(GetTestNames))]
         public void ChooseVariation(string testName, double n, List<BucketRange> ranges, int expected) {
+            if (testName is null) {
+                throw new ArgumentNullException(nameof(testName));
+            }
+
             int actual = GrowthBook.Utilities.ChooseVariation(n, ranges);
             Assert.AreEqual(expected, actual);
         }
@@ -141,6 +157,10 @@ namespace Growthbook.Tests {
         [TestMethod]
         [DynamicData(nameof(GetQueryStringOverrideTests), DynamicDataSourceType.Method, DynamicDataDisplayName = nameof(GetTestNames))]
         public void GetQueryStringOverride(string testName, string id, string url, int numVariations, int? expected) {
+            if (testName is null) {
+                throw new ArgumentNullException(nameof(testName));
+            }
+
             int? actual = GrowthBook.Utilities.GetQueryStringOverride(id, url, numVariations);
             Assert.AreEqual(expected, actual);
         }
@@ -160,6 +180,10 @@ namespace Growthbook.Tests {
         [TestMethod]
         [DynamicData(nameof(EvalConditionTests), DynamicDataSourceType.Method, DynamicDataDisplayName = nameof(GetTestNames))]
         public void EvalCondition(string testName, JObject condition, JToken attributes, bool expected) {
+            if (testName is null) {
+                throw new ArgumentNullException(nameof(testName));
+            }
+
             bool actual = GrowthBook.Utilities.EvalCondition(attributes, condition);
             Assert.AreEqual(expected, actual);
         }

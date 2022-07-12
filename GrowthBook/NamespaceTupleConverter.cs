@@ -28,10 +28,12 @@ namespace GrowthBook
         public override void WriteJson(JsonWriter writer, object value, JsonSerializer serializer)
         {
             Namespace valueNamespace = (Namespace)value;
-            JArray t = new JArray();
-            t.Add(JToken.FromObject(valueNamespace.Id));
-            t.Add(JToken.FromObject(valueNamespace.Start));
-            t.Add(JToken.FromObject(valueNamespace.End));
+            JArray t = new JArray
+            {
+                JToken.FromObject(valueNamespace.Id),
+                JToken.FromObject(valueNamespace.Start),
+                JToken.FromObject(valueNamespace.End)
+            };
             t.WriteTo(writer);
         }
     }
