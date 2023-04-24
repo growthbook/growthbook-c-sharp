@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Linq;
 using Newtonsoft.Json.Linq;
 
 namespace GrowthBook
@@ -31,7 +32,7 @@ namespace GrowthBook
             Enabled = context.Enabled;
             Attributes = context.Attributes;
             Url = context.Url;
-            Features = context.Features;
+            Features = context.Features.ToDictionary(k => k.Key, v => v.Value);
             ForcedVariations = context.ForcedVariations;
             _qaMode = context.QaMode;
             _trackingCallback = context.TrackingCallback;
