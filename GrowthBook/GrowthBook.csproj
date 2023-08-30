@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <TargetFramework>netstandard2.0</TargetFramework>
@@ -11,7 +11,8 @@
     <RepositoryUrl>https://github.com/growthbook/growthbook-csharp.git</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageTags>GrowthBook,A/B test,feature toggle</PackageTags>
-    <Version>0.0.6</Version>
+    <Version>0.0.7</Version>
+    <LangVersion>latest</LangVersion>
   </PropertyGroup>
 
   <ItemGroup>

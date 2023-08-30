@@ -1,0 +1,11 @@
+﻿{
+    "EnvironmentName": "Dev",
+    "Enabled": true,
+    "Attributes": {},
+    "Url": null,
+    "Features": {
+    },
+    "ForcedVariations": {},
+    "QaMode": false,
+    "TrackingCallback": null
+}

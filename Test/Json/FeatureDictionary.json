@@ -1,0 +1,39 @@
+{
+  "backend_test1": {
+    "DefaultValue": [],
+    "Rules": []
+  },
+  "backend_test2": {
+    "DefaultValue": [],
+    "Rules": []
+  },
+  "backend_test3": {
+    "DefaultValue": [],
+    "Rules": [
+      {
+        "Condition": {
+          "tenantName": []
+        },
+        "Coverage": 1,
+        "Force": [],
+        "Variations": null,
+        "Key": null,
+        "Weights": null,
+        "Namespace": null,
+        "HashAttribute": "id"
+      },
+      {
+        "Condition": {
+          "tenantName": []
+        },
+        "Coverage": 1,
+        "Force": [],
+        "Variations": null,
+        "Key": null,
+        "Weights": null,
+        "Namespace": null,
+        "HashAttribute": "id"
+      }
+    ]
+  }
+}
