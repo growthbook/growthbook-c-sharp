@@ -10,7 +10,7 @@ namespace GrowthBook
     //  feature flagging and A/B testing platform.
     //  More info at https://www.growthbook.io
     /// </summary>
-    public class GrowthBook : IDisposable
+    public class GrowthBook : IGrowthbook, IDisposable
     {
         // #region Private Members
 
@@ -114,33 +114,19 @@ namespace GrowthBook
 
         // #endregion
 
-        /// <summary>
-        /// Checks to see if a feature is on.
-        /// </summary>
-        /// <param name="key">The feature key.</param>
-        /// <returns>True if the feature is on.</returns>
+        /// <inheritdoc />
         public bool IsOn(string key)
         {
             return EvalFeature(key).On;
         }
 
-        /// <summary>
-        /// Checks to see if a feature is off.
-        /// </summary>
-        /// <param name="key">The feature key.</param>
-        /// <returns>True if the feature is off.</returns>
+        /// <inheritdoc />
         public bool IsOff(string key)
         {
             return EvalFeature(key).Off;
         }
 
-        /// <summary>
-        /// Gets the value of a feature cast to the specified type.
-        /// </summary>
-        /// <typeparam name="T"></typeparam>
-        /// <param name="key">The feature key.</param>
-        /// <param name="fallback">Fallback value to return if the feature is not on.</param>
-        /// <returns>Value of a feature cast to the specified type.</returns>
+        /// <inheritdoc />
         public T GetFeatureValue<T>(string key, T fallback)
         {
             FeatureResult result = EvalFeature(key);
@@ -151,32 +137,20 @@ namespace GrowthBook
             return fallback;
         }
 
-        /// <summary>
-        /// Returns a map of the latest results indexed by experiment key.
-        /// </summary>
-        /// <returns></returns>
+        /// <inheritdoc />
         public IDictionary<string, ExperimentAssignment> GetAllResults()
         {
             return _assigned;
         }
 
-        /// <summary>
-        /// Subscribes to a GrowthBook instance to be alerted every time growthbook.run is called.
-        /// This is different from the tracking callback since it also fires when a user is not included in an experiment.
-        /// </summary>
-        /// <param name="callback">The callback to trigger when growthbook.run is called.</param>
-        /// <returns>An action callback that can be used to unsubscribe.</returns>
+        /// <inheritdoc />
         public Action Subscribe(Action<Experiment, ExperimentResult> callback)
         {
             _subscriptions.Add(callback);
             return () => _subscriptions.Remove(callback);
         }
 
-        /// <summary>
-        /// Evaluates a feature and returns a feature result.
-        /// </summary>
-        /// <param name="key">The feature key.</param>
-        /// <returns>The feature result.</returns>
+        /// <inheritdoc />
         public FeatureResult EvalFeature(string key)
         {
             if (!Features.TryGetValue(key, out Feature feature))
@@ -238,11 +212,7 @@ namespace GrowthBook
             return new FeatureResult { Value = feature.DefaultValue, Source = "defaultValue" };
         }
 
-        /// <summary>
-        /// Evaluates an experiment and returns an experiment result.
-        /// </summary>
-        /// <param name="experiment">The experiment to evaluate.</param>
-        /// <returns>The experiment result.</returns>
+        /// <inheritdoc />
         public ExperimentResult Run(Experiment experiment)
         {
             ExperimentResult result = RunExperiment(experiment);
