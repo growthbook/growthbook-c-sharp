@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -22,7 +22,7 @@ namespace GrowthBook
             {
                 return new Namespace((JArray)token);
             }
-            return new JsonSerializer().Deserialize(reader, objectType);
+            return null;
         }
 
         public override void WriteJson(JsonWriter writer, object value, JsonSerializer serializer)

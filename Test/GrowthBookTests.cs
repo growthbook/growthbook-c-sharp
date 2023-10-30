@@ -1,10 +1,12 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using GrowthBook;
+using Growthbook.Tests.Json;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 using Newtonsoft.Json.Linq;
+using Test;
 
 namespace Growthbook.Tests
 {
@@ -22,8 +24,8 @@ namespace Growthbook.Tests
                 throw new ArgumentNullException(nameof(context));
             }
 
-            testCases = JObject.Parse(File.ReadAllText("../../standard-cases.json"));
-            customCases = JObject.Parse(File.ReadAllText("../../custom-cases.json"));
+            testCases = JObject.Parse(JsonTestHelpers.GetTestJson("standard-cases"));
+            customCases = JObject.Parse(JsonTestHelpers.GetTestJson("custom-cases"));
         }
 
         public static string GetTestNames(MethodInfo methodInfo, object[] values)
