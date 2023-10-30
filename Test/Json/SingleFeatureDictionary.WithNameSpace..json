@@ -1,0 +1,19 @@
+{
+  "backend_test3": {
+    "DefaultValue": [],
+    "Rules": [
+      {
+        "Condition": {
+          "tenantName": []
+        },
+        "Coverage": 1,
+        "Force": [],
+        "Variations": null,
+        "Key": null,
+        "Weights": null,
+        "Namespace": null,
+        "HashAttribute": "id"
+      }
+    ]
+  }
+}
