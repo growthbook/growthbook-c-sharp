@@ -2,7 +2,7 @@ using System;
 using System.IO;
 using System.Reflection;
 
-namespace Growthbook.Tests.Json;
+namespace GrowthBook.Tests.Json;
 
 public static class JsonTestHelpers
 {

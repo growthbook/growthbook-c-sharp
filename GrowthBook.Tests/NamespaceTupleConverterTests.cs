@@ -1,15 +1,19 @@
+using System;
 using System.Collections.Generic;
-using GrowthBook;
-using Growthbook.Tests.Json;
-using Microsoft.VisualStudio.TestTools.UnitTesting;
+using System.Linq;
+using System.Reflection;
+
+using GrowthBook.Tests.Json;
+
 using Newtonsoft.Json;
 
-namespace Test
+using Xunit;
+
+namespace GrowthBook.Tests
 {
-    [TestClass]
     public class NamespaceTupleConverterTests
     {
-        [TestMethod]
+        [Fact]
         public void CreateFromJson_NoFeatures_ShouldSucceed()
         {
             string json = JsonTestHelpers.GetTestJson("GrowthBookContext.NoFeatures");
@@ -17,7 +21,7 @@ namespace Test
             var gb = JsonConvert.DeserializeObject<Context>(json);
         }
 
-        [TestMethod]
+        [Fact]
         public void CreateFromJson_WithFeatures_ShouldSucceed()
         {
             string json = JsonTestHelpers.GetTestJson("GrowthBookContext");
@@ -25,7 +29,7 @@ namespace Test
             var gb = JsonConvert.DeserializeObject<Context>(json);
         }
 
-        [TestMethod]
+        [Fact]
         public void CreateFeaturesFromJson_WithFeatures_ShouldSucceed()
         {
             string json = JsonTestHelpers.GetTestJson("FeatureDictionary");
@@ -33,13 +37,15 @@ namespace Test
             var gb = JsonConvert.DeserializeObject<Dictionary<string, Feature>>(json);
         }
 
-        [TestMethod]
+        [Fact]
         public void CreateFeaturesFromJson_OneFeatureWithNameSpace_ShouldSucceed()
         {
-            string json = JsonTestHelpers.GetTestJson("SingleFeatureDictionary.WithNameSpace.");
+            string json = JsonTestHelpers.GetTestJson("SingleFeatureDictionary.WithNameSpace");
 
             var gb = JsonConvert.DeserializeObject<Dictionary<string, Feature>>(json);
         }
 
+
     }
+
 }
