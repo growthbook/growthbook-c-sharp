@@ -13,7 +13,6 @@ namespace GrowthBook.Tests
 {
     public class UtilitiesTests
     {
-
         #region helpers
 
         public static JObject getStandardCases()
@@ -26,14 +25,11 @@ namespace GrowthBook.Tests
             return $"{methodInfo.Name} - {values[0]}";
         }
 
-        public double RoundStandard(double input)
-        {
-            return Math.Round(input, 6);
-        }
+        public static double RoundStandard(double input) => Math.Round(input, 6);
 
-        public IList<double> RoundArray(IList<double> input)
+        public static IList<double> RoundArray(IList<double> input)
         {
-            List<double> results = new List<double>();
+            List<double> results = [];
             for (int i = 0; i < input.Count; i++)
             {
                 results.Add(RoundStandard(input[i]));
@@ -43,7 +39,7 @@ namespace GrowthBook.Tests
 
         public IList<BucketRange> RoundBucketRanges(IList<BucketRange> input)
         {
-            List<BucketRange> results = new List<BucketRange>();
+            List<BucketRange> results = [];
             foreach (BucketRange range in input)
             {
                 results.Add(new BucketRange(RoundStandard(range.Start), RoundStandard(range.End)));
@@ -54,10 +50,10 @@ namespace GrowthBook.Tests
         #region data
         public static IEnumerable<object[]> GetBucketRangeTests()
         {
-            foreach (JArray testCase in (JArray)getStandardCases()["getBucketRange"])
+            foreach (JArray testCase in ((JArray)getStandardCases()["getBucketRange"]).Cast<JArray>())
             {
-                List<BucketRange> expected = new List<BucketRange>();
-                foreach (JArray jArray in testCase[2])
+                List<BucketRange> expected = [];
+                foreach (JArray jArray in testCase[2].Cast<JArray>())
                 {
                     expected.Add(new BucketRange(jArray[0].ToObject<double>(), jArray[1].ToObject<double>()));
                 }
@@ -73,10 +69,10 @@ namespace GrowthBook.Tests
 
         public static IEnumerable<object[]> ChooseVariationTests()
         {
-            foreach (JArray testCase in (JArray)getStandardCases()["chooseVariation"])
+            foreach (JArray testCase in ((JArray)getStandardCases()["chooseVariation"]).Cast<JArray>())
             {
-                List<BucketRange> ranges = new List<BucketRange>();
-                foreach (JArray jArray in testCase[2])
+                List<BucketRange> ranges = [];
+                foreach (JArray jArray in testCase[2].Cast<JArray>())
                 {
                     ranges.Add(new BucketRange(jArray[0].ToObject<double>(), jArray[1].ToObject<double>()));
                 }
@@ -91,7 +87,7 @@ namespace GrowthBook.Tests
 
         public static IEnumerable<object[]> InNamespaceTests()
         {
-            foreach (JArray testCase in (JArray)getStandardCases()["inNamespace"])
+            foreach (JArray testCase in ((JArray)getStandardCases()["inNamespace"]).Cast<JArray>())
             {
                 yield return new object[] {
                     testCase[0].ToString(),
@@ -106,7 +102,7 @@ namespace GrowthBook.Tests
 
         public static IEnumerable<object[]> GetQueryStringOverrideTests()
         {
-            foreach (JArray testCase in (JArray)getStandardCases()["getQueryStringOverride"])
+            foreach (JArray testCase in ((JArray)getStandardCases()["getQueryStringOverride"]).Cast<JArray>())
             {
                 yield return new object[] {
                     testCase[0].ToString(),
@@ -120,8 +116,7 @@ namespace GrowthBook.Tests
 
         public static IEnumerable<object[]> EvalConditionTests()
         {
-
-            foreach (JArray testCase in (JArray)getStandardCases()["evalCondition"])
+            foreach (JArray testCase in ((JArray)getStandardCases()["evalCondition"]).Cast<JArray>())
             {
                 yield return new object[] {
                     testCase[0].ToString(),
@@ -134,7 +129,7 @@ namespace GrowthBook.Tests
 
         public static IEnumerable<object[]> GetEqualWeightsTests()
         {
-            foreach (JArray testCase in (JArray)getStandardCases()["getEqualWeights"])
+            foreach (JArray testCase in ((JArray)getStandardCases()["getEqualWeights"]).Cast<JArray>())
             {
                 yield return new object[] {
                     testCase[0].ToObject<int>(),
@@ -146,7 +141,7 @@ namespace GrowthBook.Tests
 
         public static IEnumerable<object[]> HashTests()
         {
-            foreach (JArray testCase in (JArray)getStandardCases()["hash"])
+            foreach (JArray testCase in ((JArray)getStandardCases()["hash"]).Cast<JArray>())
             {
                 yield return new object[] {
                     testCase[0].ToString(),
@@ -239,6 +234,5 @@ namespace GrowthBook.Tests
             int? actual = Utilities.GetQueryStringOverride(id, url, numVariations);
             Assert.Equal(expected, actual);
         }
-
     }
 }
