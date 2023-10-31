@@ -29,7 +29,7 @@ namespace GrowthBook.Tests
 
         public static IList<double> RoundArray(IList<double> input)
         {
-            List<double> results = [];
+            var results = new List<double>();
             for (int i = 0; i < input.Count; i++)
             {
                 results.Add(RoundStandard(input[i]));
@@ -39,7 +39,7 @@ namespace GrowthBook.Tests
 
         public IList<BucketRange> RoundBucketRanges(IList<BucketRange> input)
         {
-            List<BucketRange> results = [];
+            var results = new List<BucketRange>();
             foreach (BucketRange range in input)
             {
                 results.Add(new BucketRange(RoundStandard(range.Start), RoundStandard(range.End)));
@@ -52,7 +52,7 @@ namespace GrowthBook.Tests
         {
             foreach (JArray testCase in ((JArray)getStandardCases()["getBucketRange"]).Cast<JArray>())
             {
-                List<BucketRange> expected = [];
+                var expected = new List<BucketRange>();
                 foreach (JArray jArray in testCase[2].Cast<JArray>())
                 {
                     expected.Add(new BucketRange(jArray[0].ToObject<double>(), jArray[1].ToObject<double>()));
@@ -71,7 +71,7 @@ namespace GrowthBook.Tests
         {
             foreach (JArray testCase in ((JArray)getStandardCases()["chooseVariation"]).Cast<JArray>())
             {
-                List<BucketRange> ranges = [];
+                var ranges = new List<BucketRange>();
                 foreach (JArray jArray in testCase[2].Cast<JArray>())
                 {
                     ranges.Add(new BucketRange(jArray[0].ToObject<double>(), jArray[1].ToObject<double>()));
