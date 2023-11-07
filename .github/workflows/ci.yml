@@ -25,8 +25,8 @@ jobs:
         run: dotnet build GrowthBook/GrowthBook.csproj --configuration Release
 
       # current tests are written for visual studio only
-      # - name: Test
-      #   run: dotnet test Test/Growthook.Tests.csproj --configuration Release --no-build
+      - name: Test
+        run: dotnet test GrowthBook.Tests/GrowthBook.Tests.csproj --logger:"console;verbosity=normal"
 
       - name: pack
         run: dotnet pack --configuration Release --no-build --output dist GrowthBook/GrowthBook.csproj
