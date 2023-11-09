@@ -6,7 +6,7 @@ namespace GrowthBook
     /// <summary>
     /// Providing operations to interact with feature flags.
     /// </summary>
-    public interface IGrowthbook
+    public interface IGrowthBook
     {
         /// <summary>
         /// Checks to see if a feature is on.

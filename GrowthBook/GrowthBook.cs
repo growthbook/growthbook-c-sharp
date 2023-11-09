@@ -10,7 +10,7 @@ namespace GrowthBook
     //  feature flagging and A/B testing platform.
     //  More info at https://www.growthbook.io
     /// </summary>
-    public class GrowthBook : IGrowthbook, IDisposable
+    public class GrowthBook : IGrowthBook, IDisposable
     {
         // #region Private Members
 
