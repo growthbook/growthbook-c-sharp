@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+using System;
+using System.Collections.Generic;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Newtonsoft.Json.Serialization;
@@ -19,7 +20,7 @@ namespace GrowthBook
         /// <summary>
         /// What percent of users should be included in the experiment (between 0 and 1, inclusive).
         /// </summary>
-        public double Coverage { get; set; } = 1;
+        public double Coverage { get; set; } = 1d;
 
         /// <summary>
         /// Immediately force a specific value (ignore every other option besides condition and coverage).
@@ -50,6 +51,51 @@ namespace GrowthBook
         /// What user attribute should be used to assign variations (defaults to id).
         /// </summary>
         public string HashAttribute { get; set; } = "id";
+
+        /// <summary>
+        /// The hash version to use (defaults to 1).
+        /// </summary>
+        public int HashVersion { get; set; } = 1;
+
+        /// <summary>
+        /// A more precise version of Coverage.
+        /// </summary>
+        public BucketRange Range { get; set; }
+
+        /// <summary>
+        /// Ranges for experiment variations.
+        /// </summary>
+        public IList<BucketRange> Ranges { get; set; }
+
+        /// <summary>
+        /// Meta info about the experiment variations.
+        /// </summary>
+        public IList<VariationMeta> Meta { get; set; }
+
+        /// <summary>
+        /// Array of filters to apply to the rule.
+        /// </summary>
+        public IList<Filter> Filters { get; set; }
+
+        /// <summary>
+        /// Seed to use for hashing.
+        /// </summary>
+        public string Seed { get; set; }
+
+        /// <summary>
+        /// Human-readable name for the experiment.
+        /// </summary>
+        public string Name { get; set; }
+
+        /// <summary>
+        /// The phase id of the experiment.
+        /// </summary>
+        public string Phase { get; set; }
+
+        /// <summary>
+        /// Array of tracking calls to fire.
+        /// </summary>
+        public IList<Action<Experiment, ExperimentResult>> Tracks { get; set; }
 
         /// <summary>
         /// Returns the feature variations cast to the specified type.

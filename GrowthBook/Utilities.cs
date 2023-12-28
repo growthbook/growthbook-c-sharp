@@ -1,7 +1,8 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Web;
 using Newtonsoft.Json.Linq;
@@ -16,13 +17,25 @@ namespace GrowthBook
         /// <summary>
         /// Hashes a string to a double between 0 and 1 using the simple Fowler–Noll–Vo algorithm (fnv32a).
         /// </summary>
-        /// <param name="str">The string to hash.</param>
-        /// <returns>Double between 0 and 1.</returns>
-        public static double Hash(string str)
+        /// <param name="value">The string to hash.</param>
+        /// <returns>Double between 0 and 1, null if an unsupported version.</returns>
+        public static double? Hash(string seed, string value, int version)
         {
-            uint n = FNV32A(str);
-            return (n % 1000) / 1000.0;
+            if (version == 2) // New hashing algorithm
+            {
+                var n = FNV32A(FNV32A(seed + value) + "");
+                return (n % 10000) / 10000;
+            }
+            else if (version == 1) // Original hashing algorithm (with a bias flaw)
+            {
+                var n = FNV32A(value + seed);
+                return (n % 1000) / 1000;
+            }
+
+            return null;
         }
+
+        public static bool InRange(double number, BucketRange range) => number >= range.Start && number < range.End;
 
         /// <summary>
         /// Checks if a userId is within an experiment namespace or not.
@@ -32,7 +45,7 @@ namespace GrowthBook
         /// <returns>True if the userid is within the experiment namespace.</returns>
         public static bool InNamespace(string userId, Namespace nSpace)
         {
-            double n = Hash(userId + "__" + nSpace.Id);
+            var n = Hash("__" + nSpace.Id, userId, 1);
             return n >= nSpace.Start && n < nSpace.End;
         }
 
@@ -41,19 +54,15 @@ namespace GrowthBook
         /// </summary>
         /// <param name="numVariations">The number of variations to generate weights for.</param>
         /// <returns>Array of doubles with numVariations items that are all equal and sum to 1.</returns>
-        public static IList<double> GetEqualWeights(int numVariations)
+        public static IEnumerable<double> GetEqualWeights(int numVariations)
         {
-            List<double> weights = new List<double>();
-
             if (numVariations >= 1)
             {
                 for (int i = 0; i < numVariations; i++)
                 {
-                    weights.Add(1.0 / numVariations);
+                    yield return (1.0 / numVariations);
                 }
             }
-
-            return weights;
         }
 
         /// <summary>
@@ -63,7 +72,7 @@ namespace GrowthBook
         /// <param name="coverage">The experiment's coverage (defaults to 1).</param>
         /// <param name="weights">Optional list of variant weights.</param>
         /// <returns>A list of bucket ranges.</returns>
-        public static IList<BucketRange> GetBucketRanges(int numVariations, double coverage = 1, IList<double> weights = null)
+        public static IEnumerable<BucketRange> GetBucketRanges(int numVariations, double coverage = 1, IEnumerable<double> weights = null)
         {
             if (coverage < 0)
             {
@@ -74,28 +83,27 @@ namespace GrowthBook
                 coverage = 1;
             }
 
-            if (weights?.Count != numVariations)
+            var allWeights = weights?.ToArray();
+
+            if (allWeights == null || allWeights.Length != numVariations)
             {
                 weights = GetEqualWeights(numVariations);
             }
 
             double totalWeight = weights.Sum();
-            if (totalWeight < 0.99 || totalWeight > 1.01f)
+            if (totalWeight < 0.99 || totalWeight > 1.01d)
             {
                 weights = GetEqualWeights(numVariations);
             }
 
-            double cumulative = 0;
-            List<BucketRange> ranges = new List<BucketRange>();
+            var cumulative = 0d;
 
-            for (int i = 0; i < weights.Count; i++)
+            for (int i = 0; i < allWeights.Length; i++)
             {
-                double start = cumulative;
-                cumulative += weights[i];
-                ranges.Add(new BucketRange(start, start + coverage * weights[i]));
+                var start = cumulative;
+                cumulative += allWeights[i];
+                yield return new BucketRange(start, start + coverage * allWeights[i]);
             }
-
-            return ranges;
         }
 
         /// <summary>
@@ -108,7 +116,7 @@ namespace GrowthBook
         {
             for (int i = 0; i < ranges.Count; i++)
             {
-                if (n >= ranges[i].Start && n < ranges[i].End)
+                if (InRange(n, ranges[i]))
                 {
                     return i;
                 }
@@ -131,30 +139,42 @@ namespace GrowthBook
                 return null;
             }
 
-            Uri res = new Uri(url);
+            var res = new Uri(url);
             if (string.IsNullOrWhiteSpace(res.Query))
             {
                 return null;
             }
 
             NameValueCollection qs = HttpUtility.ParseQueryString(res.Query);
-            if (string.IsNullOrWhiteSpace(qs.Get(id)))
+            var variation = qs.Get(id);
+
+            if (string.IsNullOrWhiteSpace(variation))
             {
                 return null;
             }
 
-            string variation = qs.Get(id);
-
-            if (!int.TryParse(variation, out int varId))
+            if (!int.TryParse(variation, out var varId))
             {
                 return null;
             }
+
             if (varId < 0 || varId >= numVariations)
             {
                 return null;
             }
 
             return varId;
+        }
+
+        public static string Decrypt(string encryptedString, string decryptionKey)
+        {
+            var parts = encryptedString.Split('.');
+
+            var iv = Convert.FromBase64String(parts[0]);
+
+            // TODO: Implement AES-CBC 128k here
+
+            return null;
         }
 
         /// <summary>
@@ -184,7 +204,7 @@ namespace GrowthBook
 
             foreach (JProperty property in condition.Properties())
             {
-                if (!EvalConditionValue(property.Value, attributes.SelectToken(property.Name)))
+                if (!EvalConditionValue(property.Value, GetPath(attributes, property.Name)))
                 {
                     return false;
                 }
@@ -202,6 +222,7 @@ namespace GrowthBook
         /// <returns>The hashed value.</returns>
         static uint FNV32A(string value)
         {
+            // TODO: Make sure FNV32A implementation is correct.
             uint hash = 0x811c9dc5;
             uint prime = 0x01000193;
 
@@ -332,6 +353,46 @@ namespace GrowthBook
             return false;
         }
 
+        static string PaddedVersionString(string input)
+        {
+            // Remove build info and leading `v` if any
+            // Split version into parts (both core version numbers and pre-release tags)
+            // "v1.2.3-rc.1+build123" -> ["1","2","3","rc","1"]
+
+            var trimmedVersion = Regex.Replace(input, @"(^v|\+.*$)", string.Empty);
+            var versionParts = Regex.Split(trimmedVersion, "[-.]").ToList();
+
+            // If it's SemVer without a pre-release, add `~` to the end
+            // ["1","0","0"] -> ["1","0","0","~"]
+            // "~" is the largest ASCII character, so this will make "1.0.0" greater than "1.0.0-beta" for example
+
+            if (versionParts.Count == 3)
+            {
+                versionParts.Add("~");
+            }
+
+            // Left pad each numeric part with spaces so string comparisons will work ("9">"10", but " 9"<"10")
+            // Then, join back together into a single string
+
+            var paddedVersionParts = versionParts.Select(x => Regex.IsMatch(x, "^[0-9]+$") ? x.PadLeft(5, ' ') : x);
+
+            return string.Join("-", paddedVersionParts);
+        }
+
+        static bool IsIn(JToken conditionValue, JToken actualValue)
+        {
+            if (actualValue.Type == JTokenType.Array)
+            {
+                var element = ((JArray)actualValue).FirstOrDefault(x => x.ToString() == conditionValue.ToString());
+
+                return element != null;
+            }
+            else
+            {
+                return conditionValue.ToString().Contains(actualValue.ToString());
+            }
+        }
+
         /// <summary>
         /// A switch that handles all the possible operators.
         /// </summary>
@@ -379,71 +440,114 @@ namespace GrowthBook
                     return false;
                 }
             }
-            if (conditionValue.Type == JTokenType.Array)
+            if (op == "$in")
             {
-                JArray conditionList = (JArray)conditionValue;
-
-                if (op == "$in")
+                if (conditionValue.Type != JTokenType.Array)
                 {
-                    return conditionList.FirstOrDefault(j => j.ToString().Equals(attributeValue?.ToString())) != null;
+                    return false;
                 }
-                if (op == "$nin")
-                {
-                    return conditionList.FirstOrDefault(j => j.ToString().Equals(attributeValue?.ToString())) == null;
-                }
-                if (op == "$all")
-                {
-                    if (attributeValue?.Type == JTokenType.Array)
-                    {
-                        foreach (JToken condition in conditionList)
-                        {
-                            bool passing = false;
-
-                            foreach (JToken attr in (JArray)attributeValue)
-                            {
-                                if (EvalConditionValue(condition, attr))
-                                {
-                                    passing = true;
-                                }
-                            }
-
-                            if (!passing)
-                            {
-                                return false;
-                            }
-                        }
-
-                        return true;
-                    }
-                }
+                return IsIn(conditionValue, attributeValue);
             }
+            if (op == "$nin")
+            {
+                if (conditionValue.Type != JTokenType.Array)
+                {
+                    return false;
+                }
+                return !IsIn(conditionValue, attributeValue);
+            }
+            if (op == "$all")
+            {
+                if (conditionValue.Type != JTokenType.Array)
+                {
+                    return false;
+                }
+                if (attributeValue?.Type != JTokenType.Array)
+                {
+                    return false;
+                }
+
+                var conditionList = (JArray)conditionValue;
+                var attributeList = (JArray)attributeValue;
+
+                foreach (JToken condition in conditionList)
+                {
+                    if (!attributeList.Any(x => EvalConditionValue(condition, x)))
+                    {
+                        return false;
+                    }
+
+                    return true;
+                }
+
+                return true;                
+            }
+            
             if (op == "$elemMatch")
             {
                 return ElemMatch((JObject)conditionValue, attributeValue);
             }
             if (op == "$size")
             {
-                if (attributeValue?.Type == JTokenType.Array)
+                if (attributeValue?.Type != JTokenType.Array)
                 {
-                    return EvalConditionValue(conditionValue, ((JArray)attributeValue).Count);
+                    return false;
                 }
+
+                return EvalConditionValue(conditionValue, ((JArray)attributeValue).Count);                
             }
             if (op == "$exists")
             {
-                return conditionValue.ToObject<bool>() ? attributeValue != null && attributeValue.Type != JTokenType.Null :
-                    attributeValue == null || attributeValue.Type == JTokenType.Null;
+                var value = conditionValue.ToObject<bool>();
+
+                if (!value)
+                {
+                    return attributeValue == null || attributeValue.Type == JTokenType.Null;
+                }
+
+                return attributeValue != null && attributeValue.Type != JTokenType.Null;
             }
             if (op == "$type")
             {
-                return GetType(attributeValue).Equals(conditionValue.ToString());
+                return GetType(attributeValue) == conditionValue.ToString();
             }
             if (op == "$not")
             {
                 return !EvalConditionValue(conditionValue, attributeValue);
             }
+            if (op == "$veq")
+            {
+                return PaddedVersionString(conditionValue.ToString()) == PaddedVersionString(attributeValue.ToString());
+            }
+            if (op == "$vne")
+            {
+                return PaddedVersionString(conditionValue.ToString()) != PaddedVersionString(attributeValue.ToString());
+            }
+            if (op == "$vlt")
+            {
+                return PaddedVersionString(conditionValue.ToString()).CompareTo(PaddedVersionString(attributeValue.ToString())) > 0;
+            }
+            if (op == "$vlte")
+            {
+                var value = PaddedVersionString(conditionValue.ToString()).CompareTo(PaddedVersionString(attributeValue.ToString()));
+                return value >= 0;
+            }
+            if (op == "$vgt")
+            {
+                return PaddedVersionString(conditionValue.ToString()).CompareTo(PaddedVersionString(attributeValue.ToString())) < 0;
+            }
+            if (op == "$vgte")
+            {
+                var value = PaddedVersionString(conditionValue.ToString()).CompareTo(PaddedVersionString(attributeValue.ToString()));
+                return value <= 0;
+            }
+
+            // TODO: Log the error for debug purposes?
 
             return false;
         }
+
+        static JToken GetPath(JToken attributes, string key) => attributes.SelectToken(key);
 
         /// <summary>
         /// Gets a string value representing the data type of an attribute value.
@@ -460,8 +564,9 @@ namespace GrowthBook
             switch (attributeValue.Type)
             {
                 case JTokenType.Null:
-                case JTokenType.Undefined:
                     return "null";
+                case JTokenType.Undefined:
+                    return "undefined";
                 case JTokenType.Integer:
                 case JTokenType.Float:
                     return "number";

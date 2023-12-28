@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -18,6 +18,21 @@ namespace GrowthBook
         public bool Enabled { get; set; } = true;
 
         /// <summary>
+        /// The GrowthBook API Host. Optional.
+        /// </summary>
+        public string ApiHost { get; set; }
+
+        /// <summary>
+        /// The key used to fetch features from the GrowthBook API. Optional.
+        /// </summary>
+        public string ClientKey { get; set; }
+
+        /// <summary>
+        /// The key used to decrypt encrypted features from the API. Optional.
+        /// </summary>
+        public string DecryptionKey { get; set; }
+
+        /// <summary>
         /// Map of user attributes that are used to assign variations.
         /// </summary>
         public JObject Attributes { get; set; } = new JObject();
@@ -35,7 +50,7 @@ namespace GrowthBook
         /// <summary>
         /// Force specific experiments to always assign a specific variation (used for QA).
         /// </summary>
-        public JObject ForcedVariations { get; set; } = new JObject();
+        public IDictionary<string, int> ForcedVariations { get; set; } = new Dictionary<string, int>();
 
         /// <summary>
         /// If true, random assignment is disabled and only explicitly forced variations are used.

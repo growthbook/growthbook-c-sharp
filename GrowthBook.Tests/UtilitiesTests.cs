@@ -168,9 +168,9 @@ namespace GrowthBook.Tests
 
         [Theory]
         [MemberData(nameof(HashTests))]
-        public void Hash(string input, double expected)
+        public void Hash(string seed, string input, int version, double expected)
         {
-            double actual = Utilities.Hash(input);
+            double? actual = Utilities.Hash(seed, input, version);
             Assert.Equal(expected, actual);
         }
 
@@ -191,7 +191,7 @@ namespace GrowthBook.Tests
         [MemberData(nameof(GetEqualWeightsTests))]
         public void GetEqualWeights(int input, IList<double> expected)
         {
-            IList<double> actual = Utilities.GetEqualWeights(input);
+            IList<double> actual = Utilities.GetEqualWeights(input).ToList();
             Assert.True(RoundArray(expected).SequenceEqual(RoundArray(actual)));
         }
 
@@ -205,7 +205,7 @@ namespace GrowthBook.Tests
                 throw new ArgumentNullException(nameof(testName));
             }
 
-            IList<BucketRange> actual = Utilities.GetBucketRanges(numVariations, coverage, weights);
+            IList<BucketRange> actual = Utilities.GetBucketRanges(numVariations, coverage, weights).ToList();
             Assert.True(RoundBucketRanges(expected).SequenceEqual(RoundBucketRanges(actual)));
         }
 

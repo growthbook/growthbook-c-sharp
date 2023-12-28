@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using Newtonsoft.Json;
@@ -36,7 +36,12 @@ namespace GrowthBook
         /// <summary>
         /// What percent of users should be included in the experiment (between 0 and 1, inclusive).
         /// </summary>
-        public double Coverage { get; set; } = 1;
+        public double? Coverage { get; set; } = 1d;
+
+        /// <summary>
+        ///  Array of ranges, one per variation.
+        /// </summary>
+        public IList<BucketRange> Ranges { get; set; }
 
         /// <summary>
         /// Optional targeting condition.
@@ -59,6 +64,36 @@ namespace GrowthBook
         public string HashAttribute { get; set; } = "id";
 
         /// <summary>
+        /// The hash version to use (defaults to 1).
+        /// </summary>
+        public int HashVersion { get; set; } = 1;
+
+        /// <summary>
+        /// Meta info about the variations.
+        /// </summary>
+        public IList<VariationMeta> Meta { get; set; }
+
+        /// <summary>
+        /// Array of filters to apply.
+        /// </summary>
+        public IList<Filter> Filters { get; set; }
+
+        /// <summary>
+        /// The hash seed to use.
+        /// </summary>
+        public string Seed { get; set; }
+
+        /// <summary>
+        /// Human-readable name for the experiment.
+        /// </summary>
+        public string Name { get; set; }
+
+        /// <summary>
+        /// ID of the current experiment phase.
+        /// </summary>
+        public string Phase { get; set; }
+
+        /// <summary>
         /// Returns the experiment variations cast to the specified type.
         /// </summary>
         /// <typeparam name="T"></typeparam>
@@ -70,6 +105,8 @@ namespace GrowthBook
 
         public override bool Equals(object obj)
         {
+            // TODO: Update equality checks.
+
             if (obj.GetType() == typeof(Experiment))
             {
                 Experiment objExp = (Experiment)obj;

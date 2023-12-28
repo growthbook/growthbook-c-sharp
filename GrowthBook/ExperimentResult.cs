@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Newtonsoft.Json.Serialization;
@@ -24,7 +24,7 @@ namespace GrowthBook
         /// <summary>
         /// The array value of the assigned variation.
         /// </summary>
-        public JToken Value { get; set; }
+        public JToken Value { get; set; } = JValue.CreateNull();
 
         /// <summary>
         /// If a hash was used to assign a variation.
@@ -34,12 +34,39 @@ namespace GrowthBook
         /// <summary>
         /// The user attribute used to assign a variation.
         /// </summary>
-        public string HashAttribute { get; set; }
+        public string HashAttribute { get; set; } = string.Empty;
 
         /// <summary>
         /// The value of that attribute.
         /// </summary>
-        public string HashValue { get; set; }
+        public string HashValue { get; set; } = string.Empty;
+
+        /// <summary>
+        /// The id of the feature (if any) that the experiment came from.
+        /// </summary>
+        public string FeatureId { get; set; }
+
+        // TODO: Set the key to variation's array index if experiment.meta is not set or incomplete.
+
+        /// <summary>
+        /// The unique key for the assigned variation.
+        /// </summary>
+        public string Key { get; set; }
+
+        /// <summary>
+        /// The hash value used to assign a variation (float from 0 to 1).
+        /// </summary>
+        public double Bucket { get; set; }
+
+        /// <summary>
+        /// The human-readable name of the assigned variation.
+        /// </summary>
+        public string Name { get; set; }
+
+        /// <summary>
+        /// Used for holdout groups.
+        /// </summary>
+        public bool Passthrough { get; set; }
 
         /// <summary>
         /// Returns the value of the assigned variation cast to the specified type.
