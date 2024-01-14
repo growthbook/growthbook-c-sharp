@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -11,7 +11,7 @@ namespace GrowthBook
     [JsonConverter(typeof(NamespaceTupleConverter))]
     public class Namespace
     {
-        public Namespace(string id, double start, double end)
+        public Namespace(string id, float start, float end)
         {
             Id = id;
             Start = start;
@@ -19,7 +19,7 @@ namespace GrowthBook
         }
 
         public Namespace(JArray jArray) :
-            this(jArray[0].ToString(), jArray[1].ToObject<double>(), jArray[2].ToObject<double>())
+            this(jArray[0].ToString(), jArray[1].ToObject<float>(), jArray[2].ToObject<float>())
         { }
 
         /// <summary>
@@ -30,12 +30,12 @@ namespace GrowthBook
         /// <summary>
         /// The beginning of the range (between 0 and 1).
         /// </summary>
-        public double Start { get; }
+        public float Start { get; }
 
         /// <summary>
         /// The end of the range (between 0 and 1).
         /// </summary>
-        public double End { get; }
+        public float End { get; }
 
         public override bool Equals(object obj)
         {

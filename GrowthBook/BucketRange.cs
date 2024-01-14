@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Serialization;
 
@@ -7,10 +7,10 @@ namespace GrowthBook
     /// <summary>
     /// Represents a range of the numberline between 0 and 1.
     /// </summary>
-    [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
+    [JsonConverter(typeof(BucketRangeTupleConverter))]
     public class BucketRange
     {
-        public BucketRange(double start, double end)
+        public BucketRange(float start, float end)
         {
             Start = start;
             End = end;
@@ -19,12 +19,12 @@ namespace GrowthBook
         /// <summary>
         /// The start of the range.
         /// </summary>
-        public double Start { get; set; }
+        public float Start { get; set; }
 
         /// <summary>
         /// The end of the range.
         /// </summary>
-        public double End { get; set; }
+        public float End { get; set; }
 
         public override bool Equals(object obj)
         {

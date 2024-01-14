@@ -56,7 +56,7 @@ namespace GrowthBook
         /// <summary>
         /// The hash value used to assign a variation (float from 0 to 1).
         /// </summary>
-        public double Bucket { get; set; }
+        public float Bucket { get; set; }
 
         /// <summary>
         /// The human-readable name of the assigned variation.

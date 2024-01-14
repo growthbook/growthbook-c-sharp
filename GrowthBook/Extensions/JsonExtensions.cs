@@ -5,7 +5,7 @@ using Newtonsoft.Json.Linq;
 
 namespace GrowthBook.Extensions
 {
-    public static class JsonExtensions
+    internal static class JsonExtensions
     {
         public static bool IsNull(this JObject json) => json is null || json.Type == JTokenType.Null;
         public static bool IsNull(this JToken token) => token is null || token.Type == JTokenType.Null;
@@ -13,12 +13,14 @@ namespace GrowthBook.Extensions
         {
             var attribute = attributeKey ?? "id";
 
-            if (json.ContainsKey(attribute))
+            var attributeValue = json[attribute];
+
+            if (attributeValue.IsNull())
             {
-                return json[attribute].ToString();
+                return null;
             }
 
-            return null;
+            return attributeValue.ToString();
         }
     }
 }

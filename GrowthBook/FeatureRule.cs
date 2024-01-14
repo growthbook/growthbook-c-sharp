@@ -20,7 +20,7 @@ namespace GrowthBook
         /// <summary>
         /// What percent of users should be included in the experiment (between 0 and 1, inclusive).
         /// </summary>
-        public double Coverage { get; set; } = 1d;
+        public float? Coverage { get; set; }
 
         /// <summary>
         /// Immediately force a specific value (ignore every other option besides condition and coverage).
@@ -40,7 +40,7 @@ namespace GrowthBook
         /// <summary>
         /// How to weight traffic between variations. Must add to 1.
         /// </summary>
-        public IList<double> Weights { get; set; }
+        public List<float> Weights { get; set; }
 
         /// <summary>
         /// Adds the experiment to a namespace.
@@ -65,17 +65,17 @@ namespace GrowthBook
         /// <summary>
         /// Ranges for experiment variations.
         /// </summary>
-        public IList<BucketRange> Ranges { get; set; }
+        public List<BucketRange> Ranges { get; set; }
 
         /// <summary>
         /// Meta info about the experiment variations.
         /// </summary>
-        public IList<VariationMeta> Meta { get; set; }
+        public List<VariationMeta> Meta { get; set; }
 
         /// <summary>
         /// Array of filters to apply to the rule.
         /// </summary>
-        public IList<Filter> Filters { get; set; }
+        public List<Filter> Filters { get; set; }
 
         /// <summary>
         /// Seed to use for hashing.
@@ -95,7 +95,7 @@ namespace GrowthBook
         /// <summary>
         /// Array of tracking calls to fire.
         /// </summary>
-        public IList<Action<Experiment, ExperimentResult>> Tracks { get; set; }
+        public List<TrackData> Tracks { get; set; }
 
         /// <summary>
         /// Returns the feature variations cast to the specified type.

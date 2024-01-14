@@ -15,12 +15,12 @@ namespace GrowthBook
         /// <summary>
         /// The default value (should use null if not specified)
         /// </summary>
-        public JToken DefaultValue { get; set; } = JValue.CreateNull();
+        public JToken DefaultValue { get; set; }
 
         /// <summary>
         /// Array of FeatureRule objects that determine when and how the defaultValue gets overridden.
         /// </summary>
-        public IList<FeatureRule> Rules { get; set; }
+        public List<FeatureRule> Rules { get; set; }
 
         /// <summary>
         /// Returns the default value of the feature cast to the specified type.

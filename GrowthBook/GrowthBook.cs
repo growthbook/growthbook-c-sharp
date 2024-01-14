@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security;
 using GrowthBook.Extensions;
 using Newtonsoft.Json.Linq;
 
@@ -140,35 +141,45 @@ namespace GrowthBook
         }
 
         /// <inheritdoc />
-        public FeatureResult EvalFeature(string key)
+        public FeatureResult EvalFeature(string featureId)
         {
-            if (!Features.TryGetValue(key, out Feature feature))
+            if (!Features.TryGetValue(featureId, out Feature feature))
             {
                 return GetFeatureResult(null, "unknownFeature");
             }
 
-            foreach (FeatureRule rule in feature.Rules)
+            foreach (FeatureRule rule in feature?.Rules ?? Enumerable.Empty<FeatureRule>())
             {
                 if (!rule.Condition.IsNull() && !Utilities.EvalCondition(Attributes, rule.Condition))
                 {
                     continue;
                 }
 
-                if (rule.Filters.Any() && IsFilteredOut(rule.Filters))
+                if (rule.Filters?.Any() == true && IsFilteredOut(rule.Filters))
                 {
                     continue;
                 }
 
-                if (!rule.Force.IsNull() && !IsIncludedInRollout(rule.Seed ?? key, rule.HashAttribute, rule.Range, rule.Coverage, rule.HashVersion))
+                if (!rule.Force.IsNull())
                 {
-                    continue;
-                }
-
-                if (rule.Tracks.Any())
-                {
-                    foreach (var callback in rule.Tracks)
+                    if (!IsIncludedInRollout(rule.Seed ?? featureId, rule.HashAttribute, rule.Range, rule.Coverage, rule.HashVersion))
                     {
-                        // TODO: Get current experiment/result for callback
+                        continue;
+                    }
+
+                    if (_trackingCallback != null && rule.Tracks.Any())
+                    {
+                        foreach(var trackData in rule.Tracks)
+                        {
+                            try
+                            {
+                                _trackingCallback?.Invoke(trackData.Experiment, trackData.Result);
+                            }
+                            catch(Exception ex)
+                            {
+                                // TODO: Log this
+                            }
+                        }
                     }
 
                     return GetFeatureResult(rule.Force, "force");
@@ -177,7 +188,7 @@ namespace GrowthBook
                 var experiment = new Experiment
                 {
                     Variations = rule.Variations,
-                    Key = rule.Key ?? key,
+                    Key = rule.Key ?? featureId,
                     Coverage = rule.Coverage,
                     Weights = rule.Weights,
                     HashAttribute = rule.HashAttribute,
@@ -190,7 +201,7 @@ namespace GrowthBook
                     Filters = rule.Filters
                 };
 
-                var result = Run(experiment);
+                var result = RunExperiment(experiment, featureId);
 
                 if (!result.InExperiment || result.Passthrough)
                 {
@@ -206,18 +217,44 @@ namespace GrowthBook
         /// <inheritdoc />
         public ExperimentResult Run(Experiment experiment)
         {
+            ExperimentResult result = RunExperiment(experiment, null);
+
+            if (!_assigned.TryGetValue(experiment.Key, out ExperimentAssignment prev)
+                || prev.Result.InExperiment != result.InExperiment
+                || prev.Result.VariationId != result.VariationId)
+            {
+                _assigned.Add(experiment.Key, new ExperimentAssignment { Experiment = experiment, Result = result });
+
+                foreach (Action<Experiment, ExperimentResult> callback in _subscriptions)
+                {
+                    try
+                    {
+                        callback?.Invoke(experiment, result);
+                    }
+                    catch (Exception)
+                    {
+                        // TODO: Log this
+                    }
+                }
+            }
+
+            return result;
+        }
+
+        private ExperimentResult RunExperiment(Experiment experiment, string featureId)
+        { 
             // 1. Abort if there aren't enough variations present.
 
             if (experiment.Variations.IsNull() || experiment.Variations.Count < 2)
             {
-                return GetExperimentResult(experiment);
+                return GetExperimentResult(experiment, featureId: featureId);
             }
 
             // 2. Abort if GrowthBook is currently disabled.
 
             if (!Enabled)
             {
-                return GetExperimentResult(experiment);
+                return GetExperimentResult(experiment, featureId: featureId);
             }
 
             // 3. Use the override value from the query string if one is specified.
@@ -228,7 +265,7 @@ namespace GrowthBook
 
                 if (overrideValue != null)
                 {
-                    return GetExperimentResult(experiment, overrideValue.Value);
+                    return GetExperimentResult(experiment, overrideValue.Value, featureId: featureId);
                 }
             }
 
@@ -236,14 +273,14 @@ namespace GrowthBook
 
             if (ForcedVariations.TryGetValue(experiment.Key, out var variation))
             {
-                return GetExperimentResult(experiment, variation);
+                return GetExperimentResult(experiment, variation, featureId: featureId);
             }
 
             // 5. Abort if the experiment isn't currently active.
 
             if (!experiment.Active)
             {
-                return GetExperimentResult(experiment);
+                return GetExperimentResult(experiment, featureId: featureId);
             }
 
             // 6. Abort if we're unable to generate a hash identifying this run.
@@ -252,21 +289,21 @@ namespace GrowthBook
 
             if (string.IsNullOrEmpty(hashValue))
             {
-                return GetExperimentResult(experiment);
+                return GetExperimentResult(experiment, featureId: featureId);
             }
 
             // 7. Abort if this run is ineligible to be included in the experiment.
 
-            if (experiment.Filters.Any())
+            if (experiment.Filters?.Any() == true)
             {
                 if (IsFilteredOut(experiment.Filters))
                 {
-                    return GetExperimentResult(experiment);
-                }
-                else if (!Utilities.InNamespace(hashValue, experiment.Namespace))
-                {
-                    return GetExperimentResult(experiment);
-                }
+                    return GetExperimentResult(experiment, featureId: featureId);
+                }                
+            }
+            else if (experiment.Namespace != null && !Utilities.InNamespace(hashValue, experiment.Namespace))
+            {
+                return GetExperimentResult(experiment, featureId: featureId);
             }
 
             // 8. Abort if the conditions for the experiment prohibit this.
@@ -275,38 +312,38 @@ namespace GrowthBook
             {
                 if (!Utilities.EvalCondition(Attributes, experiment.Condition))
                 {
-                    return GetExperimentResult(experiment);
+                    return GetExperimentResult(experiment, featureId: featureId);
                 }
             }
 
             // 9. Attempt to assign this run to an experiment variation and abort if that can't be done.
 
-            var ranges = experiment.Ranges ?? Utilities.GetBucketRanges(experiment.Variations.Count, experiment.Coverage ?? 1, experiment.Weights ?? Array.Empty<double>());
+            var ranges = experiment.Ranges?.Count > 0 ? experiment.Ranges : Utilities.GetBucketRanges(experiment.Variations?.Count ?? 0, experiment.Coverage ?? 1, experiment.Weights ?? new List<float>());
             var variationHash = Utilities.Hash(experiment.Seed ?? experiment.Key, hashValue, experiment.HashVersion);
             var assigned = Utilities.ChooseVariation(variationHash.Value, ranges.ToList());
 
             if (assigned == -1)
             {
-                return GetExperimentResult(experiment);
+                return GetExperimentResult(experiment, featureId: featureId);
             }
 
             // 10. Use the forced value for the experiment if one is specified.
 
             if (experiment.Force != null)
             {
-                return GetExperimentResult(experiment, experiment.Force.Value);
+                return GetExperimentResult(experiment, experiment.Force.Value, featureId: featureId);
             }
 
             // 11. Abort if we're currently operating in QA mode.
 
             if (_qaMode)
             {
-                return GetExperimentResult(experiment);
+                return GetExperimentResult(experiment, featureId: featureId);
             }
 
             // 12. Run the experiment and track the result if we haven't seen this one before.
 
-            var result = GetExperimentResult(experiment, assigned, true);
+            var result = GetExperimentResult(experiment, assigned, true, featureId, variationHash);
 
             TryToTrack(experiment, result);
 
@@ -348,7 +385,7 @@ namespace GrowthBook
             return false;
         }
 
-        private bool IsIncludedInRollout(string seed, string hashAttribute = null, BucketRange range = null, double? coverage = null, int? hashVersion = null)
+        private bool IsIncludedInRollout(string seed, string hashAttribute = null, BucketRange range = null, float? coverage = null, int? hashVersion = null)
         {
             if (coverage == null && range == null)
             {
@@ -357,7 +394,7 @@ namespace GrowthBook
 
             var hashValue = Attributes.TryToHashWith(hashAttribute);
 
-            if (string.IsNullOrWhiteSpace(hashValue))
+            if (hashValue is null)
             {
                 return false;
             }
@@ -384,7 +421,7 @@ namespace GrowthBook
         /// <param name="variationIndex">The variation id, if specified.</param>
         /// <param name="hashUsed">Whether or not a hash was used in assignment.</param>
         /// <returns>The experiment result.</returns>
-        private ExperimentResult GetExperimentResult(Experiment experiment, int variationIndex = -1, bool hashUsed = false, string featureId = null, double? bucket = null)
+        private ExperimentResult GetExperimentResult(Experiment experiment, int variationIndex = -1, bool hashUsed = false, string featureId = null, float? bucket = null)
         {
             string hashAttribute = experiment.HashAttribute ?? "id";
 
@@ -397,7 +434,7 @@ namespace GrowthBook
 
             var hashValue = Attributes.TryToHashWith(hashAttribute);
 
-            var meta = experiment.Meta != null ? experiment.Meta[variationIndex] : null;
+            var meta = experiment.Meta?.Count > 0 ? experiment.Meta[variationIndex] : null;
 
             var result = new ExperimentResult
             {
@@ -407,13 +444,13 @@ namespace GrowthBook
                 HashAttribute = hashAttribute,
                 HashUsed = hashUsed,
                 HashValue = hashValue,
-                Value = experiment.Variations[variationIndex],
+                Value = experiment.Variations is null ? null : experiment.Variations[variationIndex],
                 VariationId = variationIndex
             };
 
             result.Name = meta?.Name;
             result.Passthrough = meta?.Passthrough ?? false;
-            result.Bucket = bucket ?? 0d;
+            result.Bucket = bucket ?? 0f;
 
             return result;
         }
@@ -438,7 +475,10 @@ namespace GrowthBook
                     _trackingCallback(experiment, result);
                     _tracked.Add(key);
                 }
-                catch (Exception) { }
+                catch (Exception)
+                {
+                    // TODO: Log this
+                }
             }
         }
     }

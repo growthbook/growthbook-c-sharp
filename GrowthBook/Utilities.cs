@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Web;
+using GrowthBook.Extensions;
 using Newtonsoft.Json.Linq;
 
 namespace GrowthBook
@@ -15,27 +16,27 @@ namespace GrowthBook
     public static class Utilities
     {
         /// <summary>
-        /// Hashes a string to a double between 0 and 1 using the simple Fowler–Noll–Vo algorithm (fnv32a).
+        /// Hashes a string to a float between 0 and 1 using the simple Fowler–Noll–Vo algorithm (fnv32a).
         /// </summary>
         /// <param name="value">The string to hash.</param>
-        /// <returns>Double between 0 and 1, null if an unsupported version.</returns>
-        public static double? Hash(string seed, string value, int version)
+        /// <returns>float between 0 and 1, null if an unsupported version.</returns>
+        public static float? Hash(string seed, string value, int version)
         {
             if (version == 2) // New hashing algorithm
             {
-                var n = FNV32A(FNV32A(seed + value) + "");
-                return (n % 10000) / 10000;
+                var n = FNV32A(FNV32A(seed + value).ToString());
+                return (n % 10000) / 10000f;
             }
             else if (version == 1) // Original hashing algorithm (with a bias flaw)
             {
                 var n = FNV32A(value + seed);
-                return (n % 1000) / 1000;
+                return (n % 1000) / 1000f;
             }
 
             return null;
         }
 
-        public static bool InRange(double number, BucketRange range) => number >= range.Start && number < range.End;
+        public static bool InRange(float number, BucketRange range) => number >= range.Start && number < range.End;
 
         /// <summary>
         /// Checks if a userId is within an experiment namespace or not.
@@ -50,17 +51,17 @@ namespace GrowthBook
         }
 
         /// <summary>
-        /// Returns an array of doubles with numVariations items that are all equal and sum to 1.
+        /// Returns an array of floats with numVariations items that are all equal and sum to 1.
         /// </summary>
         /// <param name="numVariations">The number of variations to generate weights for.</param>
-        /// <returns>Array of doubles with numVariations items that are all equal and sum to 1.</returns>
-        public static IEnumerable<double> GetEqualWeights(int numVariations)
+        /// <returns>Array of floats with numVariations items that are all equal and sum to 1.</returns>
+        public static IEnumerable<float> GetEqualWeights(int numVariations)
         {
             if (numVariations >= 1)
             {
                 for (int i = 0; i < numVariations; i++)
                 {
-                    yield return (1.0 / numVariations);
+                    yield return (1.0f / numVariations);
                 }
             }
         }
@@ -72,7 +73,7 @@ namespace GrowthBook
         /// <param name="coverage">The experiment's coverage (defaults to 1).</param>
         /// <param name="weights">Optional list of variant weights.</param>
         /// <returns>A list of bucket ranges.</returns>
-        public static IEnumerable<BucketRange> GetBucketRanges(int numVariations, double coverage = 1, IEnumerable<double> weights = null)
+        public static IEnumerable<BucketRange> GetBucketRanges(int numVariations, float coverage = 1f, IEnumerable<float> weights = null)
         {
             if (coverage < 0)
             {
@@ -87,22 +88,23 @@ namespace GrowthBook
 
             if (allWeights == null || allWeights.Length != numVariations)
             {
-                weights = GetEqualWeights(numVariations);
+                allWeights = GetEqualWeights(numVariations).ToArray();
             }
 
-            double totalWeight = weights.Sum();
-            if (totalWeight < 0.99 || totalWeight > 1.01d)
+            float totalWeight = allWeights.Sum();
+
+            if (totalWeight < 0.99 || totalWeight > 1.01f)
             {
-                weights = GetEqualWeights(numVariations);
+                allWeights = GetEqualWeights(numVariations).ToArray();
             }
 
-            var cumulative = 0d;
+            var cumulative = 0f;
 
             for (int i = 0; i < allWeights.Length; i++)
             {
                 var start = cumulative;
                 cumulative += allWeights[i];
-                yield return new BucketRange(start, start + coverage * allWeights[i]);
+                yield return new BucketRange(start, (start + coverage * allWeights[i]));
             }
         }
 
@@ -112,7 +114,7 @@ namespace GrowthBook
         /// <param name="n">The hash value.</param>
         /// <param name="ranges">LIst of bucket ranges to compare the hash to.</param>
         /// <returns>The selected variation id, or -1 if no match is found.</returns>
-        public static int ChooseVariation(double n, IList<BucketRange> ranges)
+        public static int ChooseVariation(float n, IList<BucketRange> ranges)
         {
             for (int i = 0; i < ranges.Count; i++)
             {
@@ -374,21 +376,34 @@ namespace GrowthBook
             // Left pad each numeric part with spaces so string comparisons will work ("9">"10", but " 9"<"10")
             // Then, join back together into a single string
 
-            var paddedVersionParts = versionParts.Select(x => Regex.IsMatch(x, "^[0-9]+$") ? x.PadLeft(5, ' ') : x);
+            var paddedVersionParts = versionParts.Select(x => Regex.IsMatch(x, "^[0-9]+$") ? x.PadLeft(5, ' ') : x.ToUpperInvariant());
 
             return string.Join("-", paddedVersionParts);
         }
 
         static bool IsIn(JToken conditionValue, JToken actualValue)
         {
-            if (actualValue.Type == JTokenType.Array)
+            if (actualValue?.Type == JTokenType.Array)
             {
-                var element = ((JArray)actualValue).FirstOrDefault(x => x.ToString() == conditionValue.ToString());
+                var conditionValues = new HashSet<JToken>(conditionValue);
+                var actualValues = new HashSet<JToken>(actualValue);
 
-                return element != null;
+                conditionValues.IntersectWith(actualValues);
+
+                return conditionValues.Any();
             }
             else
             {
+                if (conditionValue == actualValue)
+                {
+                    return true;
+                }
+
+                if (conditionValue is null || actualValue is null)
+                {
+                    return false;
+                }
+
                 return conditionValue.ToString().Contains(actualValue.ToString());
             }
         }
@@ -410,25 +425,26 @@ namespace GrowthBook
             {
                 return !conditionValue.Equals(attributeValue);
             }
-            if (attributeValue is IComparable attrComp)
+
+            var actualComparableValue = attributeValue as IComparable;
+
+            if (op == "$lt")
             {
-                if (op == "$lt")
-                {
-                    return attrComp.CompareTo(conditionValue) < 0;
-                }
-                if (op == "$lte")
-                {
-                    return attrComp.CompareTo(conditionValue) <= 0;
-                }
-                if (op == "$gt")
-                {
-                    return attrComp.CompareTo(conditionValue) > 0;
-                }
-                if (op == "$gte")
-                {
-                    return attrComp.CompareTo(conditionValue) >= 0;
-                }
+                return actualComparableValue is null || actualComparableValue?.CompareTo(conditionValue) < 0;
             }
+            if (op == "$lte")
+            {
+                return actualComparableValue is null || actualComparableValue?.CompareTo(conditionValue) <= 0;
+            }
+            if (op == "$gt")
+            {
+                return actualComparableValue is null || actualComparableValue?.CompareTo(conditionValue) > 0;
+            }
+            if (op == "$gte")
+            {
+                return actualComparableValue is null || actualComparableValue?.CompareTo(conditionValue) >= 0;
+            }
+            
             if (op == "$regex")
             {
                 try
@@ -476,8 +492,6 @@ namespace GrowthBook
                     {
                         return false;
                     }
-
-                    return true;
                 }
 
                 return true;                

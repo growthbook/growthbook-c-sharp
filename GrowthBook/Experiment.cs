@@ -26,7 +26,7 @@ namespace GrowthBook
         /// <summary>
         /// How to weight traffic between variations. Must add to 1.
         /// </summary>
-        public IList<double> Weights { get; set; }
+        public List<float> Weights { get; set; }
 
         /// <summary>
         /// If set to false, always return the control (first variation).
@@ -36,12 +36,12 @@ namespace GrowthBook
         /// <summary>
         /// What percent of users should be included in the experiment (between 0 and 1, inclusive).
         /// </summary>
-        public double? Coverage { get; set; } = 1d;
+        public float? Coverage { get; set; }
 
         /// <summary>
         ///  Array of ranges, one per variation.
         /// </summary>
-        public IList<BucketRange> Ranges { get; set; }
+        public List<BucketRange> Ranges { get; set; }
 
         /// <summary>
         /// Optional targeting condition.
@@ -71,12 +71,12 @@ namespace GrowthBook
         /// <summary>
         /// Meta info about the variations.
         /// </summary>
-        public IList<VariationMeta> Meta { get; set; }
+        public List<VariationMeta> Meta { get; set; }
 
         /// <summary>
         /// Array of filters to apply.
         /// </summary>
-        public IList<Filter> Filters { get; set; }
+        public List<Filter> Filters { get; set; }
 
         /// <summary>
         /// The hash seed to use.
@@ -118,7 +118,7 @@ namespace GrowthBook
                     && Key == objExp.Key
                     && object.Equals(Namespace, objExp.Namespace)
                     && JToken.DeepEquals(Variations, objExp.Variations)
-                    && ((Weights == null && objExp.Weights == null) || Weights.SequenceEqual(objExp.Weights));
+                    && ((Weights == null && objExp.Weights == null) || (Weights == null || objExp.Weights == null ? false : Weights.SequenceEqual(objExp.Weights)));
             }
             return false;
         }
