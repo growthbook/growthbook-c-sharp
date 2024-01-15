@@ -48,6 +48,12 @@ namespace GrowthBook
         public IDictionary<string, Feature> Features { get; set; } = new Dictionary<string, Feature>();
 
         /// <summary>
+        /// Feature definitions that have been encrypted. Requires that the <see cref="DecryptionKey"/> property
+        /// be set in order for the <see cref="GrowthBook"/> class to decrypt them for use.
+        /// </summary>
+        public string EncryptedFeatures { get; set; }
+
+        /// <summary>
         /// Force specific experiments to always assign a specific variation (used for QA).
         /// </summary>
         public IDictionary<string, int> ForcedVariations { get; set; } = new Dictionary<string, int>();

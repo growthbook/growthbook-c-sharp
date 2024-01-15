@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using FluentAssertions;
+using GrowthBook.Utilities;
 using Xunit;
 
 namespace GrowthBook.Tests.StandardTests.UtilitiesTests;
@@ -28,7 +29,7 @@ public class InNamespaceTests : UnitTest
     [MemberData(nameof(GetMappedTestsInCategory), typeof(InNamespaceTestCase))]
     public void InNamespace(InNamespaceTestCase testCase)
     {
-        var actualResult = Utilities.InNamespace(testCase.Id, testCase.Namespace);
+        var actualResult = ExperimentUtilities.InNamespace(testCase.Id, testCase.Namespace);
 
         actualResult.Should().Be(testCase.ExpectedResult, "because the namespace logic should be correct");
     }

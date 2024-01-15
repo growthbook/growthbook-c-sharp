@@ -1,4 +1,5 @@
 using System;
+using GrowthBook.Extensions;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Newtonsoft.Json.Serialization;
@@ -24,9 +25,9 @@ namespace GrowthBook
                 {
                     return false;
                 }
-                // TODO: Is this feature result logic still relevant?
+
                 string strValue = Value.ToString();
-                return !string.IsNullOrWhiteSpace(strValue) && strValue != "0" && strValue.ToLower() != "false";
+                return !strValue.IsMissing() && strValue != "0" && strValue.ToLower() != "false";
             }
         }
 

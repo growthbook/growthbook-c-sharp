@@ -5,6 +5,7 @@ using System.Text;
 using System.Threading.Tasks;
 using FluentAssertions;
 using GrowthBook.Tests.Extensions;
+using GrowthBook.Utilities;
 using Xunit;
 
 namespace GrowthBook.Tests.StandardTests.UtilitiesTests;
@@ -38,7 +39,7 @@ public class GetBucketRangeTests : UnitTest
     {
         var config = testCase.Configuration;
 
-        var actualResults = Utilities.GetBucketRanges(config.NumberOfVariations, config.Coverage ?? 1f, config.Weights);
+        var actualResults = ExperimentUtilities.GetBucketRanges(config.NumberOfVariations, config.Coverage ?? 1f, config.Weights);
         var roundedResults = actualResults.Select(x => new BucketRange(x.Start.Round(), x.End.Round()));
         roundedResults.Should().BeEquivalentTo(testCase.ExpectedResults, "because the bucketing logic should be deterministic");
     }

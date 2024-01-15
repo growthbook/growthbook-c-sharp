@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using FluentAssertions;
+using GrowthBook.Utilities;
 using Xunit;
 
 namespace GrowthBook.Tests.StandardTests.UtilitiesTests;
@@ -23,7 +24,7 @@ public class GetEqualWeightsTests : UnitTest
     [MemberData(nameof(GetMappedTestsInCategory), typeof(GetEqualWeightsTestCase))]
     public void GetEqualWeights(GetEqualWeightsTestCase testCase)
     {
-        var actualResult = Utilities.GetEqualWeights(testCase.NumberOfVariations);
+        var actualResult = ExperimentUtilities.GetEqualWeights(testCase.NumberOfVariations);
 
         actualResult.Should().BeEquivalentTo(testCase.ExpectedResults, "because the weights should be created with an equal distribution");
     }

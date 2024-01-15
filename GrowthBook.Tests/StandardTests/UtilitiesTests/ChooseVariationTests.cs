@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using FluentAssertions;
+using GrowthBook.Utilities;
 using Xunit;
 
 namespace GrowthBook.Tests.StandardTests.UtilitiesTests;
@@ -27,7 +28,7 @@ public class ChooseVariationTests : UnitTest
     [MemberData(nameof(GetMappedTestsInCategory), typeof(ChooseVariationTestCase))]
     public void ChooseVariation(ChooseVariationTestCase testCase)
     {
-        var actualResult = Utilities.ChooseVariation(testCase.HashValue, testCase.BucketRanges);
+        var actualResult = ExperimentUtilities.ChooseVariation(testCase.HashValue, testCase.BucketRanges);
 
         actualResult.Should().Be(testCase.ExpectedResult, "because the variation choice should be deterministic");
     }

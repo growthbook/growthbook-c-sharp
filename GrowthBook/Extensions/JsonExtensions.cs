@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using GrowthBook.Utilities;
 using Newtonsoft.Json.Linq;
 
 namespace GrowthBook.Extensions
@@ -9,7 +10,8 @@ namespace GrowthBook.Extensions
     {
         public static bool IsNull(this JObject json) => json is null || json.Type == JTokenType.Null;
         public static bool IsNull(this JToken token) => token is null || token.Type == JTokenType.Null;
-        public static string TryToHashWith(this JObject json, string attributeKey = null)
+
+        public static string GetHashAttributeValue(this JObject json, string attributeKey = null)
         {
             var attribute = attributeKey ?? "id";
 

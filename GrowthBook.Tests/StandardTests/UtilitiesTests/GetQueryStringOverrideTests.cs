@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using FluentAssertions;
+using GrowthBook.Utilities;
 using Xunit;
 
 namespace GrowthBook.Tests.StandardTests.UtilitiesTests;
@@ -29,7 +30,7 @@ public class GetQueryStringOverrideTests : UnitTest
     [MemberData(nameof(GetMappedTestsInCategory), typeof(GetQueryStringOverrideTestCase))]
     public void GetQueryStringOverride(GetQueryStringOverrideTestCase testCase)
     {
-        var actualResult = Utilities.GetQueryStringOverride(testCase.ExperimentKey, testCase.Url, testCase.NumberOfVariations);
+        var actualResult = ExperimentUtilities.GetQueryStringOverride(testCase.ExperimentKey, testCase.Url, testCase.NumberOfVariations);
 
         actualResult.Should().Be(testCase.ExpectedResult, "because the override should function correctly");
     }

@@ -5,6 +5,7 @@ using System.Text;
 using System.Threading.Tasks;
 using FluentAssertions;
 using Xunit;
+using GrowthBook.Extensions;
 
 namespace GrowthBook.Tests.StandardTests.UtilitiesTests;
 
@@ -33,8 +34,8 @@ public class VersionCompareTests : UnitTest
     [MemberData(nameof(GetMappedTestsInCategory), typeof(VersionCompareLessThanTestCase))]
     public void VersionCompareLessThan(VersionCompareLessThanTestCase testCase)
     {
-        var versionString = Utilities.PaddedVersionString(testCase.Version);
-        var otherVersionString = Utilities.PaddedVersionString(testCase.OtherVersion);
+        var versionString = testCase.Version.ToPaddedVersionString();
+        var otherVersionString = testCase.OtherVersion.ToPaddedVersionString();
 
         var actualResult = string.CompareOrdinal(versionString, otherVersionString) < 0;
 
@@ -45,8 +46,8 @@ public class VersionCompareTests : UnitTest
     [MemberData(nameof(GetMappedTestsInCategory), typeof(VersionCompareGreaterThanTestCase))]
     public void VersionCompareGreaterThan(VersionCompareGreaterThanTestCase testCase)
     {
-        var versionString = Utilities.PaddedVersionString(testCase.Version);
-        var otherVersionString = Utilities.PaddedVersionString(testCase.OtherVersion);
+        var versionString = testCase.Version.ToPaddedVersionString();
+        var otherVersionString = testCase.OtherVersion.ToPaddedVersionString();
 
         var actualResult = string.CompareOrdinal(versionString, otherVersionString) > 0;
 
@@ -57,8 +58,8 @@ public class VersionCompareTests : UnitTest
     [MemberData(nameof(GetMappedTestsInCategory), typeof(VersionCompareEqualTestCase))]
     public void VersionCompareEqual(VersionCompareEqualTestCase testCase)
     {
-        var versionString = Utilities.PaddedVersionString(testCase.Version);
-        var otherVersionString = Utilities.PaddedVersionString(testCase.OtherVersion);
+        var versionString = testCase.Version.ToPaddedVersionString();
+        var otherVersionString = testCase.OtherVersion.ToPaddedVersionString();
 
         var actualResult = string.CompareOrdinal(versionString, otherVersionString) == 0;
 

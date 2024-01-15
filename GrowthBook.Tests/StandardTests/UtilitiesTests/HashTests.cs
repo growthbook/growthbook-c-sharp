@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using FluentAssertions;
+using GrowthBook.Utilities;
 using Xunit;
 
 namespace GrowthBook.Tests.StandardTests.UtilitiesTests;
@@ -27,7 +28,7 @@ public class HashTests : UnitTest
     [MemberData(nameof(GetMappedTestsInCategory), typeof(HashTestCase))]
     public void Hash(HashTestCase testCase)
     {
-        var actualResult = Utilities.Hash(testCase.Seed, testCase.ValueToHash, testCase.HashVersionToUse);
+        var actualResult = HashUtilities.Hash(testCase.Seed, testCase.ValueToHash, testCase.HashVersionToUse);
 
         actualResult.Should().Be(testCase.ExpectedResult, "because the hashing algorithm should be deterministic");
     }

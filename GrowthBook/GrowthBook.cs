@@ -3,6 +3,9 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Security;
 using GrowthBook.Extensions;
+using GrowthBook.Providers;
+using GrowthBook.Utilities;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
 namespace GrowthBook
@@ -20,6 +23,7 @@ namespace GrowthBook
         private Action<Experiment, ExperimentResult> _trackingCallback;
         private readonly List<Action<Experiment, ExperimentResult>> _subscriptions;
         private bool _disposedValue;
+        private IConditionEvaluationProvider _conditionEvaluator;
 
         /// <summary>
         /// Creates a new GrowthBook instance from the passed context.
@@ -30,13 +34,26 @@ namespace GrowthBook
             Enabled = context.Enabled;
             Attributes = context.Attributes;
             Url = context.Url;
-            Features = context.Features.ToDictionary(k => k.Key, v => v.Value);
+            Features = context.Features?.ToDictionary(k => k.Key, v => v.Value) ?? new Dictionary<string, Feature>();
             ForcedVariations = context.ForcedVariations;
             _qaMode = context.QaMode;
             _trackingCallback = context.TrackingCallback;
             _tracked = new HashSet<string>();
             _assigned = new Dictionary<string, ExperimentAssignment>();
             _subscriptions = new List<Action<Experiment, ExperimentResult>>();
+
+            _conditionEvaluator = new ConditionEvaluationProvider();
+
+            if (!context.DecryptionKey.IsMissing() && !context.EncryptedFeatures.IsMissing())
+            {
+                var featuresJson = context.EncryptedFeatures.DecryptWith(context.DecryptionKey);
+                var decryptedFeatures = JsonConvert.DeserializeObject<Dictionary<string, Feature>>(featuresJson);
+
+                foreach(var pair in decryptedFeatures)
+                {
+                    Features[pair.Key] = pair.Value;
+                }
+            }
         }
 
         /// <summary>
@@ -150,7 +167,7 @@ namespace GrowthBook
 
             foreach (FeatureRule rule in feature?.Rules ?? Enumerable.Empty<FeatureRule>())
             {
-                if (!rule.Condition.IsNull() && !Utilities.EvalCondition(Attributes, rule.Condition))
+                if (!rule.Condition.IsNull() && !_conditionEvaluator.EvalCondition(Attributes, rule.Condition))
                 {
                     continue;
                 }
@@ -259,9 +276,9 @@ namespace GrowthBook
 
             // 3. Use the override value from the query string if one is specified.
 
-            if (!string.IsNullOrWhiteSpace(Url))
+            if (!Url.IsMissing())
             {
-                var overrideValue = Utilities.GetQueryStringOverride(experiment.Key, Url, experiment.Variations.Count);
+                var overrideValue = ExperimentUtilities.GetQueryStringOverride(experiment.Key, Url, experiment.Variations.Count);
 
                 if (overrideValue != null)
                 {
@@ -285,9 +302,9 @@ namespace GrowthBook
 
             // 6. Abort if we're unable to generate a hash identifying this run.
 
-            var hashValue = Attributes.TryToHashWith(experiment.HashAttribute);
+            var hashValue = Attributes.GetHashAttributeValue(experiment.HashAttribute);
 
-            if (string.IsNullOrEmpty(hashValue))
+            if (hashValue.IsMissing())
             {
                 return GetExperimentResult(experiment, featureId: featureId);
             }
@@ -301,7 +318,7 @@ namespace GrowthBook
                     return GetExperimentResult(experiment, featureId: featureId);
                 }                
             }
-            else if (experiment.Namespace != null && !Utilities.InNamespace(hashValue, experiment.Namespace))
+            else if (experiment.Namespace != null && !ExperimentUtilities.InNamespace(hashValue, experiment.Namespace))
             {
                 return GetExperimentResult(experiment, featureId: featureId);
             }
@@ -310,7 +327,7 @@ namespace GrowthBook
 
             if (!experiment.Condition.IsNull())
             {
-                if (!Utilities.EvalCondition(Attributes, experiment.Condition))
+                if (!_conditionEvaluator.EvalCondition(Attributes, experiment.Condition))
                 {
                     return GetExperimentResult(experiment, featureId: featureId);
                 }
@@ -318,9 +335,9 @@ namespace GrowthBook
 
             // 9. Attempt to assign this run to an experiment variation and abort if that can't be done.
 
-            var ranges = experiment.Ranges?.Count > 0 ? experiment.Ranges : Utilities.GetBucketRanges(experiment.Variations?.Count ?? 0, experiment.Coverage ?? 1, experiment.Weights ?? new List<float>());
-            var variationHash = Utilities.Hash(experiment.Seed ?? experiment.Key, hashValue, experiment.HashVersion);
-            var assigned = Utilities.ChooseVariation(variationHash.Value, ranges.ToList());
+            var ranges = experiment.Ranges?.Count > 0 ? experiment.Ranges : ExperimentUtilities.GetBucketRanges(experiment.Variations?.Count ?? 0, experiment.Coverage ?? 1, experiment.Weights ?? new List<float>());
+            var variationHash = HashUtilities.Hash(experiment.Seed ?? experiment.Key, hashValue, experiment.HashVersion);
+            var assigned = ExperimentUtilities.ChooseVariation(variationHash.Value, ranges.ToList());
 
             if (assigned == -1)
             {
@@ -365,16 +382,16 @@ namespace GrowthBook
         {
             foreach(var filter in filters)
             {
-                var hashValue = Attributes.TryToHashWith(filter.Attribute);
+                var hashValue = Attributes.GetHashAttributeValue(filter.Attribute);
 
-                if (string.IsNullOrWhiteSpace(hashValue))
+                if (hashValue.IsMissing())
                 {
                     return true;
                 }
 
-                var bucket = Utilities.Hash(filter.Seed, hashValue, filter.HashVersion);
+                var bucket = HashUtilities.Hash(filter.Seed, hashValue, filter.HashVersion);
 
-                var isInAnyRange = filter.Ranges.Any(x => Utilities.InRange(bucket.Value, x));
+                var isInAnyRange = filter.Ranges.Any(x => ExperimentUtilities.InRange(bucket.Value, x));
 
                 if (!isInAnyRange)
                 {
@@ -392,18 +409,18 @@ namespace GrowthBook
                 return true;
             }
 
-            var hashValue = Attributes.TryToHashWith(hashAttribute);
+            var hashValue = Attributes.GetHashAttributeValue(hashAttribute);
 
             if (hashValue is null)
             {
                 return false;
             }
 
-            var bucket = Utilities.Hash(seed, hashValue, hashVersion ?? 1);
+            var bucket = HashUtilities.Hash(seed, hashValue, hashVersion ?? 1);
 
             if (range != null)
             {
-                return Utilities.InRange(bucket.Value, range);
+                return ExperimentUtilities.InRange(bucket.Value, range);
             }
 
             if (coverage != null)
@@ -432,7 +449,7 @@ namespace GrowthBook
                 inExperiment = false;
             }
 
-            var hashValue = Attributes.TryToHashWith(hashAttribute);
+            var hashValue = Attributes.GetHashAttributeValue(hashAttribute);
 
             var meta = experiment.Meta?.Count > 0 ? experiment.Meta[variationIndex] : null;
 

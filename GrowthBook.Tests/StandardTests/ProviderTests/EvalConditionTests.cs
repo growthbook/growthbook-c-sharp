@@ -5,10 +5,11 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Xml.Linq;
 using FluentAssertions;
+using GrowthBook.Providers;
 using Newtonsoft.Json.Linq;
 using Xunit;
 
-namespace GrowthBook.Tests.StandardTests.UtilitiesTests;
+namespace GrowthBook.Tests.StandardTests.ProviderTests;
 
 public class EvalConditionTests : UnitTest
 {
@@ -29,7 +30,7 @@ public class EvalConditionTests : UnitTest
     [MemberData(nameof(GetMappedTestsInCategory), typeof(EvalConditionTestCase))]
     public void EvalCondition(EvalConditionTestCase testCase)
     {
-        var actualResult = Utilities.EvalCondition(testCase.Attributes, testCase.Condition);
+        var actualResult = new ConditionEvaluationProvider().EvalCondition(testCase.Attributes, testCase.Condition);
 
         actualResult.Should().Be(testCase.ExpectedValue, "because the condition should evaluate correctly");
     }
