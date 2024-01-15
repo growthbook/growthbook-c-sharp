@@ -97,7 +97,7 @@ public abstract class UnitTest
 
         var json = reader.ReadToEnd();
         var jsonObject = JObject.Parse(json);
-        var tests = (JArray)jsonObject[testCategory];
+        var tests = (JArray)jsonObject.SelectToken(testCategory);
 
         if (tests is null)
         {

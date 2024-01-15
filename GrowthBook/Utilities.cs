@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Web;
@@ -173,10 +174,26 @@ namespace GrowthBook
             var parts = encryptedString.Split('.');
 
             var iv = Convert.FromBase64String(parts[0]);
+            var cipherBytes = Convert.FromBase64String(parts[1]);
+            var keyBytes = Convert.FromBase64String(decryptionKey);
 
-            // TODO: Implement AES-CBC 128k here
+            var aesProvider = new AesCryptoServiceProvider
+            {
+                BlockSize = 128,
+                KeySize = 256,
+                Key = keyBytes,
+                IV = iv,
+                Padding = PaddingMode.None,
+                Mode = CipherMode.CBC
+            };
 
-            return null;
+            using (var decryptor = aesProvider.CreateDecryptor(keyBytes, iv))
+            {
+                var decryptedBytes = decryptor.TransformFinalBlock(
+                    cipherBytes, 0, cipherBytes.Length - iv.Length);
+
+                return Encoding.UTF8.GetString(decryptedBytes);
+            }
         }
 
         /// <summary>
@@ -355,7 +372,7 @@ namespace GrowthBook
             return false;
         }
 
-        static string PaddedVersionString(string input)
+        public static string PaddedVersionString(string input)
         {
             // Remove build info and leading `v` if any
             // Split version into parts (both core version numbers and pre-release tags)
@@ -376,7 +393,7 @@ namespace GrowthBook
             // Left pad each numeric part with spaces so string comparisons will work ("9">"10", but " 9"<"10")
             // Then, join back together into a single string
 
-            var paddedVersionParts = versionParts.Select(x => Regex.IsMatch(x, "^[0-9]+$") ? x.PadLeft(5, ' ') : x.ToUpperInvariant());
+            var paddedVersionParts = versionParts.Select(x => Regex.IsMatch(x, "^[0-9]+$") ? x.PadLeft(5, ' ') : x);
 
             return string.Join("-", paddedVersionParts);
         }
@@ -531,29 +548,27 @@ namespace GrowthBook
             }
             if (op == "$veq")
             {
-                return PaddedVersionString(conditionValue.ToString()) == PaddedVersionString(attributeValue.ToString());
+                return CompareVersions(attributeValue, conditionValue, x => x == 0);
             }
             if (op == "$vne")
             {
-                return PaddedVersionString(conditionValue.ToString()) != PaddedVersionString(attributeValue.ToString());
+                return CompareVersions(attributeValue, conditionValue, x => x != 0);
             }
             if (op == "$vlt")
             {
-                return PaddedVersionString(conditionValue.ToString()).CompareTo(PaddedVersionString(attributeValue.ToString())) > 0;
+                return CompareVersions(attributeValue, conditionValue, x => x < 0);
             }
             if (op == "$vlte")
             {
-                var value = PaddedVersionString(conditionValue.ToString()).CompareTo(PaddedVersionString(attributeValue.ToString()));
-                return value >= 0;
+                return CompareVersions(attributeValue, conditionValue, x => x <= 0);
             }
             if (op == "$vgt")
             {
-                return PaddedVersionString(conditionValue.ToString()).CompareTo(PaddedVersionString(attributeValue.ToString())) < 0;
+                return CompareVersions(attributeValue, conditionValue, x => x > 0);
             }
             if (op == "$vgte")
             {
-                var value = PaddedVersionString(conditionValue.ToString()).CompareTo(PaddedVersionString(attributeValue.ToString()));
-                return value <= 0;
+                return CompareVersions(attributeValue, conditionValue, x => x >= 0);
             }
 
             // TODO: Log the error for debug purposes?
@@ -561,6 +576,16 @@ namespace GrowthBook
             return false;
         }
 
+        static bool CompareVersions(JToken left, JToken right, Func<int, bool> meetsComparison)
+        {
+            var leftValue = PaddedVersionString(left.ToString());
+            var rightValue = PaddedVersionString(right.ToString());
+
+            var comparisonResult = string.CompareOrdinal(leftValue, rightValue);
+
+            return meetsComparison(comparisonResult);
+        }
+        
         static JToken GetPath(JToken attributes, string key) => attributes.SelectToken(key);
 
         /// <summary>
