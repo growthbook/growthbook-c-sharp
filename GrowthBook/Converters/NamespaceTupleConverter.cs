@@ -2,44 +2,43 @@ using System;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
-namespace GrowthBook
+namespace GrowthBook.Converters
 {
     /// <summary>
-    /// Represents a JsonConverter object used to convert BucketRanges
+    /// Represents a JsonConverter object used to convert Namespaces
     /// to and from JSON tuples.
     /// </summary>
-    public class BucketRangeTupleConverter : JsonConverter
+    public class NamespaceTupleConverter : JsonConverter
     {
         public override bool CanConvert(Type objectType)
         {
-            return objectType == typeof(BucketRange);
+            return objectType == typeof(Namespace);
         }
 
         public override object ReadJson(JsonReader reader, Type objectType, object existingValue, JsonSerializer serializer)
         {
-            JToken token = JToken.Load(reader);
+            var token = JToken.Load(reader);
+
             if (token.Type == JTokenType.Array)
             {
-                var array = (JArray)token;
-
-                if (float.TryParse(array[0].ToString(), out var start) && float.TryParse(array[1].ToString(), out var end))
-                {
-                    return new BucketRange(start, end);
-                }
+                return new Namespace((JArray)token);
             }
+
             return null;
         }
 
         public override void WriteJson(JsonWriter writer, object value, JsonSerializer serializer)
         {
-            Namespace valueNamespace = (Namespace)value;
-            JArray t = new JArray
+            var valueNamespace = (Namespace)value;
+
+            var array = new JArray
             {
                 JToken.FromObject(valueNamespace.Id),
                 JToken.FromObject(valueNamespace.Start),
                 JToken.FromObject(valueNamespace.End)
             };
-            t.WriteTo(writer);
+
+            array.WriteTo(writer);
         }
     }
 }

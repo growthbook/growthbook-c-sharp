@@ -1,4 +1,5 @@
 using System;
+using GrowthBook.Converters;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Newtonsoft.Json.Serialization;
@@ -67,5 +68,21 @@ namespace GrowthBook
         /// Callback function used for tracking Experiment assignment.
         /// </summary>
         public Action<Experiment, ExperimentResult> TrackingCallback { get; set; }
+
+        /// <summary>
+        /// A repository implementation for retrieving and caching features that will override
+        /// the default implementation. Optional.
+        /// </summary>
+        public IGrowthBookFeatureRepository FeatureRepository { get; set; }
+
+        /// <summary>
+        /// A logger factory implementation that will override the default implementation. Optional.
+        /// </summary>
+        public ILoggerFactory DefaultLoggerFactory { get; set; }
+
+        /// <summary>
+        /// The default log level for the default logging implementation. Optional.
+        /// </summary>
+        public LogLevel DefaultLogLevel { get; set; } = LogLevel.Warning;
     }
 }

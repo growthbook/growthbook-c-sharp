@@ -36,7 +36,7 @@ public class DecryptTests : UnitTest
 
         try
         {
-            actualValue = CryptographicUtilities.Decrypt(testCase.EncryptedValue, testCase.DecryptionKey);
+            actualValue = CryptographyUtilities.Decrypt(testCase.EncryptedValue, testCase.DecryptionKey);
 
             actualValue.Trim().Should().Be(testCase.ExpectedResult, "because the decryption should behave correctly");
         }

@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace GrowthBook
 {
@@ -58,5 +60,12 @@ namespace GrowthBook
         /// <param name="experiment">The experiment to evaluate.</param>
         /// <returns>The experiment result.</returns>
         ExperimentResult Run(Experiment experiment);
+
+        /// <summary>
+        /// Loads all available features from the API and caches them for faster retrieval.
+        /// </summary>
+        /// <param name="options">An optional set of choices that affect how the features will be loaded.</param>
+        /// <returns>A <see cref="Task"/> that represents the feature retrieval action.</returns>
+        Task LoadFeatures(GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null);
     }
 }

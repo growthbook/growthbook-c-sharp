@@ -1,10 +1,15 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net.Http;
 using System.Security;
+using System.Threading;
+using System.Threading.Tasks;
+using GrowthBook.Api;
 using GrowthBook.Extensions;
 using GrowthBook.Providers;
 using GrowthBook.Utilities;
+using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -23,7 +28,9 @@ namespace GrowthBook
         private Action<Experiment, ExperimentResult> _trackingCallback;
         private readonly List<Action<Experiment, ExperimentResult>> _subscriptions;
         private bool _disposedValue;
-        private IConditionEvaluationProvider _conditionEvaluator;
+        private readonly IConditionEvaluationProvider _conditionEvaluator;
+        private readonly IGrowthBookFeatureRepository _featureRepository;
+        private readonly ILogger<GrowthBook> _logger;
 
         /// <summary>
         /// Creates a new GrowthBook instance from the passed context.
@@ -36,24 +43,38 @@ namespace GrowthBook
             Url = context.Url;
             Features = context.Features?.ToDictionary(k => k.Key, v => v.Value) ?? new Dictionary<string, Feature>();
             ForcedVariations = context.ForcedVariations;
+
             _qaMode = context.QaMode;
             _trackingCallback = context.TrackingCallback;
             _tracked = new HashSet<string>();
             _assigned = new Dictionary<string, ExperimentAssignment>();
             _subscriptions = new List<Action<Experiment, ExperimentResult>>();
-
             _conditionEvaluator = new ConditionEvaluationProvider();
 
-            if (!context.DecryptionKey.IsMissing() && !context.EncryptedFeatures.IsMissing())
+            var config = new GrowthBookConfigurationOptions
             {
-                var featuresJson = context.EncryptedFeatures.DecryptWith(context.DecryptionKey);
-                var decryptedFeatures = JsonConvert.DeserializeObject<Dictionary<string, Feature>>(featuresJson);
+                ApiHost = context.ApiHost,
+                CacheExpirationInSeconds = 60,
+                ClientKey = context.ClientKey,
+                DecryptionKey = context.DecryptionKey
+            };
 
-                foreach(var pair in decryptedFeatures)
-                {
-                    Features[pair.Key] = pair.Value;
-                }
-            }
+            var featureCache = new InMemoryFeatureCache(cacheExpirationInSeconds: 60);
+            var httpClientFactory = new HttpClientFactory(requestTimeoutInSeconds: 60);
+
+            var loggerFactory = context.DefaultLoggerFactory ?? LoggerFactory.Create(x =>
+            {
+                x.SetMinimumLevel(context.DefaultLogLevel);
+                x.AddConsole();
+            });
+
+            var featureRefreshLogger = loggerFactory.CreateLogger<FeatureRefreshWorker>();
+            var featureRepositoryLogger = loggerFactory.CreateLogger<FeatureRepository>();
+            _logger = loggerFactory.CreateLogger<GrowthBook>();
+
+            var featureRefreshWorker = new FeatureRefreshWorker(featureRefreshLogger, httpClientFactory, config, featureCache);
+
+            _featureRepository = new FeatureRepository(featureRepositoryLogger, featureCache, featureRefreshWorker);
         }
 
         /// <summary>
@@ -98,6 +119,7 @@ namespace GrowthBook
                     _tracked.Clear();
                     _assigned.Clear();
                     _subscriptions.Clear();
+                    _featureRepository.Cancel();
                 }
 
                 _disposedValue = true;
@@ -256,6 +278,11 @@ namespace GrowthBook
             }
 
             return result;
+        }
+
+        public async Task LoadFeatures(GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null)
+        {
+            Features = await _featureRepository.GetFeatures(options, cancellationToken); 
         }
 
         private ExperimentResult RunExperiment(Experiment experiment, string featureId)
@@ -442,7 +469,8 @@ namespace GrowthBook
         {
             string hashAttribute = experiment.HashAttribute ?? "id";
 
-            bool inExperiment = true;
+            var inExperiment = true;
+
             if (variationIndex < 0 || variationIndex >= experiment.Variations.Count)
             {
                 variationIndex = 0;
@@ -450,7 +478,6 @@ namespace GrowthBook
             }
 
             var hashValue = Attributes.GetHashAttributeValue(hashAttribute);
-
             var meta = experiment.Meta?.Count > 0 ? experiment.Meta[variationIndex] : null;
 
             var result = new ExperimentResult

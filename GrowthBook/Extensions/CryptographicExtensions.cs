@@ -7,6 +7,6 @@ namespace GrowthBook.Extensions
 {
     internal static class CryptographicExtensions
     {
-        public static string DecryptWith(this string encryptedValue, string decryptionKey) => CryptographicUtilities.Decrypt(encryptedValue, decryptionKey);
+        public static string DecryptWith(this string encryptedValue, string decryptionKey) => CryptographyUtilities.Decrypt(encryptedValue, decryptionKey);
     }
 }

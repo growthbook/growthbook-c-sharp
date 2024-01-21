@@ -7,7 +7,7 @@ using GrowthBook.Exceptions;
 
 namespace GrowthBook.Utilities
 {
-    internal static class CryptographicUtilities
+    internal static class CryptographyUtilities
     {
         public static string Decrypt(string encryptedString, string decryptionKey)
         {
