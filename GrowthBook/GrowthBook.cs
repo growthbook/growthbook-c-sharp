@@ -190,7 +190,7 @@ namespace GrowthBook
             {
                 if (!Features.TryGetValue(featureId, out Feature feature))
                 {
-                    return GetFeatureResult(null, "unknownFeature");
+                    return GetFeatureResult(null, FeatureResult.SourceIs.UnknownFeature);
                 }
 
                 foreach (FeatureRule rule in feature?.Rules ?? Enumerable.Empty<FeatureRule>())
@@ -222,12 +222,12 @@ namespace GrowthBook
                                 }
                                 catch (Exception ex)
                                 {
-                                    // TODO: Log this
+                                    _logger.LogError(ex, $"Encountered unhandled exception in tracking callback for feature ID '{featureId}'");
                                 }
                             }
                         }
 
-                        return GetFeatureResult(rule.Force, "force");
+                        return GetFeatureResult(rule.Force, FeatureResult.SourceIs.Force);
                     }
 
                     var experiment = new Experiment
@@ -253,10 +253,10 @@ namespace GrowthBook
                         continue;
                     }
 
-                    return GetFeatureResult(result.Value, "experiment", experiment, result);
+                    return GetFeatureResult(result.Value, FeatureResult.SourceIs.Experiment, experiment, result);
                 }
 
-                return GetFeatureResult(feature.DefaultValue ?? null, "defaultValue");
+                return GetFeatureResult(feature.DefaultValue ?? null, FeatureResult.SourceIs.DefaultValue);
             }
             catch(Exception ex)
             {
@@ -264,10 +264,10 @@ namespace GrowthBook
 
                 if (!Features.TryGetValue(featureId, out Feature feature))
                 {
-                    return GetFeatureResult(null, "unknownFeature");
+                    return GetFeatureResult(null, FeatureResult.SourceIs.UnknownFeature);
                 }
 
-                return GetFeatureResult(feature.DefaultValue ?? null, "defaultValue");
+                return GetFeatureResult(feature.DefaultValue ?? null, FeatureResult.SourceIs.DefaultValue);
             }
         }
 

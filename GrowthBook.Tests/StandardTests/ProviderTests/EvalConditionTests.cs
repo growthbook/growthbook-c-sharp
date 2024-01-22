@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using System.Xml.Linq;
 using FluentAssertions;
 using GrowthBook.Providers;
+using Microsoft.Extensions.Logging.Abstractions;
 using Newtonsoft.Json.Linq;
 using Xunit;
 
@@ -30,7 +31,8 @@ public class EvalConditionTests : UnitTest
     [MemberData(nameof(GetMappedTestsInCategory), typeof(EvalConditionTestCase))]
     public void EvalCondition(EvalConditionTestCase testCase)
     {
-        var actualResult = new ConditionEvaluationProvider().EvalCondition(testCase.Attributes, testCase.Condition);
+        var logger = new NullLogger<ConditionEvaluationProvider>();
+        var actualResult = new ConditionEvaluationProvider(logger).EvalCondition(testCase.Attributes, testCase.Condition);
 
         actualResult.Should().Be(testCase.ExpectedValue, "because the condition should evaluate correctly");
     }

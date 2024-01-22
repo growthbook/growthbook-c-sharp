@@ -10,6 +10,17 @@ namespace GrowthBook
     public class FeatureResult
     {
         /// <summary>
+        /// Represents possible values for the source of a feature result.
+        /// </summary>
+        public static class SourceIs
+        {
+            public const string UnknownFeature = "unknownFeature";
+            public const string DefaultValue = "defaultValue";
+            public const string Force = "force";
+            public const string Experiment = "experiment";
+        }
+
+        /// <summary>
         /// The assigned value of the feature.
         /// </summary>
         public JToken Value { get; set; }
@@ -21,15 +32,13 @@ namespace GrowthBook
         {
             get
             {
-                // TODO: Does this need to be modified at all?
-
                 if (Value == null || Value.Type == JTokenType.Null)
                 {
                     return false;
                 }
 
                 string strValue = Value.ToString();
-                return !strValue.IsMissing() && strValue != "0" && strValue.ToLower() != "false";
+                return !string.IsNullOrEmpty(strValue) && strValue != "0" && strValue.ToLower() != "false";
             }
         }
 
@@ -38,7 +47,6 @@ namespace GrowthBook
         /// </summary>
         public bool Off { get { return !On; } }
 
-        // TODO: Can this be replaced by an actual enum?
         /// <summary>
         /// One of "unknownFeature", "defaultValue", "force", or "experiment".
         /// </summary>

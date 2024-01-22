@@ -105,8 +105,6 @@ namespace GrowthBook
 
         public override bool Equals(object obj)
         {
-            // TODO: Update equality checks.
-
             if (obj.GetType() == typeof(Experiment))
             {
                 Experiment objExp = (Experiment)obj;
