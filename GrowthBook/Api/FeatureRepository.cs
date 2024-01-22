@@ -35,7 +35,7 @@ namespace GrowthBook.Api
             if (_cache.IsCacheExpired || options?.ForceRefresh == true)
             {
                 _logger.LogInformation("Cache has expired or option to force refresh was set, refreshing the cache from the API");
-                _logger.LogDebug($"Cache expired: '{_cache.IsCacheExpired}' and option to force refresh: '{options?.ForceRefresh}'"); ;
+                _logger.LogDebug($"Cache expired: '{_cache.IsCacheExpired}' and option to force refresh: '{options?.ForceRefresh}'");
 
                 var refreshTask = _backgroundRefreshWorker.RefreshCacheFromApi(cancellationToken);
 

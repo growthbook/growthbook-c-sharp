@@ -6,14 +6,22 @@ using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
 using GrowthBook.Tests.Json;
+using Moq;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Xunit;
 
 namespace GrowthBook.Tests;
 
+/// <summary>
+/// Represents a unit test and provides basic functionality for executing JSON-based test cases.
+/// </summary>
 public abstract class UnitTest
 {
+    /// <summary>
+    /// Represents a named test category within the custom-cases.json tests.
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Class)]
     protected sealed class CustomCaseTestCategoryAttribute : TestCategoryAttribute
     {
         public CustomCaseTestCategoryAttribute(string name)
@@ -23,6 +31,10 @@ public abstract class UnitTest
         }
     }
 
+    /// <summary>
+    /// Represents a named test category within the standard-cases.json tests.
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Class)]
     protected sealed class StandardCaseTestCategoryAttribute : TestCategoryAttribute
     {
         public StandardCaseTestCategoryAttribute(string name)
@@ -34,7 +46,14 @@ public abstract class UnitTest
 
     protected abstract class TestCategoryAttribute : Attribute
     {
+        /// <summary>
+        /// Gets the name of the embedded JSON resource file without file extension.
+        /// </summary>
         public string Resource { get; }
+
+        /// <summary>
+        /// Gets the name of the test category within the resource.
+        /// </summary>
         public string Name { get; }
 
         public TestCategoryAttribute(string resource, string name)
@@ -44,13 +63,32 @@ public abstract class UnitTest
         }
     }
 
+    /// <summary>
+    /// Represents a class property that should be populated based on
+    /// an index in a JSON array. This mapping provides an easy way to move
+    /// from the unnamed parts of the JSON arrays in the standard test cases.
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Property)]
     protected sealed class TestPropertyIndexAttribute : Attribute
     {
+        /// <summary>
+        /// The zero-based index of the JSON array that this property is populated from.
+        /// </summary>
         public int Index { get; }
 
         public TestPropertyIndexAttribute(int index) => Index = index;
     }
 
+    /// <summary>
+    /// Retrieves all test cases by category name from the associated embedded resource.
+    /// </summary>
+    /// <param name="categoryType">The type representing a test case within a category.</param>
+    /// <returns>
+    /// A sequence of object arrays. Each array contains all test data that will be passed to
+    /// the test method for a single test case. All of the category-based tests will take a single
+    /// parameter that is the type of the test case class.
+    /// </returns>
+    /// <exception cref="InvalidOperationException">Thrown when unable to locate the <see cref="GetTestsInCategory{T}"/> method.</exception>
     public static IEnumerable<object[]> GetMappedTestsInCategory(Type categoryType)
     {
         var getTests = typeof(UnitTest).GetMethod(nameof(GetTestsInCategory), BindingFlags.Static | BindingFlags.NonPublic);
@@ -67,6 +105,11 @@ public abstract class UnitTest
         return testsInCategory.Select(x => new object[] { x });
     }
 
+    /// <summary>
+    /// Retrieves all test cases within a single test category. 
+    /// </summary>
+    /// <typeparam name="T">The type of the test case class.</typeparam>
+    /// <returns>A sequence of test case instances.</returns>
     protected static IEnumerable<T> GetTestsInCategory<T>() where T : new()
     {
         var category = typeof(T).GetCustomAttribute<TestCategoryAttribute>();
@@ -80,8 +123,13 @@ public abstract class UnitTest
     }
 
     /// <summary>
-    /// Returns the contents of the embedded resource as a string.
+    /// Retrieves all test cases within a single test category by resource name and category name.
     /// </summary>
+    /// <typeparam name="T">The type of the test case class.</typeparam>
+    /// <param name="resourceName">The name of the embedded JSON resource without file extension.</param>
+    /// <param name="testCategory">The name of the test case category.</param>
+    /// <returns>A sequence of test case instances.</returns>
+    /// <exception cref="InvalidOperationException">Thrown when the embedded resource or test category could not be located.</exception>
     private static IEnumerable<T> GetTestJsonCategoryAs<T>(string resourceName, string testCategory) where T : new()
     {
         var qualifiedPath = $"GrowthBook.Tests.Json.{resourceName}.json";
@@ -119,7 +167,7 @@ public abstract class UnitTest
             return default;
         }
 
-        // Transforming an array into an array requires us to copy the elements over,
+        // Transforming a JSON array into a .Net array requires us to copy the elements over,
         // so handle that case up front before we try anything else.
 
         if (instanceType.IsArray)
@@ -165,8 +213,7 @@ public abstract class UnitTest
 
             if (jsonInstance.Type == JTokenType.Array)
             {
-                var deserializeArray = typeof(UnitTest).GetMethod(nameof(DeserializeFromJsonArray), BindingFlags.Static | BindingFlags.NonPublic, new[] { typeof(JArray), typeof(Type) });
-                var propertyInstance = deserializeArray.Invoke(null, new object[] { jsonInstance, property.PropertyType });
+                var propertyInstance = DeserializeFromJsonArray((JArray)jsonInstance, property.PropertyType);
 
                 property.SetValue(instance, propertyInstance, null);
             }
@@ -180,4 +227,6 @@ public abstract class UnitTest
 
         return instance;
     }
+
+    protected Mock<T> StrictMockOf<T>() where T : class => new Mock<T>(MockBehavior.Strict);
 }

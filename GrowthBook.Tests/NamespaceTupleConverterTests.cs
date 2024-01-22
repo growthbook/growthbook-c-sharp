@@ -1,9 +1,6 @@
 using System.Collections.Generic;
-
 using GrowthBook.Tests.Json;
-
 using Newtonsoft.Json;
-
 using Xunit;
 
 namespace GrowthBook.Tests;

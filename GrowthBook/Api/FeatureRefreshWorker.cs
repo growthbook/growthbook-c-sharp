@@ -71,6 +71,13 @@ namespace GrowthBook.Api
                 return null;
             }
 
+            var json = await response.Content.ReadAsStringAsync();
+
+            _logger.LogDebug($"Read response JSON from default Features API request: '{json}'");
+
+            var features = GetFeaturesFrom(json);
+            await _cache.RefreshWith(features, cancellationToken);
+
             if (_config.PreferServerSentEvents)
             {
                 _isServerSentEventsEnabled = response.Headers.TryGetValues("x-sse-support", out var values) && values.Contains("enabled");
@@ -78,13 +85,6 @@ namespace GrowthBook.Api
                 _logger.LogDebug($"{nameof(FeatureRefreshWorker)} is configured to prefer server sent events and enabled is now '{_isServerSentEventsEnabled}'");
                 EnsureCorrectRefreshModeIsActive();
             }
-
-            var json = await response.Content.ReadAsStringAsync();
-
-            _logger.LogDebug($"Read response JSON from default Features API request: '{json}'");
-
-            var features = GetFeaturesFrom(json);
-            await _cache.RefreshWith(features, cancellationToken);
 
             return features;
         }
@@ -132,6 +132,18 @@ namespace GrowthBook.Api
                             while (!reader.EndOfStream && !_serverSentEventsListenerCancellation.IsCancellationRequested && !_refreshWorkerCancellation.IsCancellationRequested)
                             {
                                 var json = reader.ReadLine();
+
+                                if (json?.StartsWith("data:") != true)
+                                {
+                                    continue;
+                                }
+
+                                json = json.Substring(5).Trim();
+
+                                if (string.IsNullOrWhiteSpace(json))
+                                {
+                                    continue;
+                                }
 
                                 _logger.LogDebug($"Read response JSON from server sent events API request: '{json}'");
 

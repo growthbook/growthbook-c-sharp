@@ -21,7 +21,7 @@ namespace GrowthBook.Api
         public InMemoryFeatureCache(int cacheExpirationInSeconds)
         {
             _cacheExpirationInSeconds = cacheExpirationInSeconds;
-            _nextCacheExpiration = DateTime.UtcNow.AddSeconds(_cacheExpirationInSeconds);
+            _nextCacheExpiration = DateTime.UtcNow;
         }
 
         public int FeatureCount

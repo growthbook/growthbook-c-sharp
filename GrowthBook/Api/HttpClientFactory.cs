@@ -28,14 +28,14 @@ namespace GrowthBook.Api
             };
         }
 
-        private HttpClient ConfigureAsDefault(HttpClient client)
+        protected internal virtual HttpClient ConfigureAsDefault(HttpClient client)
         {
             client.DefaultRequestHeaders.Accept.ParseAdd("application/json");
 
             return client;
         }
 
-        private HttpClient ConfigureAsServerSentEvents(HttpClient client)
+        protected internal virtual HttpClient ConfigureAsServerSentEvents(HttpClient client)
         {
             var acceptHeader = client.DefaultRequestHeaders.Accept;
 
@@ -45,7 +45,7 @@ namespace GrowthBook.Api
             return client;
         }
 
-        private HttpClient CreateClient(Func<HttpClient, HttpClient> configure)
+        protected internal virtual HttpClient CreateClient(Func<HttpClient, HttpClient> configure)
         {
             var client = new HttpClient
             {

@@ -53,19 +53,22 @@ namespace GrowthBook
 
             var config = new GrowthBookConfigurationOptions
             {
-                ApiHost = context.ApiHost,
+                ApiHost = context.ApiHost ?? "https://cdn.growthbook.io",
                 CacheExpirationInSeconds = 60,
                 ClientKey = context.ClientKey,
-                DecryptionKey = context.DecryptionKey
+                DecryptionKey = context.DecryptionKey,
+                PreferServerSentEvents = true
             };
 
             var featureCache = new InMemoryFeatureCache(cacheExpirationInSeconds: 60);
             var httpClientFactory = new HttpClientFactory(requestTimeoutInSeconds: 60);
 
-            var loggerFactory = context.DefaultLoggerFactory ?? LoggerFactory.Create(x =>
+            var loggerFactory = context.DefaultLoggerFactory ?? LoggerFactory.Create(builder =>
             {
-                x.SetMinimumLevel(context.DefaultLogLevel);
-                x.AddConsole();
+                builder
+                    .SetMinimumLevel(context.DefaultLogLevel)
+                    .AddConsole()
+                    .AddDebug();
             });
 
             var featureRefreshLogger = loggerFactory.CreateLogger<FeatureRefreshWorker>();
