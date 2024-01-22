@@ -3,20 +3,24 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.Logging;
 using Newtonsoft.Json.Linq;
 
 namespace GrowthBook.Providers
 {
+    /// <inheritdoc cref="IConditionEvaluationProvider"/>
     internal sealed class ConditionEvaluationProvider : IConditionEvaluationProvider
     {
-        /// <summary>
-        /// The main function used to evaluate a condition.
-        /// </summary>
-        /// <param name="attributes">The attributes to compare against.</param>
-        /// <param name="condition">The condition to evaluate.</param>
-        /// <returns>True if the attributes satisfy the condition.</returns>
+        private readonly ILogger<ConditionEvaluationProvider> _logger;
+
+        public ConditionEvaluationProvider(ILogger<ConditionEvaluationProvider> logger) => _logger = logger;
+
+        /// <inheritdoc/>
         public bool EvalCondition(JToken attributes, JObject condition)
         {
+            _logger.LogInformation("Beginning to evaluate attributes based on the provided JSON condition");
+            _logger.LogDebug($"Attribute evaluation is based on the JSON condition '{condition}'");
+
             if (condition.ContainsKey("$or"))
             {
                 return EvalOr(attributes, (JArray)condition["$or"]);
@@ -33,6 +37,8 @@ namespace GrowthBook.Providers
             {
                 return !EvalCondition(attributes, (JObject)condition["$not"]);
             }
+
+            _logger.LogDebug("No overarching condition found, evaluating condition values separately");
 
             foreach (JProperty property in condition.Properties())
             {
@@ -55,8 +61,11 @@ namespace GrowthBook.Providers
         {
             if (conditions.Count == 0)
             {
+                _logger.LogDebug("No conditions found within the provided 'or' evaluation, skipping");
                 return true;
             }
+
+            _logger.LogDebug("Evaluating all conditions within an 'or' context");
 
             foreach (JObject condition in conditions)
             {
@@ -77,6 +86,8 @@ namespace GrowthBook.Providers
         /// <returns>True if the attributes satisfy all of the conditions.</returns>
         private bool EvalAnd(JToken attributes, JArray conditions)
         {
+            _logger.LogDebug("Evaluating all conditions within an 'and' context");
+
             foreach (JObject condition in conditions)
             {
                 if (!EvalCondition(attributes, condition))
@@ -96,12 +107,16 @@ namespace GrowthBook.Providers
         /// <returns>True if the condition value matches the attribute value.</returns>
         private bool EvalConditionValue(JToken conditionValue, JToken attributeValue)
         {
+            _logger.LogDebug($"Evaluating condition value '{conditionValue}'");
+
             if (conditionValue.Type == JTokenType.Object)
             {
                 JObject conditionObj = (JObject)conditionValue;
 
                 if (IsOperatorObject(conditionObj))
                 {
+                    _logger.LogDebug("Evaluating all condition properties against the operator condition");
+
                     foreach (JProperty property in conditionObj.Properties())
                     {
                         if (!EvalOperatorCondition(property.Name, attributeValue, property.Value))
@@ -121,21 +136,23 @@ namespace GrowthBook.Providers
         /// Checks if attributeValue is an array, and if so at least one of the array items must match the condition.
         /// </summary>
         /// <param name="condition">The condition to check.</param>
-        /// <param name="attributeVaue">The attribute value to check.</param>
+        /// <param name="attributeValue">The attribute value to check.</param>
         /// <returns>True if attributeValue is an array and at least one of the array items matches the condition.</returns>
-        private bool ElemMatch(JObject condition, JToken attributeVaue)
+        private bool ElemMatch(JObject condition, JToken attributeValue)
         {
-            if (attributeVaue.Type != JTokenType.Array)
+            if (attributeValue.Type != JTokenType.Array)
             {
+                _logger.LogDebug($"Unable to match array elements with a non-array type of '{attributeValue.Type}'");
                 return false;
             }
 
-            foreach (JToken elem in (JArray)attributeVaue)
+            foreach (JToken elem in (JArray)attributeValue)
             {
                 if (IsOperatorObject(condition) && EvalConditionValue(condition, elem))
                 {
                     return true;
                 }
+
                 if (EvalCondition(elem, condition))
                 {
                     return true;
@@ -154,6 +171,8 @@ namespace GrowthBook.Providers
         /// <returns></returns>
         private bool EvalOperatorCondition(string op, JToken attributeValue, JToken conditionValue)
         {
+            _logger.LogDebug($"Evaluating operator condition '{op}'");
+
             if (op == "$eq")
             {
                 return conditionValue.Equals(attributeValue);
@@ -291,7 +310,7 @@ namespace GrowthBook.Providers
                 return CompareVersions(attributeValue, conditionValue, x => x >= 0);
             }
 
-            // TODO: Log the error for debug purposes?
+            _logger.LogWarning($"Unable to handle unsupported operator condition '{op}', failing the condition");
 
             return false;
         }
@@ -327,8 +346,10 @@ namespace GrowthBook.Providers
         /// </summary>
         /// <param name="obj">The object to check.</param>
         /// <returns>True if every key in the object starts with $.</returns>
-        private static bool IsOperatorObject(JObject obj)
+        private bool IsOperatorObject(JObject obj)
         {
+            _logger.LogDebug("Checking whether the object is an operator object");
+
             foreach (JProperty property in obj.Properties())
             {
                 if (!property.Name.StartsWith("$"))
@@ -340,10 +361,12 @@ namespace GrowthBook.Providers
             return true;
         }
 
-        private static bool IsIn(JToken conditionValue, JToken actualValue)
+        private bool IsIn(JToken conditionValue, JToken actualValue)
         {
             if (actualValue?.Type == JTokenType.Array)
             {
+                _logger.LogDebug("Evaluating whether the specified value is in an array");
+
                 var conditionValues = new HashSet<JToken>(conditionValue);
                 var actualValues = new HashSet<JToken>(actualValue);
 
@@ -353,6 +376,8 @@ namespace GrowthBook.Providers
             }
             else
             {
+                _logger.LogDebug("Evaluating whether the specified value is equal to or contained within the actual value");
+
                 if (conditionValue == actualValue)
                 {
                     return true;

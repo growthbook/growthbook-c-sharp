@@ -141,6 +141,12 @@ namespace GrowthBook.Utilities
             return -1;
         }
 
+        /// <summary>
+        /// Determine whether the given number falls within the provided bucket range.
+        /// </summary>
+        /// <param name="number">The number to verify.</param>
+        /// <param name="range">The bucket range.</param>
+        /// <returns>True if the value is in the range, false otherwise.</returns>
         public static bool InRange(float number, BucketRange range) => number >= range.Start && number < range.End;
     }
 }

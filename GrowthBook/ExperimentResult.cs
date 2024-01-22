@@ -46,8 +46,6 @@ namespace GrowthBook
         /// </summary>
         public string FeatureId { get; set; }
 
-        // TODO: Set the key to variation's array index if experiment.meta is not set or incomplete.
-
         /// <summary>
         /// The unique key for the assigned variation.
         /// </summary>

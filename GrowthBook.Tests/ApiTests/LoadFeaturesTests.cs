@@ -24,7 +24,7 @@ public class LoadFeaturesTests
         var gb = new GrowthBook(context);
         await gb.LoadFeatures();
 
-        // This is effectively an API test harness and so it should wait infinitely
+        // This is effectively an API test harness and so it should wait indefinitely
         // so the test doesn't exit mid-debug session.
 
         await Task.Delay(-1);

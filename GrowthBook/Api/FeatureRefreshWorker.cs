@@ -78,6 +78,10 @@ namespace GrowthBook.Api
             var features = GetFeaturesFrom(json);
             await _cache.RefreshWith(features, cancellationToken);
 
+            // Now that the cache has been populated at least once, we need to see if we're allowed
+            // to kick off the server sent events listener and make sure we're in the intended mode
+            // of operating going forward.
+
             if (_config.PreferServerSentEvents)
             {
                 _isServerSentEventsEnabled = response.Headers.TryGetValues("x-sse-support", out var values) && values.Contains("enabled");
@@ -132,6 +136,10 @@ namespace GrowthBook.Api
                             while (!reader.EndOfStream && !_serverSentEventsListenerCancellation.IsCancellationRequested && !_refreshWorkerCancellation.IsCancellationRequested)
                             {
                                 var json = reader.ReadLine();
+
+                                // Server sent events have a few potential different bits of information
+                                // that may be sent along with the actual JSON data we care about. For now,
+                                // we're just dropping those extra pieces and solely focusing on grabbing the JSON.
 
                                 if (json?.StartsWith("data:") != true)
                                 {

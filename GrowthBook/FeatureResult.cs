@@ -21,6 +21,8 @@ namespace GrowthBook
         {
             get
             {
+                // TODO: Does this need to be modified at all?
+
                 if (Value == null || Value.Type == JTokenType.Null)
                 {
                     return false;

@@ -13,6 +13,14 @@ namespace GrowthBook.Api
     /// </summary>
     public class InMemoryFeatureCache : IGrowthBookFeatureCache
     {
+        // We're providing a lock and locking around every operation within this cache
+        // because this is an in-memory cache and may be accessed by multiple threads
+        // in an async manner, so we'd like to be safe and avoid some issues there.
+
+        // As a side note, we're specifically doing this with a regular Dictionary and not using a
+        // ConcurrentDictionary because we have other non-dictionary uses that need to be safely used
+        // and would like to avoid confusion by mixing paradigms unnecessarily.
+
         private readonly object _cacheLock = new object();
         private IDictionary<string, Feature> _cachedFeatures = new Dictionary<string, Feature>();
         private readonly int _cacheExpirationInSeconds;
@@ -20,6 +28,9 @@ namespace GrowthBook.Api
 
         public InMemoryFeatureCache(int cacheExpirationInSeconds)
         {
+            // The cache should start out in an expired state so that any exterior logic
+            // based off of that can feel free to retrieve things to cache as soon as it needs to.
+
             _cacheExpirationInSeconds = cacheExpirationInSeconds;
             _nextCacheExpiration = DateTime.UtcNow;
         }

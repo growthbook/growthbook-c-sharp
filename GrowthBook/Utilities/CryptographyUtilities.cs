@@ -9,6 +9,13 @@ namespace GrowthBook.Utilities
 {
     internal static class CryptographyUtilities
     {
+        /// <summary>
+        /// Attempts to decrypt the encrypted value using the provided decryption key.
+        /// </summary>
+        /// <param name="encryptedString">The encrypted value.</param>
+        /// <param name="decryptionKey">The caller's decryption key.</param>
+        /// <returns>The decrypted data. Note that if the key is incorrect, this will return garbage data that will not be usable.</returns>
+        /// <exception cref="DecryptionException">Thrown if an exception is encountered during decryption.</exception>
         public static string Decrypt(string encryptedString, string decryptionKey)
         {
             try
@@ -18,6 +25,8 @@ namespace GrowthBook.Utilities
                 var iv = Convert.FromBase64String(parts[0]);
                 var cipherBytes = Convert.FromBase64String(parts[1]);
                 var keyBytes = Convert.FromBase64String(decryptionKey);
+
+                // Right now we're using the AES 128 CBC algorithm.
 
                 var aesProvider = new AesCryptoServiceProvider
                 {
@@ -33,6 +42,11 @@ namespace GrowthBook.Utilities
                 {
                     var decryptedBytes = decryptor.TransformFinalBlock(
                         cipherBytes, 0, cipherBytes.Length);
+
+                    // The .Net decryptor will pad the end of the decrypted plaintext results
+                    // with a repeating garbage character, presumably to meet buffer length.
+                    // We're assuming at this point that any repeating character at the end
+                    // should be stripped off before sending back the remains as the decrypted result.
 
                     byte last = 0;
 

@@ -17,6 +17,7 @@ namespace GrowthBook.Api
 
         public HttpClientFactory(int requestTimeoutInSeconds = 60) => _requestTimeoutInSeconds = requestTimeoutInSeconds;
 
+        /// <inheritdoc/>
         public HttpClient CreateClient(string clientName)
         {
             switch (clientName)
@@ -28,14 +29,14 @@ namespace GrowthBook.Api
             };
         }
 
-        protected internal virtual HttpClient ConfigureAsDefault(HttpClient client)
+        private HttpClient ConfigureAsDefault(HttpClient client)
         {
             client.DefaultRequestHeaders.Accept.ParseAdd("application/json");
 
             return client;
         }
 
-        protected internal virtual HttpClient ConfigureAsServerSentEvents(HttpClient client)
+        private HttpClient ConfigureAsServerSentEvents(HttpClient client)
         {
             var acceptHeader = client.DefaultRequestHeaders.Accept;
 

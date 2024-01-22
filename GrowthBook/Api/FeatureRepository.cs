@@ -26,11 +26,18 @@ namespace GrowthBook.Api
             _backgroundRefreshWorker = backgroundRefreshWorker;
         }
 
+        /// <inheritdoc/>
         public void Cancel() => _backgroundRefreshWorker.Cancel();
 
+        /// <inheritdoc/>
         public async Task<IDictionary<string, Feature>> GetFeatures(GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null)
         {
             _logger.LogInformation("Getting features from repository, verifying cache expiration and option to force refresh");
+
+            // We only want to try the actual API to retrieve features, as opposed to the cache,
+            // when it's expired or we're overriding that to force a refresh. When the cache is
+            // first initialized, it should be pre-expired so that this is automatically hit
+            // in order to populate the initial cache values.
 
             if (_cache.IsCacheExpired || options?.ForceRefresh == true)
             {
@@ -38,6 +45,11 @@ namespace GrowthBook.Api
                 _logger.LogDebug($"Cache expired: '{_cache.IsCacheExpired}' and option to force refresh: '{options?.ForceRefresh}'");
 
                 var refreshTask = _backgroundRefreshWorker.RefreshCacheFromApi(cancellationToken);
+
+                // When there aren't any features in the cache to begin with, we need to just wait until
+                // that has been officially refreshed to proceed (otherwise the caller gets nothing up front
+                // and has no way of determining when to check back). The other way to wait is if they explicitly
+                // have noted that this is something they'd like to do.
 
                 if (_cache.FeatureCount == 0 || options?.WaitForCompletion == true)
                 {
