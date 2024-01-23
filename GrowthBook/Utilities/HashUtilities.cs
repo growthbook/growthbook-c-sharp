@@ -11,14 +11,14 @@ namespace GrowthBook.Utilities
         /// </summary>
         /// <param name="value">The string to hash.</param>
         /// <returns>float between 0 and 1, null if an unsupported version.</returns>
-        public static float? Hash(string seed, string value, int version)
+        public static double? Hash(string seed, string value, int version)
         {
             // New hashing algorithm.
 
             if (version == 2)
             {
                 var n = FNV32A(FNV32A(seed + value).ToString());
-                return (n % 10000) / 10000f;
+                return (n % 10000) / 10000d;
             }
 
             // Original hashing algorithm (with a bias flaw).
@@ -26,7 +26,7 @@ namespace GrowthBook.Utilities
             if (version == 1)
             {
                 var n = FNV32A(value + seed);
-                return (n % 1000) / 1000f;
+                return (n % 1000) / 1000d;
             }
 
             return null;

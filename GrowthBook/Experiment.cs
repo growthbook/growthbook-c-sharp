@@ -26,7 +26,7 @@ namespace GrowthBook
         /// <summary>
         /// How to weight traffic between variations. Must add to 1.
         /// </summary>
-        public List<float> Weights { get; set; }
+        public List<double> Weights { get; set; }
 
         /// <summary>
         /// If set to false, always return the control (first variation).
@@ -36,7 +36,7 @@ namespace GrowthBook
         /// <summary>
         /// What percent of users should be included in the experiment (between 0 and 1, inclusive).
         /// </summary>
-        public float? Coverage { get; set; }
+        public double? Coverage { get; set; }
 
         /// <summary>
         ///  Array of ranges, one per variation.

@@ -409,7 +409,7 @@ namespace GrowthBook
 
             // 9. Attempt to assign this run to an experiment variation and abort if that can't be done.
 
-            var ranges = experiment.Ranges?.Count > 0 ? experiment.Ranges : ExperimentUtilities.GetBucketRanges(experiment.Variations?.Count ?? 0, experiment.Coverage ?? 1, experiment.Weights ?? new List<float>());
+            var ranges = experiment.Ranges?.Count > 0 ? experiment.Ranges : ExperimentUtilities.GetBucketRanges(experiment.Variations?.Count ?? 0, experiment.Coverage ?? 1, experiment.Weights ?? new List<double>());
             var variationHash = HashUtilities.Hash(experiment.Seed ?? experiment.Key, hashValue, experiment.HashVersion);
             var assigned = ExperimentUtilities.ChooseVariation(variationHash.Value, ranges.ToList());
 
@@ -482,7 +482,7 @@ namespace GrowthBook
             return false;
         }
 
-        private bool IsIncludedInRollout(string seed, string hashAttribute = null, BucketRange range = null, float? coverage = null, int? hashVersion = null)
+        private bool IsIncludedInRollout(string seed, string hashAttribute = null, BucketRange range = null, double? coverage = null, int? hashVersion = null)
         {
             if (coverage == null && range == null)
             {
@@ -520,7 +520,7 @@ namespace GrowthBook
         /// <param name="variationIndex">The variation id, if specified.</param>
         /// <param name="hashUsed">Whether or not a hash was used in assignment.</param>
         /// <returns>The experiment result.</returns>
-        private ExperimentResult GetExperimentResult(Experiment experiment, int variationIndex = -1, bool hashUsed = false, string featureId = null, float? bucket = null)
+        private ExperimentResult GetExperimentResult(Experiment experiment, int variationIndex = -1, bool hashUsed = false, string featureId = null, double? bucket = null)
         {
             string hashAttribute = experiment.HashAttribute ?? "id";
 

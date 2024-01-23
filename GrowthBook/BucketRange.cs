@@ -11,7 +11,7 @@ namespace GrowthBook
     [JsonConverter(typeof(BucketRangeTupleConverter))]
     public class BucketRange
     {
-        public BucketRange(float start, float end)
+        public BucketRange(double start, double end)
         {
             Start = start;
             End = end;
@@ -20,12 +20,12 @@ namespace GrowthBook
         /// <summary>
         /// The start of the range.
         /// </summary>
-        public float Start { get; set; }
+        public double Start { get; set; }
 
         /// <summary>
         /// The end of the range.
         /// </summary>
-        public float End { get; set; }
+        public double End { get; set; }
 
         public override bool Equals(object obj)
         {

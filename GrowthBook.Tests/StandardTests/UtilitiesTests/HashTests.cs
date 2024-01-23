@@ -21,7 +21,7 @@ public class HashTests : UnitTest
         [TestPropertyIndex(2)]
         public int HashVersionToUse { get; set; }
         [TestPropertyIndex(3)]
-        public float? ExpectedResult { get; set; }
+        public double? ExpectedResult { get; set; }
     }
 
     [Theory]

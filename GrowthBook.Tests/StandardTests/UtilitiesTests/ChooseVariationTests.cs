@@ -17,7 +17,7 @@ public class ChooseVariationTests : UnitTest
         [TestPropertyIndex(0)]
         public string TestName { get; set; }
         [TestPropertyIndex(1)]
-        public float HashValue { get; set; }
+        public double HashValue { get; set; }
         [TestPropertyIndex(2)]
         public BucketRange[] BucketRanges { get; set; }
         [TestPropertyIndex(3)]

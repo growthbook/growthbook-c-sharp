@@ -69,7 +69,7 @@ namespace GrowthBook.Utilities
         /// </summary>
         /// <param name="numVariations">The number of variations to generate weights for.</param>
         /// <returns>Array of floats with numVariations items that are all equal and sum to 1.</returns>
-        public static IEnumerable<float> GetEqualWeights(int numVariations)
+        public static IEnumerable<double> GetEqualWeights(int numVariations)
         {
             if (numVariations >= 1)
             {
@@ -87,7 +87,7 @@ namespace GrowthBook.Utilities
         /// <param name="coverage">The experiment's coverage (defaults to 1).</param>
         /// <param name="weights">Optional list of variant weights.</param>
         /// <returns>A list of bucket ranges.</returns>
-        public static IEnumerable<BucketRange> GetBucketRanges(int numVariations, float coverage = 1f, IEnumerable<float> weights = null)
+        public static IEnumerable<BucketRange> GetBucketRanges(int numVariations, double coverage = 1f, IEnumerable<double> weights = null)
         {
             if (coverage < 0)
             {
@@ -105,14 +105,14 @@ namespace GrowthBook.Utilities
                 allWeights = GetEqualWeights(numVariations).ToArray();
             }
 
-            float totalWeight = allWeights.Sum();
+            double totalWeight = allWeights.Sum();
 
             if (totalWeight < 0.99 || totalWeight > 1.01f)
             {
                 allWeights = GetEqualWeights(numVariations).ToArray();
             }
 
-            var cumulative = 0f;
+            var cumulative = 0d;
 
             for (int i = 0; i < allWeights.Length; i++)
             {
@@ -128,7 +128,7 @@ namespace GrowthBook.Utilities
         /// <param name="n">The hash value.</param>
         /// <param name="ranges">LIst of bucket ranges to compare the hash to.</param>
         /// <returns>The selected variation id, or -1 if no match is found.</returns>
-        public static int ChooseVariation(float n, IList<BucketRange> ranges)
+        public static int ChooseVariation(double n, IList<BucketRange> ranges)
         {
             for (int i = 0; i < ranges.Count; i++)
             {
@@ -147,6 +147,6 @@ namespace GrowthBook.Utilities
         /// <param name="number">The number to verify.</param>
         /// <param name="range">The bucket range.</param>
         /// <returns>True if the value is in the range, false otherwise.</returns>
-        public static bool InRange(float number, BucketRange range) => number >= range.Start && number < range.End;
+        public static bool InRange(double number, BucketRange range) => number >= range.Start && number < range.End;
     }
 }

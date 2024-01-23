@@ -28,9 +28,9 @@ public class GetBucketRangeTests : UnitTest
         [TestPropertyIndex(0)]
         public int NumberOfVariations { get; set; }
         [TestPropertyIndex(1)]
-        public float? Coverage { get; set; }
+        public double? Coverage { get; set; }
         [TestPropertyIndex(2)]
-        public float[] Weights { get; set; }
+        public double[] Weights { get; set; }
     }
 
     [Theory]

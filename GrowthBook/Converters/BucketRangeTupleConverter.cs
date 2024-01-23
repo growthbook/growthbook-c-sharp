@@ -23,7 +23,7 @@ namespace GrowthBook.Converters
             {
                 var array = (JArray)token;
 
-                if (float.TryParse(array[0].ToString(), out var start) && float.TryParse(array[1].ToString(), out var end))
+                if (double.TryParse(array[0].ToString(), out var start) && double.TryParse(array[1].ToString(), out var end))
                 {
                     return new BucketRange(start, end);
                 }

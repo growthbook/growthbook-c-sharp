@@ -12,7 +12,7 @@ namespace GrowthBook
     [JsonConverter(typeof(NamespaceTupleConverter))]
     public class Namespace
     {
-        public Namespace(string id, float start, float end)
+        public Namespace(string id, double start, double end)
         {
             Id = id;
             Start = start;
@@ -20,7 +20,7 @@ namespace GrowthBook
         }
 
         public Namespace(JArray jArray) :
-            this(jArray[0].ToString(), jArray[1].ToObject<float>(), jArray[2].ToObject<float>())
+            this(jArray[0].ToString(), jArray[1].ToObject<double>(), jArray[2].ToObject<double>())
         { }
 
         /// <summary>
@@ -31,12 +31,12 @@ namespace GrowthBook
         /// <summary>
         /// The beginning of the range (between 0 and 1).
         /// </summary>
-        public float Start { get; }
+        public double Start { get; }
 
         /// <summary>
         /// The end of the range (between 0 and 1).
         /// </summary>
-        public float End { get; }
+        public double End { get; }
 
         public override bool Equals(object obj)
         {
