@@ -62,7 +62,7 @@ namespace GrowthBook.Api
         {
             _logger.LogInformation($"Making an HTTP request to the default Features API endpoint '{_featuresApiEndpoint}'");
 
-            var httpClient = _httpClientFactory.CreateClient(HttpClientFactory.ConfiguredClients.DefaultApiClient);
+            var httpClient = _httpClientFactory.CreateClient(ConfiguredClients.DefaultApiClient);
             var response = await httpClient.GetAsync(_featuresApiEndpoint, cancellationToken ?? _refreshWorkerCancellation.Token);
 
             if (!response.IsSuccessStatusCode)
@@ -128,7 +128,7 @@ namespace GrowthBook.Api
                     {
                         _logger.LogInformation($"Making an HTTP request to server sent events endpoint '{_serverSentEventsApiEndpoint}'");
 
-                        var httpClient = _httpClientFactory.CreateClient(HttpClientFactory.ConfiguredClients.ServerSentEventsApiClient);
+                        var httpClient = _httpClientFactory.CreateClient(ConfiguredClients.ServerSentEventsApiClient);
                         var stream = await httpClient.GetStreamAsync(_serverSentEventsApiEndpoint);
 
                         using (var reader = new StreamReader(stream))
@@ -137,14 +137,21 @@ namespace GrowthBook.Api
                             {
                                 var json = reader.ReadLine();
 
-                                // Server sent events have a few potential different bits of information
-                                // that may be sent along with the actual JSON data we care about. For now,
-                                // we're just dropping those extra pieces and solely focusing on grabbing the JSON.
+                                // All server sent events will have the format "<key>:<value>" and each message
+                                // is a single line in the stream. Right now, the only message that we care about
+                                // has a key of "data" and value of the JSON data sent from the server, so we're going
+                                // to ignore everything that's doesn't contain a "data" key.
 
                                 if (json?.StartsWith("data:") != true)
                                 {
+                                    // No actual JSON data is present, ignore this message.
+
                                     continue;
                                 }
+
+                                // Strip off the key and the colon so we can try to deserialize the JSON data. Keep in mind
+                                // that the data key might be sent with no actual data present, so we're also checking up front
+                                // to see whether we can just drop this as well or if it actually needs processing.
 
                                 json = json.Substring(5).Trim();
 

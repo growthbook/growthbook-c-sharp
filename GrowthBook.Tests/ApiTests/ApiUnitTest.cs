@@ -17,7 +17,6 @@ public abstract class ApiUnitTest<T> : UnitTest
 
     protected readonly ILogger<T> _logger;
     protected readonly Mock<IGrowthBookFeatureCache> _cache;
-    protected readonly FeatureRefreshWorker _worker;
     protected readonly Feature _firstFeature;
     protected readonly Feature _secondFeature;
     protected readonly Dictionary<string, Feature> _availableFeatures;

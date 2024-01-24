@@ -7,12 +7,6 @@ namespace GrowthBook.Api
 {
     public class HttpClientFactory : IHttpClientFactory
     {
-        public static class ConfiguredClients
-        {
-            public const string DefaultApiClient = "growthbook-default-api-client";
-            public const string ServerSentEventsApiClient = "growthbook-sse-api-client";
-        }
-
         private readonly int _requestTimeoutInSeconds;
 
         public HttpClientFactory(int requestTimeoutInSeconds = 60) => _requestTimeoutInSeconds = requestTimeoutInSeconds;
