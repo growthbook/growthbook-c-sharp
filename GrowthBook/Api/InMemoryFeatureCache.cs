@@ -65,12 +65,14 @@ namespace GrowthBook.Api
             }
         }
 
-        public async Task RefreshWith(IDictionary<string, Feature> features, CancellationToken? cancellationToken = null)
+        public Task RefreshWith(IDictionary<string, Feature> features, CancellationToken? cancellationToken = null)
         {
             lock(_cacheLock)
             {
                 _cachedFeatures = new Dictionary<string, Feature>(features);
                 _nextCacheExpiration = DateTime.UtcNow.AddSeconds(_cacheExpirationInSeconds);
+
+                return Task.CompletedTask;
             }
         }
     }

@@ -26,7 +26,7 @@ namespace GrowthBook
         /// <summary>
         /// How to weight traffic between variations. Must add to 1.
         /// </summary>
-        public List<double> Weights { get; set; }
+        public IList<double> Weights { get; set; }
 
         /// <summary>
         /// If set to false, always return the control (first variation).

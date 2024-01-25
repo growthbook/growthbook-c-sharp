@@ -84,7 +84,7 @@ namespace GrowthBook.Api
 
             if (_config.PreferServerSentEvents)
             {
-                _isServerSentEventsEnabled = response.Headers.TryGetValues("x-sse-support", out var values) && values.Contains("enabled");
+                _isServerSentEventsEnabled = response.Headers.TryGetValues(HttpHeaders.ServerSentEvents.Key, out var values) && values.Contains(HttpHeaders.ServerSentEvents.EnabledValue);
 
                 _logger.LogDebug($"{nameof(FeatureRefreshWorker)} is configured to prefer server sent events and enabled is now '{_isServerSentEventsEnabled}'");
                 EnsureCorrectRefreshModeIsActive();
@@ -127,7 +127,7 @@ namespace GrowthBook.Api
                     try
                     {
                         _logger.LogInformation($"Making an HTTP request to server sent events endpoint '{_serverSentEventsApiEndpoint}'");
-
+                        
                         var httpClient = _httpClientFactory.CreateClient(ConfiguredClients.ServerSentEventsApiClient);
                         var stream = await httpClient.GetStreamAsync(_serverSentEventsApiEndpoint);
 

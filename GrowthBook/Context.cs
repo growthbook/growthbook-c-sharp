@@ -76,13 +76,8 @@ namespace GrowthBook
         public IGrowthBookFeatureRepository FeatureRepository { get; set; }
 
         /// <summary>
-        /// A logger factory implementation that will override the default GrowthBook implementation. Optional.
+        /// A logger factory implementation that will enable logging throughout the SDK. Optional.
         /// </summary>
-        public ILoggerFactory DefaultLoggerFactory { get; set; }
-
-        /// <summary>
-        /// The default log level for the default GrowthBook logging implementation. Optional.
-        /// </summary>
-        public LogLevel DefaultLogLevel { get; set; } = LogLevel.Warning;
+        public ILoggerFactory LoggerFactory { get; set; }
     }
 }

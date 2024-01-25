@@ -58,7 +58,7 @@ public class FeatureRefreshWorkerTests : ApiUnitTest<FeatureRefreshWorker>
                     // Indicate in the HTTP response that the server sent events are supported
                     // in order to allow kicking off the background listener.
 
-                    response.Headers.Add("x-sse-support", "enabled");
+                    response.Headers.Add(HttpHeaders.ServerSentEvents.Key, HttpHeaders.ServerSentEvents.EnabledValue);
                 }
 
                 handleCount++;
