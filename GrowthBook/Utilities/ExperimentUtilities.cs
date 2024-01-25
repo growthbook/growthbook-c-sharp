@@ -19,14 +19,14 @@ namespace GrowthBook.Utilities
         /// <returns>The overridden variation id, or null if not found.</returns>
         public static int? GetQueryStringOverride(string id, string url, int numVariations)
         {
-            if (url.IsMissing())
+            if (url.IsNullOrWhitespace())
             {
                 return null;
             }
 
             var res = new Uri(url);
 
-            if (res.Query.IsMissing())
+            if (res.Query.IsNullOrWhitespace())
             {
                 return null;
             }
@@ -34,7 +34,7 @@ namespace GrowthBook.Utilities
             NameValueCollection qs = HttpUtility.ParseQueryString(res.Query);
             var variation = qs.Get(id);
 
-            if (variation.IsMissing())
+            if (variation.IsNullOrWhitespace())
             {
                 return null;
             }

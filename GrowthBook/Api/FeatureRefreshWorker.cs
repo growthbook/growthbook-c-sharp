@@ -188,7 +188,7 @@ namespace GrowthBook.Api
         {
             var featuresResponse = JsonConvert.DeserializeObject<FeaturesResponse>(json);
 
-            if (featuresResponse.EncryptedFeatures.IsMissing())
+            if (featuresResponse.EncryptedFeatures.IsNullOrWhitespace())
             {
                 _logger.LogInformation($"API response JSON contained no encrypted features, returning '{featuresResponse.FeatureCount}' unencrypted features");
                 return featuresResponse.Features;

@@ -12,7 +12,7 @@ namespace GrowthBook
         /// <summary>
         /// Represents possible values for the source of a feature result.
         /// </summary>
-        public static class SourceIs
+        public static class SourceId
         {
             public const string UnknownFeature = "unknownFeature";
             public const string DefaultValue = "defaultValue";

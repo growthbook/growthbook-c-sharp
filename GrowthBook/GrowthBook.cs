@@ -190,7 +190,7 @@ namespace GrowthBook
             {
                 if (!Features.TryGetValue(featureId, out Feature feature))
                 {
-                    return GetFeatureResult(null, FeatureResult.SourceIs.UnknownFeature);
+                    return GetFeatureResult(null, FeatureResult.SourceId.UnknownFeature);
                 }
 
                 foreach (FeatureRule rule in feature?.Rules ?? Enumerable.Empty<FeatureRule>())
@@ -227,7 +227,7 @@ namespace GrowthBook
                             }
                         }
 
-                        return GetFeatureResult(rule.Force, FeatureResult.SourceIs.Force);
+                        return GetFeatureResult(rule.Force, FeatureResult.SourceId.Force);
                     }
 
                     var experiment = new Experiment
@@ -253,10 +253,10 @@ namespace GrowthBook
                         continue;
                     }
 
-                    return GetFeatureResult(result.Value, FeatureResult.SourceIs.Experiment, experiment, result);
+                    return GetFeatureResult(result.Value, FeatureResult.SourceId.Experiment, experiment, result);
                 }
 
-                return GetFeatureResult(feature.DefaultValue ?? null, FeatureResult.SourceIs.DefaultValue);
+                return GetFeatureResult(feature.DefaultValue ?? null, FeatureResult.SourceId.DefaultValue);
             }
             catch(Exception ex)
             {
@@ -264,10 +264,10 @@ namespace GrowthBook
 
                 if (!Features.TryGetValue(featureId, out Feature feature))
                 {
-                    return GetFeatureResult(null, FeatureResult.SourceIs.UnknownFeature);
+                    return GetFeatureResult(null, FeatureResult.SourceId.UnknownFeature);
                 }
 
-                return GetFeatureResult(feature.DefaultValue ?? null, FeatureResult.SourceIs.DefaultValue);
+                return GetFeatureResult(feature.DefaultValue ?? null, FeatureResult.SourceId.DefaultValue);
             }
         }
 
@@ -343,7 +343,7 @@ namespace GrowthBook
 
             // 3. Use the override value from the query string if one is specified.
 
-            if (!Url.IsMissing())
+            if (!Url.IsNullOrWhitespace())
             {
                 var overrideValue = ExperimentUtilities.GetQueryStringOverride(experiment.Key, Url, experiment.Variations.Count);
 
@@ -374,7 +374,7 @@ namespace GrowthBook
 
             var hashValue = Attributes.GetHashAttributeValue(experiment.HashAttribute);
 
-            if (hashValue.IsMissing())
+            if (hashValue.IsNullOrWhitespace())
             {
                 _logger.LogDebug($"Aborting experiment, unable to locate a value for the experiment hash attribute '{experiment.HashAttribute}'");
                 return GetExperimentResult(experiment, featureId: featureId);
@@ -462,7 +462,7 @@ namespace GrowthBook
             {
                 var hashValue = Attributes.GetHashAttributeValue(filter.Attribute);
 
-                if (hashValue.IsMissing())
+                if (hashValue.IsNullOrWhitespace())
                 {
                     _logger.LogDebug($"Attributes are missing a filter's hash attribute of '{filter.Attribute}', marking as filtered out");
                     return true;

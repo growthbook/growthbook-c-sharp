@@ -15,6 +15,6 @@ namespace GrowthBook.Extensions
         /// </remarks>
         /// <param name="value">The string to verify.</param>
         /// <returns>True if null, empty, or whitespace, false otherwise.</returns>
-        public static bool IsMissing(this string value) => string.IsNullOrWhiteSpace(value);
+        public static bool IsNullOrWhitespace(this string value) => string.IsNullOrWhiteSpace(value);
     }
 }
