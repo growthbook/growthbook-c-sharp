@@ -40,7 +40,7 @@ namespace GrowthBook
         /// <summary>
         /// How to weight traffic between variations. Must add to 1.
         /// </summary>
-        public List<double> Weights { get; set; }
+        public IList<double> Weights { get; set; }
 
         /// <summary>
         /// Adds the experiment to a namespace.
@@ -65,17 +65,17 @@ namespace GrowthBook
         /// <summary>
         /// Ranges for experiment variations.
         /// </summary>
-        public List<BucketRange> Ranges { get; set; }
+        public IList<BucketRange> Ranges { get; set; }
 
         /// <summary>
         /// Meta info about the experiment variations.
         /// </summary>
-        public List<VariationMeta> Meta { get; set; }
+        public IList<VariationMeta> Meta { get; set; }
 
         /// <summary>
         /// Array of filters to apply to the rule.
         /// </summary>
-        public List<Filter> Filters { get; set; }
+        public IList<Filter> Filters { get; set; }
 
         /// <summary>
         /// Seed to use for hashing.
@@ -95,7 +95,7 @@ namespace GrowthBook
         /// <summary>
         /// Array of tracking calls to fire.
         /// </summary>
-        public List<TrackData> Tracks { get; set; }
+        public IList<TrackData> Tracks { get; set; }
 
         /// <summary>
         /// Returns the feature variations cast to the specified type.

@@ -41,7 +41,7 @@ namespace GrowthBook
         /// <summary>
         ///  Array of ranges, one per variation.
         /// </summary>
-        public List<BucketRange> Ranges { get; set; }
+        public IList<BucketRange> Ranges { get; set; }
 
         /// <summary>
         /// Optional targeting condition.
@@ -71,12 +71,12 @@ namespace GrowthBook
         /// <summary>
         /// Meta info about the variations.
         /// </summary>
-        public List<VariationMeta> Meta { get; set; }
+        public IList<VariationMeta> Meta { get; set; }
 
         /// <summary>
         /// Array of filters to apply.
         /// </summary>
-        public List<Filter> Filters { get; set; }
+        public IList<Filter> Filters { get; set; }
 
         /// <summary>
         /// The hash seed to use.

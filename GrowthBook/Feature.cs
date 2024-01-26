@@ -20,7 +20,7 @@ namespace GrowthBook
         /// <summary>
         /// Array of FeatureRule objects that determine when and how the defaultValue gets overridden.
         /// </summary>
-        public List<FeatureRule> Rules { get; set; }
+        public IList<FeatureRule> Rules { get; set; }
 
         /// <summary>
         /// Returns the default value of the feature cast to the specified type.
