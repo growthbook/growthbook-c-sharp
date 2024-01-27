@@ -12,6 +12,7 @@ using GrowthBook.Providers;
 using System.Linq;
 using System.IO;
 using Microsoft.Extensions.Logging;
+using GrowthBook.Api.Extensions;
 
 namespace GrowthBook.Api
 {
@@ -63,20 +64,15 @@ namespace GrowthBook.Api
             _logger.LogInformation($"Making an HTTP request to the default Features API endpoint '{_featuresApiEndpoint}'");
 
             var httpClient = _httpClientFactory.CreateClient(ConfiguredClients.DefaultApiClient);
-            var response = await httpClient.GetAsync(_featuresApiEndpoint, cancellationToken ?? _refreshWorkerCancellation.Token);
 
-            if (!response.IsSuccessStatusCode)
+            var response = await httpClient.GetFeaturesFrom(_featuresApiEndpoint, _logger, _config, cancellationToken ?? _refreshWorkerCancellation.Token);
+
+            if (response.Features is null)
             {
-                _logger.LogError($"HTTP request to default Features API endpoint '{_featuresApiEndpoint}' resulted in a {response.StatusCode} status code");
                 return null;
             }
 
-            var json = await response.Content.ReadAsStringAsync();
-
-            _logger.LogDebug($"Read response JSON from default Features API request: '{json}'");
-
-            var features = GetFeaturesFrom(json);
-            await _cache.RefreshWith(features, cancellationToken);
+            await _cache.RefreshWith(response.Features, cancellationToken);
 
             // Now that the cache has been populated at least once, we need to see if we're allowed
             // to kick off the server sent events listener and make sure we're in the intended mode
@@ -84,13 +80,11 @@ namespace GrowthBook.Api
 
             if (_config.PreferServerSentEvents)
             {
-                _isServerSentEventsEnabled = response.Headers.TryGetValues(HttpHeaders.ServerSentEvents.Key, out var values) && values.Contains(HttpHeaders.ServerSentEvents.EnabledValue);
-
-                _logger.LogDebug($"{nameof(FeatureRefreshWorker)} is configured to prefer server sent events and enabled is now '{_isServerSentEventsEnabled}'");
+                _isServerSentEventsEnabled = response.IsServerSentEventsEnabled;
                 EnsureCorrectRefreshModeIsActive();
             }
 
-            return features;
+            return response.Features;
         }
 
         private void EnsureCorrectRefreshModeIsActive()
@@ -129,46 +123,13 @@ namespace GrowthBook.Api
                         _logger.LogInformation($"Making an HTTP request to server sent events endpoint '{_serverSentEventsApiEndpoint}'");
                         
                         var httpClient = _httpClientFactory.CreateClient(ConfiguredClients.ServerSentEventsApiClient);
-                        var stream = await httpClient.GetStreamAsync(_serverSentEventsApiEndpoint);
 
-                        using (var reader = new StreamReader(stream))
+                        await httpClient.UpdateWithFeaturesStreamFrom(_serverSentEventsApiEndpoint, _logger, _config, _serverSentEventsListenerCancellation.Token, async features =>
                         {
-                            while (!reader.EndOfStream && !_serverSentEventsListenerCancellation.IsCancellationRequested && !_refreshWorkerCancellation.IsCancellationRequested)
-                            {
-                                var json = reader.ReadLine();
+                            await _cache.RefreshWith(features, _serverSentEventsListenerCancellation.Token);
 
-                                // All server sent events will have the format "<key>:<value>" and each message
-                                // is a single line in the stream. Right now, the only message that we care about
-                                // has a key of "data" and value of the JSON data sent from the server, so we're going
-                                // to ignore everything that's doesn't contain a "data" key.
-
-                                if (json?.StartsWith("data:") != true)
-                                {
-                                    // No actual JSON data is present, ignore this message.
-
-                                    continue;
-                                }
-
-                                // Strip off the key and the colon so we can try to deserialize the JSON data. Keep in mind
-                                // that the data key might be sent with no actual data present, so we're also checking up front
-                                // to see whether we can just drop this as well or if it actually needs processing.
-
-                                json = json.Substring(5).Trim();
-
-                                if (string.IsNullOrWhiteSpace(json))
-                                {
-                                    continue;
-                                }
-
-                                _logger.LogDebug($"Read response JSON from server sent events API request: '{json}'");
-
-                                var features = GetFeaturesFrom(json);
-
-                                await _cache.RefreshWith(features, _serverSentEventsListenerCancellation.Token);
-
-                                _logger.LogInformation("Cache has been refreshed with server sent event features");
-                            }
-                        }
+                            _logger.LogInformation("Cache has been refreshed with server sent event features");
+                        });
                     }
                     catch(HttpRequestException ex)
                     {
