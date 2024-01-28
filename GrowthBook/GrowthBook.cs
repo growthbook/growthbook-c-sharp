@@ -59,24 +59,32 @@ namespace GrowthBook
                 PreferServerSentEvents = true
             };
 
-            var featureCache = new InMemoryFeatureCache(cacheExpirationInSeconds: 60);
-            var httpClientFactory = new HttpClientFactory(requestTimeoutInSeconds: 60);
-
             // If they didn't want to include a logger factory, just create a basic one that will
             // create disabled loggers by default so we don't force a particular logging provider
             // or logs on the user if they chose the defaults.
 
             var loggerFactory = context.LoggerFactory ?? LoggerFactory.Create(builder => { });
-
-            var conditionEvaluatorLogger = loggerFactory.CreateLogger<ConditionEvaluationProvider>();
-            var featureRefreshLogger = loggerFactory.CreateLogger<FeatureRefreshWorker>();
-            var featureRepositoryLogger = loggerFactory.CreateLogger<FeatureRepository>();
             _logger = loggerFactory.CreateLogger<GrowthBook>();
-
-            var featureRefreshWorker = new FeatureRefreshWorker(featureRefreshLogger, httpClientFactory, config, featureCache);
+            var conditionEvaluatorLogger = loggerFactory.CreateLogger<ConditionEvaluationProvider>();
 
             _conditionEvaluator = new ConditionEvaluationProvider(conditionEvaluatorLogger);
-            _featureRepository = new FeatureRepository(featureRepositoryLogger, featureCache, featureRefreshWorker);
+
+            if (context.FeatureRepository != null)
+            {
+                _featureRepository = context.FeatureRepository;
+            }
+            else
+            {
+                var featureCache = new InMemoryFeatureCache(cacheExpirationInSeconds: 60);
+                var httpClientFactory = new HttpClientFactory(requestTimeoutInSeconds: 60);
+
+                var featureRefreshLogger = loggerFactory.CreateLogger<FeatureRefreshWorker>();
+                var featureRepositoryLogger = loggerFactory.CreateLogger<FeatureRepository>();
+
+                var featureRefreshWorker = new FeatureRefreshWorker(featureRefreshLogger, httpClientFactory, config, featureCache);
+
+                _featureRepository = new FeatureRepository(featureRepositoryLogger, featureCache, featureRefreshWorker);
+            }
         }
 
         /// <summary>

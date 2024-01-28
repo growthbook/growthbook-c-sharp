@@ -140,7 +140,7 @@ namespace GrowthBook.Providers
         /// <returns>True if attributeValue is an array and at least one of the array items matches the condition.</returns>
         private bool ElemMatch(JObject condition, JToken attributeValue)
         {
-            if (attributeValue.Type != JTokenType.Array)
+            if (attributeValue?.Type != JTokenType.Array)
             {
                 _logger.LogDebug($"Unable to match array elements with a non-array type of '{attributeValue.Type}'");
                 return false;
