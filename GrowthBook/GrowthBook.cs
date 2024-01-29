@@ -1,6 +1,16 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Net.Http;
+using System.Security;
+using System.Threading;
+using System.Threading.Tasks;
+using GrowthBook.Api;
+using GrowthBook.Extensions;
+using GrowthBook.Providers;
+using GrowthBook.Utilities;
+using Microsoft.Extensions.Logging;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
 namespace GrowthBook
@@ -12,16 +22,15 @@ namespace GrowthBook
     /// </summary>
     public class GrowthBook : IGrowthBook, IDisposable
     {
-        // #region Private Members
-
-        readonly bool _qaMode;
-        readonly Dictionary<string, ExperimentAssignment> _assigned;
-        readonly HashSet<string> _tracked;
-        Action<Experiment, ExperimentResult> _trackingCallback;
-        readonly List<Action<Experiment, ExperimentResult>> _subscriptions;
-        bool _disposedValue;
-
-        // #endregion
+        private readonly bool _qaMode;
+        private readonly Dictionary<string, ExperimentAssignment> _assigned;
+        private readonly HashSet<string> _tracked;
+        private Action<Experiment, ExperimentResult> _trackingCallback;
+        private readonly List<Action<Experiment, ExperimentResult>> _subscriptions;
+        private bool _disposedValue;
+        private readonly IConditionEvaluationProvider _conditionEvaluator;
+        private readonly IGrowthBookFeatureRepository _featureRepository;
+        private readonly ILogger<GrowthBook> _logger;
 
         /// <summary>
         /// Creates a new GrowthBook instance from the passed context.
@@ -32,16 +41,51 @@ namespace GrowthBook
             Enabled = context.Enabled;
             Attributes = context.Attributes;
             Url = context.Url;
-            Features = context.Features.ToDictionary(k => k.Key, v => v.Value);
+            Features = context.Features?.ToDictionary(k => k.Key, v => v.Value) ?? new Dictionary<string, Feature>();
             ForcedVariations = context.ForcedVariations;
+
             _qaMode = context.QaMode;
             _trackingCallback = context.TrackingCallback;
             _tracked = new HashSet<string>();
             _assigned = new Dictionary<string, ExperimentAssignment>();
             _subscriptions = new List<Action<Experiment, ExperimentResult>>();
-        }
 
-        // #region Properties
+            var config = new GrowthBookConfigurationOptions
+            {
+                ApiHost = context.ApiHost ?? "https://cdn.growthbook.io",
+                CacheExpirationInSeconds = 60,
+                ClientKey = context.ClientKey,
+                DecryptionKey = context.DecryptionKey,
+                PreferServerSentEvents = true
+            };
+
+            // If they didn't want to include a logger factory, just create a basic one that will
+            // create disabled loggers by default so we don't force a particular logging provider
+            // or logs on the user if they chose the defaults.
+
+            var loggerFactory = context.LoggerFactory ?? LoggerFactory.Create(builder => { });
+            _logger = loggerFactory.CreateLogger<GrowthBook>();
+            var conditionEvaluatorLogger = loggerFactory.CreateLogger<ConditionEvaluationProvider>();
+
+            _conditionEvaluator = new ConditionEvaluationProvider(conditionEvaluatorLogger);
+
+            if (context.FeatureRepository != null)
+            {
+                _featureRepository = context.FeatureRepository;
+            }
+            else
+            {
+                var featureCache = new InMemoryFeatureCache(cacheExpirationInSeconds: 60);
+                var httpClientFactory = new HttpClientFactory(requestTimeoutInSeconds: 60);
+
+                var featureRefreshLogger = loggerFactory.CreateLogger<FeatureRefreshWorker>();
+                var featureRepositoryLogger = loggerFactory.CreateLogger<FeatureRepository>();
+
+                var featureRefreshWorker = new FeatureRefreshWorker(featureRefreshLogger, httpClientFactory, config, featureCache);
+
+                _featureRepository = new FeatureRepository(featureRepositoryLogger, featureCache, featureRefreshWorker);
+            }
+        }
 
         /// <summary>
         /// Arbitrary JSON object containing user and request attributes.
@@ -56,7 +100,7 @@ namespace GrowthBook
         /// <summary>
         /// Listing of specific experiments to always assign a specific variation (used for QA).
         /// </summary>
-        public JObject ForcedVariations { get; set; }
+        public IDictionary<string, int> ForcedVariations { get; set; }
 
         /// <summary>
         /// The URL of the current page.
@@ -67,10 +111,6 @@ namespace GrowthBook
         ///  Switch to globally disable all experiments. Default true.
         /// </summary>
         public bool Enabled { get; set; }
-
-        // #endregion
-
-        // #region Cleanup
 
         /// <summary>
         /// Helper function used to cleanup object state.
@@ -89,6 +129,7 @@ namespace GrowthBook
                     _tracked.Clear();
                     _assigned.Clear();
                     _subscriptions.Clear();
+                    _featureRepository.Cancel();
                 }
 
                 _disposedValue = true;
@@ -111,8 +152,6 @@ namespace GrowthBook
         {
             Dispose();
         }
-
-        // #endregion
 
         /// <inheritdoc />
         public bool IsOn(string key)
@@ -151,227 +190,375 @@ namespace GrowthBook
         }
 
         /// <inheritdoc />
-        public FeatureResult EvalFeature(string key)
+        public FeatureResult EvalFeature(string featureId)
         {
-            if (!Features.TryGetValue(key, out Feature feature))
+            try
             {
-                return new FeatureResult { Source = "unknownFeature" };
-            }
-
-            foreach (FeatureRule rule in feature.Rules)
-            {
-                if (rule.Condition != null && rule.Condition.Type != JTokenType.Null && !Utilities.EvalCondition(Attributes, rule.Condition))
+                if (!Features.TryGetValue(featureId, out Feature feature))
                 {
-                    continue;
+                    return GetFeatureResult(null, FeatureResult.SourceId.UnknownFeature);
                 }
 
-                if (rule.Force != null && rule.Force.Type != JTokenType.Null)
+                foreach (FeatureRule rule in feature?.Rules ?? Enumerable.Empty<FeatureRule>())
                 {
-                    if (rule.Coverage < 1)
+                    if (!rule.Condition.IsNull() && !_conditionEvaluator.EvalCondition(Attributes, rule.Condition))
                     {
-                        string hashValue = GetHashValue(rule.HashAttribute);
-                        if (string.IsNullOrEmpty(hashValue))
-                        {
-                            continue;
-                        }
-
-                        double n = Utilities.Hash(hashValue + key);
-                        if (n > rule.Coverage)
-                        {
-                            continue;
-                        }
+                        continue;
                     }
 
-                    return new FeatureResult { Value = rule.Force, Source = "force" };
+                    if (rule.Filters?.Any() == true && IsFilteredOut(rule.Filters))
+                    {
+                        continue;
+                    }
+
+                    if (!rule.Force.IsNull())
+                    {
+                        if (!IsIncludedInRollout(rule.Seed ?? featureId, rule.HashAttribute, rule.Range, rule.Coverage, rule.HashVersion))
+                        {
+                            continue;
+                        }
+
+                        if (_trackingCallback != null && rule.Tracks.Any())
+                        {
+                            foreach (var trackData in rule.Tracks)
+                            {
+                                try
+                                {
+                                    _trackingCallback?.Invoke(trackData.Experiment, trackData.Result);
+                                }
+                                catch (Exception ex)
+                                {
+                                    _logger.LogError(ex, $"Encountered unhandled exception in tracking callback for feature ID '{featureId}'");
+                                }
+                            }
+                        }
+
+                        return GetFeatureResult(rule.Force, FeatureResult.SourceId.Force);
+                    }
+
+                    var experiment = new Experiment
+                    {
+                        Variations = rule.Variations,
+                        Key = rule.Key ?? featureId,
+                        Coverage = rule.Coverage,
+                        Weights = rule.Weights,
+                        HashAttribute = rule.HashAttribute,
+                        Namespace = rule.Namespace,
+                        Meta = rule.Meta,
+                        Ranges = rule.Ranges,
+                        Name = rule.Name,
+                        Phase = rule.Phase,
+                        Seed = rule.Seed,
+                        Filters = rule.Filters
+                    };
+
+                    var result = RunExperiment(experiment, featureId);
+
+                    if (!result.InExperiment || result.Passthrough)
+                    {
+                        continue;
+                    }
+
+                    return GetFeatureResult(result.Value, FeatureResult.SourceId.Experiment, experiment, result);
                 }
 
-                if (rule.Variations == null || rule.Variations.Type == JTokenType.Null)
-                {
-                    continue;
-                }
-
-                Experiment exp = new Experiment
-                {
-                    Key = rule.Key ?? key,
-                    Variations = rule.Variations,
-                    Coverage = rule.Coverage,
-                    Weights = rule.Weights,
-                    HashAttribute = rule.HashAttribute,
-                    Namespace = rule.Namespace
-                };
-
-                ExperimentResult result = Run(exp);
-                if (!result.InExperiment)
-                {
-                    continue;
-                }
-
-                return new FeatureResult { Value = result.Value, Source = "experiment", Experiment = exp, ExperimentResult = result };
+                return GetFeatureResult(feature.DefaultValue ?? null, FeatureResult.SourceId.DefaultValue);
             }
+            catch(Exception ex)
+            {
+                _logger.LogError(ex, $"Encountered an unhandled exception while executing '{nameof(EvalFeature)}'");
 
-            return new FeatureResult { Value = feature.DefaultValue, Source = "defaultValue" };
+                if (!Features.TryGetValue(featureId, out Feature feature))
+                {
+                    return GetFeatureResult(null, FeatureResult.SourceId.UnknownFeature);
+                }
+
+                return GetFeatureResult(feature.DefaultValue ?? null, FeatureResult.SourceId.DefaultValue);
+            }
         }
 
         /// <inheritdoc />
         public ExperimentResult Run(Experiment experiment)
         {
-            ExperimentResult result = RunExperiment(experiment);
-
-            if (!_assigned.TryGetValue(experiment.Key, out ExperimentAssignment prev)
-                || prev.Result.InExperiment != result.InExperiment
-                || prev.Result.VariationId != result.VariationId)
+            try
             {
-                _assigned.Add(experiment.Key, new ExperimentAssignment { Experiment = experiment, Result = result });
-                foreach (Action<Experiment, ExperimentResult> cb in _subscriptions)
+                ExperimentResult result = RunExperiment(experiment, null);
+
+                if (!_assigned.TryGetValue(experiment.Key, out ExperimentAssignment prev)
+                    || prev.Result.InExperiment != result.InExperiment
+                    || prev.Result.VariationId != result.VariationId)
                 {
-                    try
+                    _assigned.Add(experiment.Key, new ExperimentAssignment { Experiment = experiment, Result = result });
+
+                    foreach (Action<Experiment, ExperimentResult> callback in _subscriptions)
                     {
-                        cb.Invoke(experiment, result);
+                        try
+                        {
+                            callback?.Invoke(experiment, result);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogError(ex, $"Encountered exception during subscription callback for experiment with key '{experiment.Key}'");
+                        }
                     }
-                    catch (Exception) { }
+                }
+
+                return result;
+            }
+            catch(Exception ex)
+            {
+                _logger.LogError(ex, $"Encountered an unhandled exception while executing '{nameof(Run)}'");
+
+                return null;
+            }
+        }
+
+        /// <inheritdoc />
+        public async Task LoadFeatures(GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null)
+        {
+            try
+            {
+                _logger.LogInformation("Loading features from the repository");
+
+                Features = await _featureRepository.GetFeatures(options, cancellationToken);
+
+                _logger.LogInformation($"Loading features has completed, retrieved '{Features?.Count}' features");
+            }
+            catch(Exception ex)
+            {
+                _logger.LogError(ex, $"Encountered an unhandled exception while executing '{nameof(LoadFeatures)}'");
+            }
+        }
+
+        private ExperimentResult RunExperiment(Experiment experiment, string featureId)
+        { 
+            // 1. Abort if there aren't enough variations present.
+
+            if (experiment.Variations.IsNull() || experiment.Variations.Count < 2)
+            {
+                _logger.LogDebug("Aborting experiment, not enough variations are present");
+                return GetExperimentResult(experiment, featureId: featureId);
+            }
+
+            // 2. Abort if GrowthBook is currently disabled.
+
+            if (!Enabled)
+            {
+                _logger.LogDebug("Aborting experiment, GrowthBook is not currently enabled");
+                return GetExperimentResult(experiment, featureId: featureId);
+            }
+
+            // 3. Use the override value from the query string if one is specified.
+
+            if (!Url.IsNullOrWhitespace())
+            {
+                var overrideValue = ExperimentUtilities.GetQueryStringOverride(experiment.Key, Url, experiment.Variations.Count);
+
+                if (overrideValue != null)
+                {
+                    _logger.LogDebug("Found an override value in the query string, creating experiment result from it");
+                    return GetExperimentResult(experiment, overrideValue.Value, featureId: featureId);
                 }
             }
+
+            // 4. Use the forced variation value instead if one is specified for this experiment.
+
+            if (ForcedVariations.TryGetValue(experiment.Key, out var variation))
+            {
+                _logger.LogDebug("Found a forced variation value, creating experiment result from it");
+                return GetExperimentResult(experiment, variation, featureId: featureId);
+            }
+
+            // 5. Abort if the experiment isn't currently active.
+
+            if (!experiment.Active)
+            {
+                _logger.LogDebug("Aborting experiment, experiment is not currently active");
+                return GetExperimentResult(experiment, featureId: featureId);
+            }
+
+            // 6. Abort if we're unable to generate a hash identifying this run.
+
+            var hashValue = Attributes.GetHashAttributeValue(experiment.HashAttribute);
+
+            if (hashValue.IsNullOrWhitespace())
+            {
+                _logger.LogDebug($"Aborting experiment, unable to locate a value for the experiment hash attribute '{experiment.HashAttribute}'");
+                return GetExperimentResult(experiment, featureId: featureId);
+            }
+
+            // 7. Abort if this run is ineligible to be included in the experiment.
+
+            if (experiment.Filters?.Any() == true)
+            {
+                if (IsFilteredOut(experiment.Filters))
+                {
+                    _logger.LogDebug("Aborting experiment, filters have been applied and matched this run");
+                    return GetExperimentResult(experiment, featureId: featureId);
+                }                
+            }
+            else if (experiment.Namespace != null && !ExperimentUtilities.InNamespace(hashValue, experiment.Namespace))
+            {
+                _logger.LogDebug($"Aborting experiment, not within the specified namespace '{experiment.Namespace}'");
+                return GetExperimentResult(experiment, featureId: featureId);
+            }
+
+            // 8. Abort if the conditions for the experiment prohibit this.
+
+            if (!experiment.Condition.IsNull())
+            {
+                if (!_conditionEvaluator.EvalCondition(Attributes, experiment.Condition))
+                {
+                    _logger.LogDebug("Aborting experiment, associated conditions have prohibited participation");
+                    return GetExperimentResult(experiment, featureId: featureId);
+                }
+            }
+
+            // 9. Attempt to assign this run to an experiment variation and abort if that can't be done.
+
+            var ranges = experiment.Ranges?.Count > 0 ? experiment.Ranges : ExperimentUtilities.GetBucketRanges(experiment.Variations?.Count ?? 0, experiment.Coverage ?? 1, experiment.Weights ?? new List<double>());
+            var variationHash = HashUtilities.Hash(experiment.Seed ?? experiment.Key, hashValue, experiment.HashVersion);
+            var assigned = ExperimentUtilities.ChooseVariation(variationHash.Value, ranges.ToList());
+
+            if (assigned == -1)
+            {
+                _logger.LogDebug("Aborting experiment, unable to assign this run to an experiment variation");
+                return GetExperimentResult(experiment, featureId: featureId);
+            }
+
+            // 10. Use the forced value for the experiment if one is specified.
+
+            if (experiment.Force != null)
+            {
+                _logger.LogDebug("Found a forced value, creating experiment result from it");
+                return GetExperimentResult(experiment, experiment.Force.Value, featureId: featureId);
+            }
+
+            // 11. Abort if we're currently operating in QA mode.
+
+            if (_qaMode)
+            {
+                _logger.LogDebug("Aborting experiment, this run is in QA mode");
+                return GetExperimentResult(experiment, featureId: featureId);
+            }
+
+            // 12. Run the experiment and track the result if we haven't seen this one before.
+
+            _logger.LogInformation($"Participation in experiment with key '{experiment.Key}' is allowed, running the experiment");
+            var result = GetExperimentResult(experiment, assigned, true, featureId, variationHash);
+
+            TryToTrack(experiment, result);
 
             return result;
         }
 
-        // #region Private Helper Methods
-
-        /// <summary>
-        /// Evaluates an experiment to generate the result.
-        /// </summary>
-        /// <param name="experiment">The experiment to evaluate.</param>
-        /// <returns>The experiment result.</returns>
-        ExperimentResult RunExperiment(Experiment experiment)
+        private FeatureResult GetFeatureResult(JToken value, string source, Experiment experiment = null, ExperimentResult experimentResult = null)
         {
-            // 1. If experiment has less than 2 variations, return immediately
-            if (experiment.Variations.Count < 2)
+            return new FeatureResult
             {
-                return GetExperimentResult(experiment);
+                Value = value,
+                Source = source,
+                Experiment = experiment,
+                ExperimentResult = experimentResult
+            };
+        }
+
+        private bool IsFilteredOut(IEnumerable<Filter> filters)
+        {
+            foreach(var filter in filters)
+            {
+                var hashValue = Attributes.GetHashAttributeValue(filter.Attribute);
+
+                if (hashValue.IsNullOrWhitespace())
+                {
+                    _logger.LogDebug($"Attributes are missing a filter's hash attribute of '{filter.Attribute}', marking as filtered out");
+                    return true;
+                }
+
+                var bucket = HashUtilities.Hash(filter.Seed, hashValue, filter.HashVersion);
+
+                var isInAnyRange = filter.Ranges.Any(x => ExperimentUtilities.InRange(bucket.Value, x));
+
+                if (!isInAnyRange)
+                {
+                    _logger.LogDebug($"This run is not in any range associated with a filter, marking as filtered out");
+                    return true;
+                }
             }
 
-            // 2. If growthbook is disabled, return immediately
-            if (!Enabled)
+            return false;
+        }
+
+        private bool IsIncludedInRollout(string seed, string hashAttribute = null, BucketRange range = null, double? coverage = null, int? hashVersion = null)
+        {
+            if (coverage == null && range == null)
             {
-                return GetExperimentResult(experiment);
+                _logger.LogDebug("No coverage value or range was specified, marking as included in rollout");
+                return true;
             }
 
-            // 3. If experiment is forced via a querystring in the url
-            int? queryString = Utilities.GetQueryStringOverride(experiment.Key, Url, experiment.Variations.Count);
-            if (queryString != null)
+            var hashValue = Attributes.GetHashAttributeValue(hashAttribute);
+
+            if (hashValue is null)
             {
-                return GetExperimentResult(experiment, (int)queryString);
+                _logger.LogDebug($"Attributes do not have a value for hash attribute '{hashAttribute}', marking as excluded from rollout");
+                return false;
             }
 
-            // 4. If variation is forced in the context
-            if (ForcedVariations.TryGetValue(experiment.Key, out JToken forcedVariation))
+            var bucket = HashUtilities.Hash(seed, hashValue, hashVersion ?? 1);
+
+            if (range != null)
             {
-                return GetExperimentResult(experiment, forcedVariation.ToObject<int>());
+                return ExperimentUtilities.InRange(bucket.Value, range);
             }
 
-            // 5. If experiment is a draft or not active, return immediately
-            if (!experiment.Active)
+            if (coverage != null)
             {
-                return GetExperimentResult(experiment);
+                return bucket <= coverage;
             }
 
-            // 6. Get the user hash attribute and value
-            string hashAttribute = experiment.HashAttribute ?? "id";
-            string hashValue = GetHashValue(hashAttribute);
-            if (string.IsNullOrEmpty(hashValue))
-            {
-                return GetExperimentResult(experiment);
-            }
-
-            // 7. Exclude if user not in experiment.namespace
-            if (experiment.Namespace != null && !Utilities.InNamespace(hashValue, experiment.Namespace))
-            {
-                return GetExperimentResult(experiment);
-            }
-
-            // 8. Exclude if condition is false
-            if (experiment.Condition != null && experiment.Condition.Type != JTokenType.Null && !Utilities.EvalCondition(Attributes, experiment.Condition))
-            {
-                return GetExperimentResult(experiment);
-            }
-
-            // 9. Get bucket ranges and choose variation
-            IList<BucketRange> ranges = Utilities.GetBucketRanges(experiment.Variations.Count, experiment.Coverage, experiment.Weights);
-            double n = Utilities.Hash(hashValue + experiment.Key);
-            int assigned = Utilities.ChooseVariation(n, ranges);
-
-            // 10. Return if not in experiment
-            if (assigned < 0)
-            {
-                return GetExperimentResult(experiment);
-            }
-
-            // 11. If experiment is forced, return immediately
-            if (experiment.Force != null)
-            {
-                return GetExperimentResult(experiment, (int)experiment.Force);
-            }
-
-            // 12. Exclude if in QA mode
-            if (_qaMode)
-            {
-                return GetExperimentResult(experiment);
-            }
-
-            // 13. Build the result object
-            ExperimentResult result = GetExperimentResult(experiment, assigned, true);
-
-            // 14. Fire the tracking callback if set
-            if (_trackingCallback != null)
-            {
-                Track(experiment, result);
-            }
-
-            // 15. Return the result
-            return result;
+            return true;
         }
 
         /// <summary>
         /// Generates an experiment result from an experiment.
         /// </summary>
         /// <param name="experiment">The experiment to get the result from.</param>
-        /// <param name="variationId">The variation id, if specified.</param>
+        /// <param name="variationIndex">The variation id, if specified.</param>
         /// <param name="hashUsed">Whether or not a hash was used in assignment.</param>
         /// <returns>The experiment result.</returns>
-        ExperimentResult GetExperimentResult(Experiment experiment, int variationId = -1, bool hashUsed = false)
+        private ExperimentResult GetExperimentResult(Experiment experiment, int variationIndex = -1, bool hashUsed = false, string featureId = null, double? bucket = null)
         {
             string hashAttribute = experiment.HashAttribute ?? "id";
 
-            bool inExperiment = true;
-            if (variationId < 0 || variationId > experiment.Variations.Count - 1)
+            var inExperiment = true;
+
+            if (variationIndex < 0 || variationIndex >= experiment.Variations.Count)
             {
-                variationId = 0;
+                variationIndex = 0;
                 inExperiment = false;
             }
 
-            return new ExperimentResult
+            var hashValue = Attributes.GetHashAttributeValue(hashAttribute);
+            var meta = experiment.Meta?.Count > 0 ? experiment.Meta[variationIndex] : null;
+
+            var result = new ExperimentResult
             {
+                Key = meta?.Key ?? variationIndex.ToString(),
+                FeatureId = featureId,
                 InExperiment = inExperiment,
                 HashAttribute = hashAttribute,
                 HashUsed = hashUsed,
-                HashValue = GetHashValue(hashAttribute),
-                Value = experiment.Variations[variationId],
-                VariationId = variationId
+                HashValue = hashValue,
+                Value = experiment.Variations is null ? null : experiment.Variations[variationIndex],
+                VariationId = variationIndex
             };
-        }
 
-        /// <summary>
-        /// Gets the attribute value for the specified key.
-        /// </summary>
-        /// <param name="attr">The attribute key.</param>
-        /// <returns>The attribute value.</returns>
-        string GetHashValue(string attr)
-        {
-            if (Attributes.ContainsKey(attr))
-            {
-                return Attributes[attr].ToString();
-            }
-            return string.Empty;
+            result.Name = meta?.Name;
+            result.Passthrough = meta?.Passthrough ?? false;
+            result.Bucket = bucket ?? 0f;
+
+            return result;
         }
 
         /// <summary>
@@ -379,7 +566,7 @@ namespace GrowthBook
         /// </summary>
         /// <param name="experiment">The experiment that was assigned.</param>
         /// <param name="result">The result of the assignment.</param>
-        void Track(Experiment experiment, ExperimentResult result)
+        private void TryToTrack(Experiment experiment, ExperimentResult result)
         {
             if (_trackingCallback == null)
             {
@@ -387,6 +574,7 @@ namespace GrowthBook
             }
 
             string key = result.HashAttribute + result.HashValue + experiment.Key + result.VariationId;
+
             if (!_tracked.Contains(key))
             {
                 try
@@ -394,10 +582,11 @@ namespace GrowthBook
                     _trackingCallback(experiment, result);
                     _tracked.Add(key);
                 }
-                catch (Exception) { }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, $"Encountered unhandled exception during tracking callback for experiment with combined key '{key}'");
+                }
             }
         }
-
-        // #endregion
     }
 }

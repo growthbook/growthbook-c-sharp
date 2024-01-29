@@ -1,5 +1,6 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
+using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Newtonsoft.Json.Serialization;
@@ -18,6 +19,21 @@ namespace GrowthBook
         public bool Enabled { get; set; } = true;
 
         /// <summary>
+        /// The GrowthBook API Host. Optional.
+        /// </summary>
+        public string ApiHost { get; set; }
+
+        /// <summary>
+        /// The key used to fetch features from the GrowthBook API. Optional.
+        /// </summary>
+        public string ClientKey { get; set; }
+
+        /// <summary>
+        /// The key used to decrypt encrypted features from the API. Optional.
+        /// </summary>
+        public string DecryptionKey { get; set; }
+
+        /// <summary>
         /// Map of user attributes that are used to assign variations.
         /// </summary>
         public JObject Attributes { get; set; } = new JObject();
@@ -33,9 +49,15 @@ namespace GrowthBook
         public IDictionary<string, Feature> Features { get; set; } = new Dictionary<string, Feature>();
 
         /// <summary>
+        /// Feature definitions that have been encrypted. Requires that the <see cref="DecryptionKey"/> property
+        /// be set in order for the <see cref="GrowthBook"/> class to decrypt them for use.
+        /// </summary>
+        public string EncryptedFeatures { get; set; }
+
+        /// <summary>
         /// Force specific experiments to always assign a specific variation (used for QA).
         /// </summary>
-        public JObject ForcedVariations { get; set; } = new JObject();
+        public IDictionary<string, int> ForcedVariations { get; set; } = new Dictionary<string, int>();
 
         /// <summary>
         /// If true, random assignment is disabled and only explicitly forced variations are used.
@@ -46,5 +68,16 @@ namespace GrowthBook
         /// Callback function used for tracking Experiment assignment.
         /// </summary>
         public Action<Experiment, ExperimentResult> TrackingCallback { get; set; }
+
+        /// <summary>
+        /// A repository implementation for retrieving and caching features that will override
+        /// the default implementation. Optional.
+        /// </summary>
+        public IGrowthBookFeatureRepository FeatureRepository { get; set; }
+
+        /// <summary>
+        /// A logger factory implementation that will enable logging throughout the SDK. Optional.
+        /// </summary>
+        public ILoggerFactory LoggerFactory { get; set; }
     }
 }

@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+using System;
+using System.Collections.Generic;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Newtonsoft.Json.Serialization;
@@ -19,7 +20,7 @@ namespace GrowthBook
         /// <summary>
         /// Array of FeatureRule objects that determine when and how the defaultValue gets overridden.
         /// </summary>
-        public IList<FeatureRule> Rules { get; set; } = new List<FeatureRule>();
+        public IList<FeatureRule> Rules { get; set; }
 
         /// <summary>
         /// Returns the default value of the feature cast to the specified type.

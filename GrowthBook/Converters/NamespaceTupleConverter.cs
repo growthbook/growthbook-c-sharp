@@ -2,7 +2,7 @@ using System;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
-namespace GrowthBook
+namespace GrowthBook.Converters
 {
     /// <summary>
     /// Represents a JsonConverter object used to convert Namespaces
@@ -17,24 +17,28 @@ namespace GrowthBook
 
         public override object ReadJson(JsonReader reader, Type objectType, object existingValue, JsonSerializer serializer)
         {
-            JToken token = JToken.Load(reader);
+            var token = JToken.Load(reader);
+
             if (token.Type == JTokenType.Array)
             {
                 return new Namespace((JArray)token);
             }
+
             return null;
         }
 
         public override void WriteJson(JsonWriter writer, object value, JsonSerializer serializer)
         {
-            Namespace valueNamespace = (Namespace)value;
-            JArray t = new JArray
+            var valueNamespace = (Namespace)value;
+
+            var array = new JArray
             {
                 JToken.FromObject(valueNamespace.Id),
                 JToken.FromObject(valueNamespace.Start),
                 JToken.FromObject(valueNamespace.End)
             };
-            t.WriteTo(writer);
+
+            array.WriteTo(writer);
         }
     }
 }

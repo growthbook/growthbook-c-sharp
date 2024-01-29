@@ -1,4 +1,5 @@
-﻿using System;
+using System;
+using GrowthBook.Converters;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -41,8 +42,8 @@ namespace GrowthBook
         {
             if (obj.GetType() == typeof(Namespace))
             {
-                Namespace objNamspace = (Namespace)obj;
-                return Id == objNamspace.Id && Start == objNamspace.Start && End == objNamspace.End;
+                var objNamespace = (Namespace)obj;
+                return Id == objNamespace.Id && Start == objNamespace.Start && End == objNamespace.End;
             }
             return false;
         }

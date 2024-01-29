@@ -1,4 +1,5 @@
-﻿using System;
+using System;
+using GrowthBook.Extensions;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Newtonsoft.Json.Serialization;
@@ -8,6 +9,17 @@ namespace GrowthBook
     [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
     public class FeatureResult
     {
+        /// <summary>
+        /// Represents possible values for the source of a feature result.
+        /// </summary>
+        public static class SourceId
+        {
+            public const string UnknownFeature = "unknownFeature";
+            public const string DefaultValue = "defaultValue";
+            public const string Force = "force";
+            public const string Experiment = "experiment";
+        }
+
         /// <summary>
         /// The assigned value of the feature.
         /// </summary>
@@ -24,6 +36,7 @@ namespace GrowthBook
                 {
                     return false;
                 }
+
                 string strValue = Value.ToString();
                 return !string.IsNullOrEmpty(strValue) && strValue != "0" && strValue.ToLower() != "false";
             }
