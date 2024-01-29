@@ -153,7 +153,7 @@ public class FeatureRefreshWorkerTests : ApiUnitTest<FeatureRefreshWorker>
         // incrementally move forward when it's appropriate.
 
         var cachedResults = new ConcurrentQueue<IDictionary<string, Feature>>();
-        var resetEvent = new AutoResetEvent(false);
+        var resetEvent = new ManualResetEventSlim(false);
 
         _cache
             .RefreshWith(Arg.Any<IDictionary<string, Feature>>(), Arg.Any<CancellationToken?>())
@@ -161,13 +161,16 @@ public class FeatureRefreshWorkerTests : ApiUnitTest<FeatureRefreshWorker>
             .AndDoes(x =>
             {
                 cachedResults.Enqueue((IDictionary<string, Feature>)x[0]);
-                resetEvent.Set();
+
+                if (cachedResults.Count > 1)
+                {
+                    resetEvent.Set();
+                }
             });
 
         var features = await _worker.RefreshCacheFromApi();
 
-        resetEvent.WaitOne(5000).Should().BeTrue("because the cache should be refreshed within 5 seconds");
-        resetEvent.WaitOne(5000).Should().BeTrue("because the cache should be refreshed again within 5 seconds");
+        resetEvent.Wait(5000).Should().BeTrue("because the cache should be refreshed within 5 seconds");
 
         _worker.Cancel();
 
