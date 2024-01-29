@@ -6,32 +6,28 @@ using System.Threading;
 using System.Threading.Tasks;
 using GrowthBook.Api;
 using Microsoft.Extensions.Logging;
-using Moq;
+using NSubstitute;
 using Xunit;
 
 namespace GrowthBook.Tests.ApiTests;
 
 public class FeatureRepositoryTests : ApiUnitTest<FeatureRepository>
 {
-    private readonly Mock<IGrowthBookFeatureRefreshWorker> _backgroundWorker;
+    private readonly IGrowthBookFeatureRefreshWorker _backgroundWorker;
     private readonly FeatureRepository _featureRepository;
 
     public FeatureRepositoryTests()
     {
-        _backgroundWorker = StrictMockOf<IGrowthBookFeatureRefreshWorker>();
-        _featureRepository = new(_logger, _cache.Object, _backgroundWorker.Object);
+        _backgroundWorker = Substitute.For<IGrowthBookFeatureRefreshWorker>();
+        _featureRepository = new(_logger, _cache, _backgroundWorker);
     }
 
     [Fact]
     public void CancellingRepositoryWillCancelBackgroundWorker()
     {
-        _backgroundWorker
-            .Setup(x => x.Cancel())
-            .Verifiable();
-
         _featureRepository.Cancel();
 
-        _backgroundWorker.Verify(x => x.Cancel(), Times.Once, "Cancelling the background worker did not succeed");
+        _backgroundWorker.Received(1).Cancel();
     }
 
     [Theory]
@@ -39,15 +35,11 @@ public class FeatureRepositoryTests : ApiUnitTest<FeatureRepository>
     [InlineData(false, false)]
     public async Task GettingFeaturesWhenApiCallIsUnnecessaryWillGetFromCache(bool isCacheExpired, bool? isForcedRefresh)
     {
-        _cache
-            .SetupGet(x => x.IsCacheExpired)
-            .Returns(isCacheExpired)
-            .Verifiable();
+        _cache.IsCacheExpired.Returns(isCacheExpired);
 
         _cache
-            .Setup(x => x.GetFeatures(It.IsAny<CancellationToken?>()))
-            .ReturnsAsync(_availableFeatures)
-            .Verifiable();
+            .GetFeatures(Arg.Any<CancellationToken?>())
+            .Returns(_availableFeatures);
 
         var options = isForcedRefresh switch
         {
@@ -57,7 +49,7 @@ public class FeatureRepositoryTests : ApiUnitTest<FeatureRepository>
 
         var features = await _featureRepository.GetFeatures(options);
 
-        Mock.Verify(_cache);
+        await _cache.Received(1).GetFeatures(Arg.Any<CancellationToken?>());
     }
 
     [Theory]
@@ -67,25 +59,17 @@ public class FeatureRepositoryTests : ApiUnitTest<FeatureRepository>
     [InlineData(true, true)]
     public async Task GettingFeaturesWhenApiCallIsRequiredWithoutWaitingForRetrievalWillGetFromCache(bool isCacheExpired, bool? isForcedRefresh)
     {
-        _cache
-            .SetupGet(x => x.IsCacheExpired)
-            .Returns(isCacheExpired)
-            .Verifiable();
+        _cache.IsCacheExpired.Returns(isCacheExpired);
+
+        _cache.FeatureCount.Returns(_availableFeatures.Count);
 
         _cache
-            .SetupGet(x => x.FeatureCount)
-            .Returns(_availableFeatures.Count)
-            .Verifiable();
-
-        _cache
-            .Setup(x => x.GetFeatures(It.IsAny<CancellationToken?>()))
-            .ReturnsAsync(_availableFeatures)
-            .Verifiable();
+            .GetFeatures(Arg.Any<CancellationToken?>())
+            .Returns(_availableFeatures);
 
         _backgroundWorker
-            .Setup(x => x.RefreshCacheFromApi(It.IsAny<CancellationToken?>()))
-            .ReturnsAsync(_availableFeatures)
-            .Verifiable();
+            .RefreshCacheFromApi(Arg.Any<CancellationToken?>())
+            .Returns(_availableFeatures);
 
         var options = isForcedRefresh switch
         {
@@ -95,7 +79,10 @@ public class FeatureRepositoryTests : ApiUnitTest<FeatureRepository>
 
         var features = await _featureRepository.GetFeatures(options);
 
-        Mock.Verify(_cache, _backgroundWorker);
+        _ = _cache.Received(2).IsCacheExpired;
+        _ = _cache.Received(1).FeatureCount;
+        _ = _cache.Received(1).GetFeatures(Arg.Any<CancellationToken?>());
+        _ = _backgroundWorker.Received(1).RefreshCacheFromApi(Arg.Any<CancellationToken?>());
     }
 
     [Theory]
@@ -105,20 +92,13 @@ public class FeatureRepositoryTests : ApiUnitTest<FeatureRepository>
     [InlineData(true, true)]
     public async Task GettingFeaturesWhenApiCallIsRequiredWithWaitingForRetrievalWillGetFromApiCallInsteadOfCache(bool isCacheEmpty, bool? isForcedWait)
     {
-        _cache
-            .SetupGet(x => x.IsCacheExpired)
-            .Returns(true)
-            .Verifiable();
+        _cache.IsCacheExpired.Returns(true);
 
-        _cache
-            .SetupGet(x => x.FeatureCount)
-            .Returns(isCacheEmpty ? 0 : 1)
-            .Verifiable();
+        _cache.FeatureCount.Returns(isCacheEmpty ? 0 : 1);
 
         _backgroundWorker
-            .Setup(x => x.RefreshCacheFromApi(It.IsAny<CancellationToken?>()))
-            .ReturnsAsync(_availableFeatures)
-            .Verifiable();
+            .RefreshCacheFromApi(Arg.Any<CancellationToken?>())
+            .Returns(_availableFeatures);
 
         var options = isForcedWait switch
         {
@@ -128,6 +108,8 @@ public class FeatureRepositoryTests : ApiUnitTest<FeatureRepository>
 
         var features = await _featureRepository.GetFeatures(options);
 
-        Mock.Verify(_cache, _backgroundWorker);
+        _ = _cache.Received(2).IsCacheExpired;
+        _ = _cache.Received(2).FeatureCount;
+        _ = _backgroundWorker.Received(1).RefreshCacheFromApi(Arg.Any<CancellationToken?>());
     }
 }

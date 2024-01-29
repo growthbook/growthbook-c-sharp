@@ -12,8 +12,8 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using GrowthBook.Api;
 using Microsoft.Extensions.Logging;
-using Moq;
 using Newtonsoft.Json;
+using NSubstitute;
 using Xunit;
 
 namespace GrowthBook.Tests.ApiTests;
@@ -112,7 +112,7 @@ public class FeatureRefreshWorkerTests : ApiUnitTest<FeatureRefreshWorker>
         _httpClientFactory = new TestHttpClientFactory();
         _httpClientFactory.ResponseContent = _availableFeatures;
         _httpClientFactory.StreamResponseContent = _availableFeatures.Take(1).ToDictionary(x => x.Key, x => x.Value);
-        _worker = new(_logger, _httpClientFactory, _config, _cache.Object);
+        _worker = new(_logger, _httpClientFactory, _config, _cache);
     }
 
     [Fact]
@@ -131,15 +131,14 @@ public class FeatureRefreshWorkerTests : ApiUnitTest<FeatureRefreshWorker>
         _config.PreferServerSentEvents = false;
 
         _cache
-            .Setup(x => x.RefreshWith(It.IsAny<IDictionary<string, Feature>>(), It.IsAny<CancellationToken?>()))
-            .Returns(Task.CompletedTask)
-            .Verifiable();
+            .RefreshWith(Arg.Any<IDictionary<string, Feature>>(), Arg.Any<CancellationToken?>())
+            .Returns(Task.CompletedTask);
 
         var features = await _worker.RefreshCacheFromApi();
 
         features.Should().BeEquivalentTo(_availableFeatures);
 
-        Mock.Verify(_cache);
+        await _cache.Received(1).RefreshWith(Arg.Any<IDictionary<string, Feature>>(), Arg.Any<CancellationToken?>());
     }
 
     [Fact]
@@ -157,13 +156,13 @@ public class FeatureRefreshWorkerTests : ApiUnitTest<FeatureRefreshWorker>
         var resetEvent = new AutoResetEvent(false);
 
         _cache
-            .Setup(x => x.RefreshWith(It.IsAny<IDictionary<string, Feature>>(), It.IsAny<CancellationToken?>()))
-            .Callback((IDictionary<string, Feature> x, CancellationToken? _) =>
+            .RefreshWith(Arg.Any<IDictionary<string, Feature>>(), Arg.Any<CancellationToken?>())
+            .Returns(Task.CompletedTask)
+            .AndDoes(x =>
             {
-                cachedResults.Enqueue(x);
+                cachedResults.Enqueue((IDictionary<string, Feature>)x[0]);
                 resetEvent.Set();
-            })
-            .Returns(Task.CompletedTask);
+            });
 
         var features = await _worker.RefreshCacheFromApi();
 

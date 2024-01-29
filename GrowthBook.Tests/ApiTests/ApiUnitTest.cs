@@ -6,7 +6,7 @@ using System.Text;
 using System.Threading.Tasks;
 using GrowthBook.Api;
 using Microsoft.Extensions.Logging;
-using Moq;
+using NSubstitute;
 
 namespace GrowthBook.Tests.ApiTests;
 
@@ -16,15 +16,15 @@ public abstract class ApiUnitTest<T> : UnitTest
     protected const string SecondFeatureId = nameof(SecondFeatureId);
 
     protected readonly ILogger<T> _logger;
-    protected readonly Mock<IGrowthBookFeatureCache> _cache;
+    protected readonly IGrowthBookFeatureCache _cache;
     protected readonly Feature _firstFeature;
     protected readonly Feature _secondFeature;
     protected readonly Dictionary<string, Feature> _availableFeatures;
 
     public ApiUnitTest()
     {
-        _logger = Mock.Of<ILogger<T>>();
-        _cache = StrictMockOf<IGrowthBookFeatureCache>();
+        _logger = Substitute.For<ILogger<T>>();
+        _cache = Substitute.For<IGrowthBookFeatureCache>();
 
         _firstFeature = new() { DefaultValue = 1 };
         _secondFeature = new() { DefaultValue = 2 };

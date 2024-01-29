@@ -6,7 +6,6 @@ using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
 using GrowthBook.Tests.Json;
-using Moq;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Xunit;
@@ -227,6 +226,4 @@ public abstract class UnitTest
 
         return instance;
     }
-
-    protected Mock<T> StrictMockOf<T>() where T : class => new Mock<T>(MockBehavior.Strict);
 }
