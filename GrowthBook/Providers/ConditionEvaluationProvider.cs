@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using GrowthBook.Extensions;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json.Linq;
 
@@ -383,7 +384,7 @@ namespace GrowthBook.Providers
                     return true;
                 }
 
-                if (conditionValue is null || actualValue is null)
+                if (conditionValue.IsNullOrWhitespace() || actualValue.IsNullOrWhitespace())
                 {
                     return false;
                 }
