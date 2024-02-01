@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1]
+
+- Fixed issue with empty string value sent to IsIn condition evaluation.
+
 ## [1.0.0]
 
 - Fully implemented version 0.5.2 of the GrowthBook SDK spec.
