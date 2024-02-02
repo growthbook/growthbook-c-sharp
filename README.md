@@ -21,7 +21,7 @@ Powerful feature flagging and A/B testing for C# apps using [GrowthBook](https:/
 
 ## Usage examples
 
-This library is based on the [GrowthBook SDK specs](https://docs.growthbook.io/lib/build-your-own) and should be compatible with the usage examples in the [GrowthBook docs](https://docs.growthbook.io/).
+This library is based on the [GrowthBook SDK specs](https://docs.growthbook.io/lib/build-your-own) and should be compatible with the usage examples in the [GrowthBook docs](https://docs.growthbook.io/). For a more complete set of examples involving usage within ASP.Net Core, take a look at the C# examples in the [GrowthBook examples repository](https://github.com/growthbook/examples/tree/main/csharp-example/GrowthBookCSharpExamples).
 
 Down below you'll find two basic examples on how the package works.
 
