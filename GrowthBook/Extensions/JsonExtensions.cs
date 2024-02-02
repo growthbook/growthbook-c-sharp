@@ -23,6 +23,13 @@ namespace GrowthBook.Extensions
         public static bool IsNull(this JToken token) => token is null || token.Type == JTokenType.Null;
 
         /// <summary>
+        /// Determines whether the <see cref="JToken"/> is either null, <see cref="JTokenType.Null"/>, an empty string, or whitespace.
+        /// </summary>
+        /// <param name="token">The JSON token to verify.</param>
+        /// <returns>True if null, empty, or whitespace, false otherwise.</returns>
+        public static bool IsNullOrWhitespace(this JToken token) => token.IsNull() || token.ToString().IsNullOrWhitespace();
+
+        /// <summary>
         /// Gets the value of the named attribute key within the current <see cref="JObject"/>.
         /// </summary>
         /// <param name="json">The JSON object to look up the key from.</param>
