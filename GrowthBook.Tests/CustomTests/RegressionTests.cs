@@ -12,6 +12,39 @@ namespace GrowthBook.Tests.CustomTests;
 public class RegressionTests : UnitTest
 {
     [Fact]
+    public void GetFeatureValueShouldOnlyReturnFallbackValueWhenTheFeatureResultValueIsNull()
+    {
+        const string FeatureName = "test-false-default-value";
+
+        var feature = new Feature { DefaultValue = false };
+
+        var staticFeatures = new Dictionary<string, Feature>
+        {
+            [FeatureName] = feature
+        };
+
+        var context = new Context
+        {
+            Features = staticFeatures
+        };
+
+        var growthBook = new GrowthBook(context);
+
+        growthBook.IsOn(FeatureName).Should().BeFalse("because the value of the feature is considered falsy");
+        growthBook.GetFeatureValue(FeatureName, true).Should().BeFalse("because the default value can be served from the feature");
+
+        growthBook.Features[FeatureName] = new Feature { DefaultValue = null };
+
+        growthBook.IsOn(FeatureName).Should().BeFalse("because the value of the feature is considered falsy");
+        growthBook.GetFeatureValue(FeatureName, false).Should().BeFalse("because the fallback value should be returned when the result value is null");
+
+        growthBook.Features[FeatureName] = new Feature { DefaultValue = true };
+
+        growthBook.IsOn(FeatureName).Should().BeTrue("because the value of the feature is considered truthy");
+        growthBook.GetFeatureValue(FeatureName, false).Should().BeTrue("because the default value can be served from the feature");
+    }
+
+    [Fact]
     public void EvalIsInConditionShouldNotDifferWhenAttributeIsEmptyInsteadOfNull()
     {
         var featureJson = """
