@@ -168,12 +168,9 @@ namespace GrowthBook
         /// <inheritdoc />
         public T GetFeatureValue<T>(string key, T fallback)
         {
-            FeatureResult result = EvalFeature(key);
-            if (result.On)
-            {
-                return result.Value.ToObject<T>();
-            }
-            return fallback;
+            var value = EvalFeature(key).Value;
+
+            return value.IsNull() ? fallback : value.ToObject<T>();
         }
 
         /// <inheritdoc />
