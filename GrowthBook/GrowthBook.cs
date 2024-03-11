@@ -215,7 +215,7 @@ namespace GrowthBook
                             continue;
                         }
 
-                        if (_trackingCallback != null && rule.Tracks.Any())
+                        if (_trackingCallback != null && (rule.Tracks?.Any() ?? false))
                         {
                             foreach (var trackData in rule.Tracks)
                             {
