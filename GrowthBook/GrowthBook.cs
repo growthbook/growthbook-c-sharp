@@ -328,7 +328,7 @@ namespace GrowthBook
         }
 
         private ExperimentResult RunExperiment(Experiment experiment, string featureId)
-        { 
+        {
             // 1. Abort if there aren't enough variations present.
 
             if (experiment.Variations.IsNull() || experiment.Variations.Count < 2)
@@ -380,7 +380,7 @@ namespace GrowthBook
 
             if (hashValue.IsNullOrWhitespace())
             {
-                _logger.LogDebug($"Aborting experiment, unable to locate a value for the experiment hash attribute '{experiment.HashAttribute}'");
+                _logger.LogDebug("Aborting experiment, unable to locate a value for the experiment hash attribute \'{ExperimentHashAttribute}\'", experiment.HashAttribute);
                 return GetExperimentResult(experiment, featureId: featureId);
             }
 
@@ -392,11 +392,11 @@ namespace GrowthBook
                 {
                     _logger.LogDebug("Aborting experiment, filters have been applied and matched this run");
                     return GetExperimentResult(experiment, featureId: featureId);
-                }                
+                }
             }
             else if (experiment.Namespace != null && !ExperimentUtilities.InNamespace(hashValue, experiment.Namespace))
             {
-                _logger.LogDebug($"Aborting experiment, not within the specified namespace '{experiment.Namespace}'");
+                _logger.LogDebug("Aborting experiment, not within the specified namespace \'{ExperimentNamespace}\'", experiment.Namespace);
                 return GetExperimentResult(experiment, featureId: featureId);
             }
 
@@ -441,7 +441,7 @@ namespace GrowthBook
 
             // 12. Run the experiment and track the result if we haven't seen this one before.
 
-            _logger.LogInformation($"Participation in experiment with key '{experiment.Key}' is allowed, running the experiment");
+            _logger.LogInformation("Participation in experiment with key \'{ExperimentKey}\' is allowed, running the experiment", experiment.Key);
             var result = GetExperimentResult(experiment, assigned, true, featureId, variationHash);
 
             TryToTrack(experiment, result);
@@ -468,7 +468,7 @@ namespace GrowthBook
 
                 if (hashValue.IsNullOrWhitespace())
                 {
-                    _logger.LogDebug($"Attributes are missing a filter's hash attribute of '{filter.Attribute}', marking as filtered out");
+                    _logger.LogDebug("Attributes are missing a filter\'s hash attribute of \'{FilterAttribute}\', marking as filtered out", filter.Attribute);
                     return true;
                 }
 
@@ -478,7 +478,7 @@ namespace GrowthBook
 
                 if (!isInAnyRange)
                 {
-                    _logger.LogDebug($"This run is not in any range associated with a filter, marking as filtered out");
+                    _logger.LogDebug("This run is not in any range associated with a filter, marking as filtered out");
                     return true;
                 }
             }
@@ -498,7 +498,7 @@ namespace GrowthBook
 
             if (hashValue is null)
             {
-                _logger.LogDebug($"Attributes do not have a value for hash attribute '{hashAttribute}', marking as excluded from rollout");
+                _logger.LogDebug("Attributes do not have a value for hash attribute \'{HashAttribute}\', marking as excluded from rollout", hashAttribute);
                 return false;
             }
 
@@ -581,7 +581,7 @@ namespace GrowthBook
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, $"Encountered unhandled exception during tracking callback for experiment with combined key '{key}'");
+                    _logger.LogError(ex, "Encountered unhandled exception during tracking callback for experiment with combined key \'{Key}\'", key);
                 }
             }
         }

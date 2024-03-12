@@ -49,8 +49,8 @@ namespace GrowthBook.Api
             _featuresApiEndpoint = $"{trimmedHostEndpoint}/api/features/{config.ClientKey}";
             _serverSentEventsApiEndpoint = $"{trimmedHostEndpoint}/sub/{config.ClientKey}";
 
-            _logger.LogDebug($"Features GrowthBook API endpoint: '{_featuresApiEndpoint}'");
-            _logger.LogDebug($"Features GrowthBook API endpoint (Server Sent Events): '{_featuresApiEndpoint}'");
+            _logger.LogDebug("Features GrowthBook API endpoint: \'{FeaturesApiEndpoint}\'", _featuresApiEndpoint);
+            _logger.LogDebug("Features GrowthBook API endpoint (Server Sent Events): \'{FeaturesApiEndpoint}\'", _featuresApiEndpoint);
         }
 
         public void Cancel()
@@ -61,7 +61,7 @@ namespace GrowthBook.Api
 
         public async Task<IDictionary<string, Feature>> RefreshCacheFromApi(CancellationToken? cancellationToken = null)
         {
-            _logger.LogInformation($"Making an HTTP request to the default Features API endpoint '{_featuresApiEndpoint}'");
+            _logger.LogInformation("Making an HTTP request to the default Features API endpoint \'{FeaturesApiEndpoint}\'", _featuresApiEndpoint);
 
             var httpClient = _httpClientFactory.CreateClient(ConfiguredClients.DefaultApiClient);
 
@@ -120,8 +120,8 @@ namespace GrowthBook.Api
                 {
                     try
                     {
-                        _logger.LogInformation($"Making an HTTP request to server sent events endpoint '{_serverSentEventsApiEndpoint}'");
-                        
+                        _logger.LogInformation("Making an HTTP request to server sent events endpoint \'{ServerSentEventsApiEndpoint}\'", _serverSentEventsApiEndpoint);
+
                         var httpClient = _httpClientFactory.CreateClient(ConfiguredClients.ServerSentEventsApiClient);
 
                         await httpClient.UpdateWithFeaturesStreamFrom(_serverSentEventsApiEndpoint, _logger, _config, _serverSentEventsListenerCancellation.Token, async features =>
@@ -133,11 +133,11 @@ namespace GrowthBook.Api
                     }
                     catch(HttpRequestException ex)
                     {
-                        _logger.LogError(ex, $"Encountered an HTTP exception during request to server sent events endpoint '{_serverSentEventsApiEndpoint}'");
+                        _logger.LogError(ex, "Encountered an HTTP exception during request to server sent events endpoint \'{ServerSentEventsApiEndpoint}\'", _serverSentEventsApiEndpoint);
                     }
                     catch(Exception ex)
                     {
-                        _logger.LogError(ex, $"Encountered an unhandled exception during request to server sent events endpoint '{_serverSentEventsApiEndpoint}'");
+                        _logger.LogError(ex, "Encountered an unhandled exception during request to server sent events endpoint \'{ServerSentEventsApiEndpoint}\'", _serverSentEventsApiEndpoint);
                     }
                 }
 
@@ -151,16 +151,16 @@ namespace GrowthBook.Api
 
             if (featuresResponse.EncryptedFeatures.IsNullOrWhitespace())
             {
-                _logger.LogInformation($"API response JSON contained no encrypted features, returning '{featuresResponse.FeatureCount}' unencrypted features");
+                _logger.LogInformation("API response JSON contained no encrypted features, returning \'{FeaturesResponseFeatureCount}\' unencrypted features", featuresResponse.FeatureCount);
                 return featuresResponse.Features;
             }
 
             _logger.LogInformation("API response JSON contained encrypted features, decrypting them now");
-            _logger.LogDebug($"Attempting to decrypt features with the provided decryption key '{_config.DecryptionKey}'");
+            _logger.LogDebug("Attempting to decrypt features with the provided decryption key \'{ConfigDecryptionKey}\'", _config.DecryptionKey);
 
             var decryptedFeaturesJson = featuresResponse.EncryptedFeatures.DecryptWith(_config.DecryptionKey);
 
-            _logger.LogDebug($"Completed attempt to decrypt features which resulted in plaintext value of '{decryptedFeaturesJson}'");
+            _logger.LogDebug("Completed attempt to decrypt features which resulted in plaintext value of \'{DecryptedFeaturesJson}\'", decryptedFeaturesJson);
 
             var jsonObject = JObject.Parse(decryptedFeaturesJson);
 
