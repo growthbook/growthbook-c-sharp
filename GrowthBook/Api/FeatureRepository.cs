@@ -42,7 +42,7 @@ namespace GrowthBook.Api
             if (_cache.IsCacheExpired || options?.ForceRefresh == true)
             {
                 _logger.LogInformation("Cache has expired or option to force refresh was set, refreshing the cache from the API");
-                _logger.LogDebug($"Cache expired: '{_cache.IsCacheExpired}' and option to force refresh: '{options?.ForceRefresh}'");
+                _logger.LogDebug("Cache expired: \'{CacheIsCacheExpired}\' and option to force refresh: \'{OptionsForceRefresh}\'", _cache.IsCacheExpired, options?.ForceRefresh);
 
                 var refreshTask = _backgroundRefreshWorker.RefreshCacheFromApi(cancellationToken);
 
@@ -54,7 +54,7 @@ namespace GrowthBook.Api
                 if (_cache.FeatureCount == 0 || options?.WaitForCompletion == true)
                 {
                     _logger.LogInformation("Either cache currently has no features or the option to wait for completion was set, waiting for cache to refresh");
-                    _logger.LogDebug($"Feature count: '{_cache.FeatureCount}' and option to wait for completion: '{options?.WaitForCompletion}'");
+                    _logger.LogDebug("Feature count: \'{CacheFeatureCount}\' and option to wait for completion: \'{OptionsWaitForCompletion}\'", _cache.FeatureCount, options?.WaitForCompletion);
 
                     return await refreshTask;
                 }
