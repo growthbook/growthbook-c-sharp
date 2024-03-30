@@ -4,13 +4,74 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using FluentAssertions;
+using Microsoft.AspNetCore.Mvc;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using Xunit;
 
 namespace GrowthBook.Tests.CustomTests;
 
 public class RegressionTests : UnitTest
 {
+    [Fact]
+    public void ExperimentWillResultInAssignmentIfDifferentFromPreviousOrMissing()
+    {
+        const string FeatureName = "test-assignment";
+
+        var feature = new Feature { DefaultValue = false, Rules = new List<FeatureRule> { new() { Coverage = 1d } } };
+
+        var staticFeatures = new Dictionary<string, Feature>
+        {
+            [FeatureName] = feature
+        };
+
+        var context = new Context
+        {
+            Features = staticFeatures
+        };
+
+        var growthBook = new GrowthBook(context);
+
+        var result = growthBook.EvalFeature(FeatureName);
+        var result2 = growthBook.EvalFeature(FeatureName);
+
+        var assignmentsByExperimentKey = growthBook.GetAllResults();
+
+        assignmentsByExperimentKey.Should().NotBeNull("because it must always be a valid collection instance");
+        assignmentsByExperimentKey.Count.Should().Be(1, "because the second experiment was not different");
+    }
+
+    [Fact]
+    public void GetFeatureValueShouldReturnForcedValueEvenWhenTracksIsNull()
+    {
+        const string FeatureName = "test-tracks-default-value";
+        var forcedResult = JToken.FromObject(true);
+
+        var feature = new Feature { DefaultValue = false, Rules = new List<FeatureRule> { new() { Force = forcedResult } } };
+
+        var staticFeatures = new Dictionary<string, Feature>
+        {
+            [FeatureName] = feature
+        };
+
+        var trackingWasCalled = false;
+
+        var context = new Context
+        {
+            Features = staticFeatures,
+            TrackingCallback = (features, tracking) => trackingWasCalled = true
+        };
+
+        var growthBook = new GrowthBook(context);
+
+        var result = growthBook.EvalFeature(FeatureName);
+
+        result.Should().NotBeNull("because a result must be created");
+        result.Value.Should().NotBeNull("because the result value was forced");
+        result.Value.ToString().Should().Be(forcedResult.ToString(), "because that was the forced value");
+        trackingWasCalled.Should().BeFalse("because no tracking data was present");
+    }
+
     [Fact]
     public void GetFeatureValueShouldOnlyReturnFallbackValueWhenTheFeatureResultValueIsNull()
     {

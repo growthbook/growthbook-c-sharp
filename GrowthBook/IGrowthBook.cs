@@ -8,7 +8,7 @@ namespace GrowthBook
     /// <summary>
     /// Providing operations to interact with feature flags.
     /// </summary>
-    public interface IGrowthBook
+    public interface IGrowthBook : IDisposable
     {
         /// <summary>
         /// Checks to see if a feature is on.
