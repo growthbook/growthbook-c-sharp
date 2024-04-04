@@ -20,7 +20,7 @@ namespace GrowthBook.Providers
         public bool EvalCondition(JToken attributes, JObject condition)
         {
             _logger.LogInformation("Beginning to evaluate attributes based on the provided JSON condition");
-            _logger.LogDebug($"Attribute evaluation is based on the JSON condition '{condition}'");
+            _logger.LogDebug("Attribute evaluation is based on the JSON condition \'{Condition}\'", condition);
 
             if (condition.ContainsKey("$or"))
             {
@@ -108,7 +108,7 @@ namespace GrowthBook.Providers
         /// <returns>True if the condition value matches the attribute value.</returns>
         private bool EvalConditionValue(JToken conditionValue, JToken attributeValue)
         {
-            _logger.LogDebug($"Evaluating condition value '{conditionValue}'");
+            _logger.LogDebug("Evaluating condition value \'{ConditionValue}\'", conditionValue);
 
             if (conditionValue.Type == JTokenType.Object)
             {
@@ -143,7 +143,7 @@ namespace GrowthBook.Providers
         {
             if (attributeValue?.Type != JTokenType.Array)
             {
-                _logger.LogDebug($"Unable to match array elements with a non-array type of '{attributeValue.Type}'");
+                _logger.LogDebug("Unable to match array elements with a non-array type of '{AttributeValueType}'", attributeValue.Type);
                 return false;
             }
 
@@ -162,7 +162,7 @@ namespace GrowthBook.Providers
 
             return false;
         }
-        
+
         /// <summary>
         /// A switch that handles all the possible operators.
         /// </summary>
@@ -172,7 +172,7 @@ namespace GrowthBook.Providers
         /// <returns></returns>
         private bool EvalOperatorCondition(string op, JToken attributeValue, JToken conditionValue)
         {
-            _logger.LogDebug($"Evaluating operator condition '{op}'");
+            _logger.LogDebug("Evaluating operator condition \'{Op}\'", op);
 
             if (op == "$eq")
             {
@@ -311,7 +311,7 @@ namespace GrowthBook.Providers
                 return CompareVersions(attributeValue, conditionValue, x => x >= 0);
             }
 
-            _logger.LogWarning($"Unable to handle unsupported operator condition '{op}', failing the condition");
+            _logger.LogWarning("Unable to handle unsupported operator condition \'{Op}\', failing the condition", op);
 
             return false;
         }
