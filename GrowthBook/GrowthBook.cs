@@ -215,7 +215,7 @@ namespace GrowthBook
                             continue;
                         }
 
-                        if (_trackingCallback != null && rule.Tracks.Any())
+                        if (_trackingCallback != null && rule.Tracks?.Any() == true)
                         {
                             foreach (var trackData in rule.Tracks)
                             {
@@ -251,6 +251,8 @@ namespace GrowthBook
 
                     var result = RunExperiment(experiment, featureId);
 
+                    TryAssignExperimentResult(experiment, result);
+
                     if (!result.InExperiment || result.Passthrough)
                     {
                         continue;
@@ -281,24 +283,7 @@ namespace GrowthBook
             {
                 ExperimentResult result = RunExperiment(experiment, null);
 
-                if (!_assigned.TryGetValue(experiment.Key, out ExperimentAssignment prev)
-                    || prev.Result.InExperiment != result.InExperiment
-                    || prev.Result.VariationId != result.VariationId)
-                {
-                    _assigned.Add(experiment.Key, new ExperimentAssignment { Experiment = experiment, Result = result });
-
-                    foreach (Action<Experiment, ExperimentResult> callback in _subscriptions)
-                    {
-                        try
-                        {
-                            callback?.Invoke(experiment, result);
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogError(ex, $"Encountered exception during subscription callback for experiment with key '{experiment.Key}'");
-                        }
-                    }
-                }
+                TryAssignExperimentResult(experiment, result);
 
                 return result;
             }
@@ -324,6 +309,28 @@ namespace GrowthBook
             catch(Exception ex)
             {
                 _logger.LogError(ex, $"Encountered an unhandled exception while executing '{nameof(LoadFeatures)}'");
+            }
+        }
+
+        private void TryAssignExperimentResult(Experiment experiment, ExperimentResult result)
+        {
+            if (!_assigned.TryGetValue(experiment.Key, out ExperimentAssignment prev)
+                || prev.Result.InExperiment != result.InExperiment
+                || prev.Result.VariationId != result.VariationId)
+            {
+                _assigned.Add(experiment.Key, new ExperimentAssignment { Experiment = experiment, Result = result });
+
+                foreach (Action<Experiment, ExperimentResult> callback in _subscriptions)
+                {
+                    try
+                    {
+                        callback?.Invoke(experiment, result);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, $"Encountered exception during subscription callback for experiment with key '{experiment.Key}'");
+                    }
+                }
             }
         }
 
