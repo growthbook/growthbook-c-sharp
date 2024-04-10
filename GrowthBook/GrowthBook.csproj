@@ -11,9 +11,10 @@
     <RepositoryUrl>https://github.com/growthbook/growthbook-csharp.git</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageTags>GrowthBook,A/B test,feature toggle,flag</PackageTags>
-    <Version>1.0.3</Version>
+    <Version>1.0.4</Version>
     <Title>GrowthBook C# SDK</Title>
     <PackageProjectUrl>https://www.growthbook.io/</PackageProjectUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
 
   <ItemGroup>
@@ -26,6 +27,10 @@
     <None Include="..\LICENSE">
       <Pack>True</Pack>
       <PackagePath></PackagePath>
+    </None>
+    <None Include="..\README.md">
+      <Pack>True</Pack>
+      <PackagePath>\</PackagePath>
     </None>
   </ItemGroup>
 
