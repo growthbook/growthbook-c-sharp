@@ -1,4 +1,4 @@
-![growthbook banner with csharp logo](https://docs.growthbook.io/images/hero-csharp-sdk.png)
+![growthbook banner with csharp logo](https://camo.githubusercontent.com/b6cc3335dcf09b9c3baf421e28ded771ae34a5efaf87b794eef364f10384d904/68747470733a2f2f646f63732e67726f777468626f6f6b2e696f2f696d616765732f6865726f2d6373686172702d73646b2e706e67)
 
 # growthbook-c-sharp
 
