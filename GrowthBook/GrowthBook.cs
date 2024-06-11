@@ -246,7 +246,8 @@ namespace GrowthBook
                         Name = rule.Name,
                         Phase = rule.Phase,
                         Seed = rule.Seed,
-                        Filters = rule.Filters
+                        Filters = rule.Filters,
+                        HashVersion = rule.HashVersion
                     };
 
                     var result = RunExperiment(experiment, featureId);
