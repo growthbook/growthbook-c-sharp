@@ -11,7 +11,7 @@
     <RepositoryUrl>https://github.com/growthbook/growthbook-csharp.git</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageTags>GrowthBook,A/B test,feature toggle,flag</PackageTags>
-    <Version>1.0.5</Version>
+    <Version>1.0.6</Version>
     <Title>GrowthBook C# SDK</Title>
     <PackageProjectUrl>https://www.growthbook.io/</PackageProjectUrl>
     <PackageReadmeFile>README.md</PackageReadmeFile>
