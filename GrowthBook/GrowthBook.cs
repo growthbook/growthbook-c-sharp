@@ -166,9 +166,24 @@ namespace GrowthBook
         }
 
         /// <inheritdoc />
-        public T GetFeatureValue<T>(string key, T fallback)
+        public T GetFeatureValue<T>(string key, T fallback, bool alwaysLoadFeatures = false)
         {
-            var value = EvalFeature(key).Value;
+            if (alwaysLoadFeatures)
+            {
+                LoadFeatures().Wait();
+            }
+
+            var result = EvaluateFeature(key);
+            var value = result.Value;
+
+            return value.IsNull() ? fallback : value.ToObject<T>();
+        }
+
+        /// <inheritdoc />
+        public async Task<T> GetFeatureValueAsync<T>(string key, T fallback, CancellationToken? cancellationToken = null)
+        {
+            var result = await EvalFeatureAsync(key, cancellationToken);
+            var value = result.Value;
 
             return value.IsNull() ? fallback : value.ToObject<T>();
         }
@@ -187,8 +202,25 @@ namespace GrowthBook
         }
 
         /// <inheritdoc />
-        public FeatureResult EvalFeature(string featureId)
+        public FeatureResult EvalFeature(string featureId, bool alwaysLoadFeatures = false)
         {
+            if (alwaysLoadFeatures)
+            {
+                LoadFeatures().Wait();
+            }
+
+            return EvaluateFeature(featureId);
+        }
+
+        public async Task<FeatureResult> EvalFeatureAsync(string featureId, CancellationToken? cancellationToken = null)
+        {
+            await LoadFeatures(cancellationToken: cancellationToken);
+
+            return EvaluateFeature(featureId);
+        }
+
+        private FeatureResult EvaluateFeature(string featureId)
+        { 
             try
             {
                 if (!Features.TryGetValue(featureId, out Feature feature))
@@ -288,7 +320,7 @@ namespace GrowthBook
 
                 return result;
             }
-            catch(Exception ex)
+            catch (Exception ex)
             {
                 _logger.LogError(ex, $"Encountered an unhandled exception while executing '{nameof(Run)}'");
 
