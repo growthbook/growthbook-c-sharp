@@ -49,6 +49,11 @@ namespace GrowthBook
         public JObject Condition { get; set; }
 
         /// <summary>
+        /// Each item defines a prerequisite where a condition must evaluate against a parent feature's value (identified by id). If gate is true, then this is a blocking feature-level prerequisite; otherwise it applies to the current rule only.
+        /// </summary>
+        public IList<ParentCondition> ParentConditions { get; set; }
+
+        /// <summary>
         /// Adds the experiment to a namespace.
         /// </summary>
         public Namespace Namespace { get; set; }
@@ -62,6 +67,11 @@ namespace GrowthBook
         /// What user attribute should be used to assign variations (defaults to id).
         /// </summary>
         public string HashAttribute { get; set; } = "id";
+
+        /// <summary>
+        /// When using sticky bucketing, can be used as a fallback to assign variations.
+        /// </summary>
+        public string FallbackAttribute { get; set; }
 
         /// <summary>
         /// The hash version to use (defaults to 1).
@@ -92,6 +102,31 @@ namespace GrowthBook
         /// ID of the current experiment phase.
         /// </summary>
         public string Phase { get; set; }
+
+        /// <summary>
+        /// If true, sticky bucketing will be disabled for this experiment. (Note: sticky bucketing is only available if a StickyBucketingService is provided in the Context).
+        /// </summary>
+        public bool DisableStickyBucketing { get; set; }
+
+        /// <summary>
+        /// A sticky bucket version number that can be used to force a re-bucketing of users (default to 0).
+        /// </summary>
+        public int BucketVersion { get; set; } = 0;
+
+        /// <summary>
+        /// Any users with a sticky bucket version less than this will be excluded from the experiment.
+        /// </summary>
+        public int MinBucketVersion { get; set; } = 0;
+
+        /// <summary>
+        /// Any URL patterns associated with this experiment.
+        /// </summary>
+        public IList<UrlPattern> UrlPatterns { get; set; }
+
+        /// <summary>
+        /// Determines whether to persist the query string.
+        /// </summary>
+        public bool PersistQueryString { get; set; }
 
         /// <summary>
         /// Returns the experiment variations cast to the specified type.

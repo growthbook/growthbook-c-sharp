@@ -35,18 +35,24 @@ namespace GrowthBook.Extensions
         /// <param name="json">The JSON object to look up the key from.</param>
         /// <param name="attributeKey">The key of the attribute value in the JSON object. Defaults to "id" when not provided.</param>
         /// <returns>The value associated with the requested attribute, or null if the value is null or <see cref="JTokenType.Null"/>.</returns>
-        public static string GetHashAttributeValue(this JObject json, string attributeKey = null)
+        public static (string Attribute, string Value) GetHashAttributeAndValue(this JObject json, string attributeKey = null, string fallbackAttributeKey = null)
         {
             var attribute = attributeKey ?? "id";
 
             var attributeValue = json[attribute];
 
-            if (attributeValue.IsNull())
+            if (attributeValue.IsNull() && fallbackAttributeKey != null)
             {
-                return null;
+                return (fallbackAttributeKey, json[fallbackAttributeKey]?.ToString());
             }
 
-            return attributeValue.ToString();
+            return (attribute, attributeValue?.ToString());
         }
+
+        public static JArray AsArray(this JToken token) => (JArray)token;
+
+        public static JArray AsArray(this JProperty property) => (JArray)property.Value;
+
+        public static JObject AsObject(this JProperty property) => (JObject)property.Value;
     }
 }

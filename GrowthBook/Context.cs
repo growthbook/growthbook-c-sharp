@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using GrowthBook.Services;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -49,6 +50,16 @@ namespace GrowthBook
         public IDictionary<string, Feature> Features { get; set; } = new Dictionary<string, Feature>();
 
         /// <summary>
+        /// Service for using sticky buckets.
+        /// </summary>
+        public IStickyBucketService StickyBucketService { get; set; }
+
+        /// <summary>
+        /// The assignment docs for sticky bucket usage. Optional.
+        /// </summary>
+        public IDictionary<string, StickyAssignmentsDocument> StickyBucketAssignmentDocs { get; set; } = new Dictionary<string, StickyAssignmentsDocument>();
+
+        /// <summary>
         /// Feature definitions that have been encrypted. Requires that the <see cref="DecryptionKey"/> property
         /// be set in order for the <see cref="GrowthBook"/> class to decrypt them for use.
         /// </summary>
@@ -58,6 +69,11 @@ namespace GrowthBook
         /// Force specific experiments to always assign a specific variation (used for QA).
         /// </summary>
         public IDictionary<string, int> ForcedVariations { get; set; } = new Dictionary<string, int>();
+
+        /// <summary>
+        /// Gets groups that have been saved, if any.
+        /// </summary>
+        public JObject SavedGroups { get; set; }
 
         /// <summary>
         /// If true, random assignment is disabled and only explicitly forced variations are used.

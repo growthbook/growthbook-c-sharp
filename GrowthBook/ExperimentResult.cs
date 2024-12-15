@@ -67,6 +67,11 @@ namespace GrowthBook
         public bool Passthrough { get; set; }
 
         /// <summary>
+        /// If sticky bucketing was used to assign a variation.
+        /// </summary>
+        public bool StickyBucketUsed { get; set; }
+
+        /// <summary>
         /// Returns the value of the assigned variation cast to the specified type.
         /// </summary>
         /// <typeparam name="T"></typeparam>

@@ -13,9 +13,19 @@ namespace GrowthBook
     public class FeatureRule
     {
         /// <summary>
+        /// Optional rule id, reserved for future use.
+        /// </summary>
+        public string Id { get; set; }
+
+        /// <summary>
         /// Optional targeting condition.
         /// </summary>
         public JObject Condition { get; set; }
+
+        /// <summary>
+        /// Each item defines a prerequisite where a condition must evaluate against a parent feature's value (identified by id). If gate is true, then this is a blocking feature-level prerequisite; otherwise it applies to the current rule only.
+        /// </summary>
+        public IList<ParentCondition> ParentConditions { get; set; }
 
         /// <summary>
         /// What percent of users should be included in the experiment (between 0 and 1, inclusive).
@@ -53,6 +63,11 @@ namespace GrowthBook
         public string HashAttribute { get; set; } = "id";
 
         /// <summary>
+        /// When using sticky bucketing, can be used as a fallback to assign variations.
+        /// </summary>
+        public string FallbackAttribute { get; set; }
+
+        /// <summary>
         /// The hash version to use (defaults to 1).
         /// </summary>
         public int HashVersion { get; set; } = 1;
@@ -61,6 +76,21 @@ namespace GrowthBook
         /// A more precise version of Coverage.
         /// </summary>
         public BucketRange Range { get; set; }
+
+        /// <summary>
+        /// If true, sticky bucketing will be disabled for this experiment. (Note: sticky bucketing is only available if a StickyBucketingService is provided in the Context).
+        /// </summary>
+        public bool DisableStickyBucketing { get; set; }
+
+        /// <summary>
+        /// A sticky bucket version number that can be used to force a re-bucketing of users (default to 0).
+        /// </summary>
+        public int BucketVersion { get; set; }
+
+        /// <summary>
+        /// Any users with a sticky bucket version less than this will be excluded from the experiment.
+        /// </summary>
+        public int MinBucketVersion { get; set; }
 
         /// <summary>
         /// Ranges for experiment variations.

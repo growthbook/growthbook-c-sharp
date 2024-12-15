@@ -75,7 +75,13 @@ public abstract class UnitTest
         /// </summary>
         public int Index { get; }
 
+        /// <summary>
+        /// Gets whether this value might be omitted in the test JSON.
+        /// </summary>
+        public bool IsOptional { get; }
+
         public TestPropertyIndexAttribute(int index) => Index = index;
+        public TestPropertyIndexAttribute(int index, bool isOptional) : this(index) => IsOptional = isOptional;
     }
 
     /// <summary>
@@ -196,7 +202,10 @@ public abstract class UnitTest
 
         foreach(var property in instanceType.GetProperties(BindingFlags.Instance | BindingFlags.Public))
         {
-            var testIndex = property.GetCustomAttribute<TestPropertyIndexAttribute>()?.Index;
+            var indexAttribute = property.GetCustomAttribute<TestPropertyIndexAttribute>();
+
+            var testIndex = indexAttribute?.Index;
+            var isOptional = indexAttribute?.IsOptional;
 
             if (testIndex is null)
             {
@@ -206,6 +215,14 @@ public abstract class UnitTest
             if (testIndex < 0 || testIndex > array.Count)
             {
                 throw new InvalidOperationException($"Unable to deserialize type '{instanceType}', property '{property.Name}' has an index of '{testIndex}' that is out of range");
+            }
+
+            if (testIndex == array.Count && isOptional == true)
+            {
+                // Some of the JSON tests may omit the last property, in which case
+                // we should just fail gracefully and keep going here.
+
+                continue;
             }
 
             var jsonInstance = array[testIndex];
