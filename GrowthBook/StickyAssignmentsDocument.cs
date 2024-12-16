@@ -12,7 +12,7 @@ namespace GrowthBook
 
         public string AttributeName { get; set; }
         public string AttributeValue { get; set; }
-        public IDictionary<string, string> StickyAssignments { get; set; }
+        public IDictionary<string, string> Assignments { get; set; } = new Dictionary<string, string>();
 
         public StickyAssignmentsDocument() { }
 
@@ -20,7 +20,7 @@ namespace GrowthBook
         {
             AttributeName = attributeName;
             AttributeValue = attributeValue;
-            StickyAssignments = stickyAssignments ?? new Dictionary<string, string>();
+            Assignments = stickyAssignments ?? new Dictionary<string, string>();
         }
     }
 }

@@ -3,6 +3,9 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using FluentAssertions;
+using GrowthBook.Services;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Xunit;
 
@@ -24,14 +27,47 @@ public class StickyBucketTests : UnitTest
         [TestPropertyIndex(4)]
         public JToken ExpectedResult { get; set; }
         [TestPropertyIndex(5)]
-        public StickyAssignmentsDocument[] ExpectedAssignmentDocs { get; set; } = [];
+        public Dictionary<string, StickyAssignmentsDocument> ExpectedAssignmentDocs { get; set; } = [];
     }
 
     [Theory]
     [MemberData(nameof(GetMappedTestsInCategory), typeof(StickyBucketTestCase))]
     public void Run(StickyBucketTestCase testCase)
     {
+        var service = new InMemoryStickyBucketService();
+
+        testCase.Context.StickyBucketService = service;
+        testCase.Context.StickyBucketAssignmentDocs = testCase.PreExistingAssignmentDocs.ToDictionary(x => x.FormattedAttribute);
+
+        // NOTE: Existing sticky bucket JSON tests in the JS SDK load this into the service up front
+        //       but I wonder if that's correct because without that any assignment doc that exists
+        //       other than those will not be stored and some of these test cases will fail.
+
+        foreach (var document in testCase.PreExistingAssignmentDocs)
+        {
+            service.SaveAssignments(document);
+        }
+
         var gb = new GrowthBook(testCase.Context);
-#warning Complete this.
+
+        var result = gb.EvalFeature(testCase.FeatureName);
+
+        var actualResult = JToken.Parse(JsonConvert.SerializeObject(result.ExperimentResult));
+
+        if (testCase.ExpectedResult is JObject obj)
+        {
+            foreach (var property in obj.Properties())
+            {
+                actualResult[property.Name].ToString().Should().Be(property.Value.ToString());
+            }
+        }
+        else
+        {
+            actualResult.ToString().Should().Be(testCase.ExpectedResult.ToString());
+        }
+
+        var storedDocuments = service.GetAllAssignments(testCase.ExpectedAssignmentDocs.Keys);
+
+        storedDocuments.Should().BeEquivalentTo(testCase.ExpectedAssignmentDocs, "because those should have been stored correctly");
     }
 }

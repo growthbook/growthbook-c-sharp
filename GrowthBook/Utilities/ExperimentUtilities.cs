@@ -253,15 +253,14 @@ namespace GrowthBook.Utilities
         public static (StickyAssignmentsDocument Document, bool IsChanged) GenerateStickyBucketAssignment(IStickyBucketService stickyBucketService, string attributeName, string attributeValue, IDictionary<string, string> assignments)
         {
             var existingDocument = stickyBucketService is null ? new StickyAssignmentsDocument(attributeName, attributeValue) : stickyBucketService.GetAssignments(attributeName, attributeValue);
-            var newAssignments = new Dictionary<string, string>(existingDocument.StickyAssignments);
+            var newAssignments = new Dictionary<string, string>(existingDocument?.Assignments ?? new Dictionary<string, string>());
 
             newAssignments.MergeWith(new[] { assignments });
 
             var isChanged = JsonConvert.SerializeObject(existingDocument) != JsonConvert.SerializeObject(newAssignments);
+            var document = new StickyAssignmentsDocument(attributeName, attributeValue, newAssignments);
 
-            existingDocument.StickyAssignments = newAssignments;
-
-            return (existingDocument, isChanged);
+            return (document, isChanged);
         }
 
         public static StickyBucketVariation GetStickyBucketVariation(Experiment experiment, int bucketVersion, int minBucketVersion, IList<VariationMeta> meta, JObject attributes, IDictionary<string, StickyAssignmentsDocument> document)
@@ -304,7 +303,7 @@ namespace GrowthBook.Utilities
             (var hashAttributeWithoutFallback, var hashValueWithoutFallback) = attributes.GetHashAttributeAndValue(hashAttribute, default);
             var hashKey = new StickyAssignmentsDocument(hashAttributeWithoutFallback, hashValueWithoutFallback);
 
-            (var hashAttributeWithFallback, var hashValueWithFallback) = attributes.GetHashAttributeAndValue(default, fallbackAttribute);
+            (var hashAttributeWithFallback, var hashValueWithFallback) = attributes.GetHashAttributeAndValue(fallbackAttribute, default);
             var fallbackKey = new StickyAssignmentsDocument(hashAttributeWithFallback, hashValueWithFallback);
 
             var pendingAssignments = new List<IDictionary<string, string>>();
@@ -313,12 +312,12 @@ namespace GrowthBook.Utilities
 
             if (fallbackKey.HasValue && stickyAssignmentDocs.TryGetValue(fallbackKey.FormattedAttribute, out var fallbackDocument))
             {
-                pendingAssignments.Add(fallbackDocument.StickyAssignments);
+                pendingAssignments.Add(fallbackDocument.Assignments);
             }
 
             if (stickyAssignmentDocs.TryGetValue(hashKey.FormattedAttribute, out var document))
             {
-                pendingAssignments.Add(document.StickyAssignments);
+                pendingAssignments.Add(document.Assignments);
             }
 
             return mergedAssignments.MergeWith(pendingAssignments);

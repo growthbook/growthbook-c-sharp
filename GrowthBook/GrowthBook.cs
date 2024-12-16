@@ -486,7 +486,7 @@ namespace GrowthBook
 
                 if (hasFallback)
                 {
-                    (_, hashValue) = Attributes.GetHashAttributeAndValue(experiment.FallbackAttribute);
+                    (hashAttribute, hashValue) = Attributes.GetHashAttributeAndValue(experiment.FallbackAttribute);
                 }
                 else
                 {
@@ -548,24 +548,24 @@ namespace GrowthBook
                         _logger.LogDebug("Aborting experiment, associated conditions have prohibited participation");
                         return GetExperimentResult(experiment, featureId: featureId);
                     }
+                }
 
-                    if (experiment.ParentConditions != null)
+                if (experiment.ParentConditions != null)
+                {
+                    foreach (var parentCondition in experiment.ParentConditions)
                     {
-                        foreach (var parentCondition in experiment.ParentConditions)
+                        var parentResult = EvaluateFeature(parentCondition.Id);
+
+                        if (parentResult.Source == FeatureResult.SourceId.CyclicPrerequisite)
                         {
-                            var parentResult = EvaluateFeature(featureId);
+                            return GetExperimentResult(experiment, featureId: featureId);
+                        }
 
-                            if (parentResult.Source == FeatureResult.SourceId.CyclicPrerequisite)
-                            {
-                                return GetExperimentResult(experiment, featureId: featureId);
-                            }
+                        var evaluationObject = new JObject { ["value"] = parentResult.Value };
 
-                            var evaluationObject = new JObject { ["value"] = parentResult.Value };
-
-                            if (!_conditionEvaluator.EvalCondition(evaluationObject, parentCondition.Condition ?? new JObject(), _savedGroups))
-                            {
-                                return GetExperimentResult(experiment, featureId: featureId);
-                            }
+                        if (!_conditionEvaluator.EvalCondition(evaluationObject, parentCondition.Condition ?? new JObject(), _savedGroups))
+                        {
+                            return GetExperimentResult(experiment, featureId: featureId);
                         }
                     }
                 }
@@ -753,7 +753,11 @@ namespace GrowthBook
                 HashUsed = hashUsed,
                 HashValue = hashValue,
                 Value = experiment.Variations is null ? null : experiment.Variations[variationIndex],
-                VariationId = variationIndex
+                VariationId = variationIndex,
+                Name = meta?.Name,
+                Passthrough = meta?.Passthrough ?? false,
+                Bucket = bucketHash ?? 0d,
+                StickyBucketUsed = wasStickyBucketUsed
             };
 
             result.Name = meta?.Name;

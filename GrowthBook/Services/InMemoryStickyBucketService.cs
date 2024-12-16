@@ -9,10 +9,10 @@ namespace GrowthBook.Services
     {
         private readonly IDictionary<string, StickyAssignmentsDocument> _cachedDocuments = new Dictionary<string, StickyAssignmentsDocument>();
 
-        public IDictionary<string, StickyAssignmentsDocument> GetAllAssignments(IDictionary<string, string> attributes)
+        public IDictionary<string, StickyAssignmentsDocument> GetAllAssignments(IEnumerable<string> attributes)
         {
-            var assignments = from pair in attributes
-                              let existingDoc = _cachedDocuments.TryGetValue(pair.Key, out var doc) ? doc : null
+            var assignments = from name in attributes
+                              let existingDoc = _cachedDocuments.TryGetValue(name, out var doc) ? doc : null
                               where existingDoc != null
                               select (Attribute: existingDoc.FormattedAttribute, Document: existingDoc);
 

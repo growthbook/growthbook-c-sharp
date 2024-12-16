@@ -8,6 +8,6 @@ namespace GrowthBook.Services
     {
         StickyAssignmentsDocument GetAssignments(string attributeName, string attributeValue);
         void SaveAssignments(StickyAssignmentsDocument document);
-        IDictionary<string, StickyAssignmentsDocument> GetAllAssignments(IDictionary<string, string> attributes);
+        IDictionary<string, StickyAssignmentsDocument> GetAllAssignments(IEnumerable<string> attributes);
     }
 }
