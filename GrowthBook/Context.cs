@@ -50,6 +50,11 @@ namespace GrowthBook
         public IDictionary<string, Feature> Features { get; set; } = new Dictionary<string, Feature>();
 
         /// <summary>
+        /// Experiment definitions.
+        /// </summary>
+        public IList<Experiment> Experiments { get; set; }
+
+        /// <summary>
         /// Service for using sticky buckets.
         /// </summary>
         public IStickyBucketService StickyBucketService { get; set; }

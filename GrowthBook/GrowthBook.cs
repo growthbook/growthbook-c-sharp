@@ -46,6 +46,7 @@ namespace GrowthBook
             Attributes = context.Attributes;
             Url = context.Url;
             Features = context.Features?.ToDictionary(k => k.Key, v => v.Value) ?? new Dictionary<string, Feature>();
+            Experiments = context.Experiments ?? new List<Experiment>();
             ForcedVariations = context.ForcedVariations;
 
             _qaMode = context.QaMode;
@@ -103,6 +104,11 @@ namespace GrowthBook
         /// Dictionary of the currently loaded feature objects.
         /// </summary>
         public IDictionary<string, Feature> Features { get; set; }
+
+        /// <summary>
+        /// The currently loaded experiments (separate from features).
+        /// </summary>
+        public IList<Experiment> Experiments { get; set; }
 
         /// <summary>
         /// Listing of specific experiments to always assign a specific variation (used for QA).
@@ -442,6 +448,14 @@ namespace GrowthBook
             if (!Enabled)
             {
                 _logger.LogDebug("Aborting experiment, GrowthBook is not currently enabled");
+                return GetExperimentResult(experiment, featureId: featureId);
+            }
+
+            // 2.6 Use improved URL targeting if specified.
+
+            if (experiment.UrlPatterns?.Count > 0 && !ExperimentUtilities.IsUrlTargeted(Url ?? string.Empty, experiment.UrlPatterns))
+            {
+                _logger.LogDebug("Skipping due to URL targeting");
                 return GetExperimentResult(experiment, featureId: featureId);
             }
 

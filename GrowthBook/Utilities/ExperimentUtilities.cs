@@ -220,27 +220,70 @@ namespace GrowthBook.Utilities
             // If a protocol is missing, but a host is specified, add `https://` to the front
             // Use "_____" as the wildcard since `*` is not a valid hostname in some browsers
 
-            var expected = Regex.Replace(pattern.Pattern, "^([^:/?]*)\\.", "https://$1.");
-            expected = Regex.Replace(expected, "/*", "_____");
+            var currentPattern = pattern.Pattern;
+
+            var match = Regex.Match(currentPattern, "^([^:/?]*)\\.");
+
+            if (match.Success)
+            {
+                currentPattern = $"https://{currentPattern}";
+            }
+
+            var expected = currentPattern.Replace("*", "_____");
             var expectedUri = new Uri($"https://{expected}");
 
             // Compare each part of the URL separately
 
-            var comparisons = new[] { (actual.Host, expectedUri.Host, false), (actual.AbsolutePath, expectedUri.AbsolutePath, true) };
+            var comparisons = new List<(string Actual, string Expected, bool IsPath)>
+            {
+                (actual.Host, expectedUri.Host, false),
+                (actual.AbsolutePath, expectedUri.AbsolutePath, true)
+            };
 
             // We only want to compare hashes if it's explicitly being targeted
 
-#warning Check hash codes?
-#warning Comparisons and finish implementation
+            if (expectedUri.ContainsHashInPath())
+            {
+                comparisons.Add((actual.GetHashContents(), expectedUri.GetHashContents(), false));
+            }
 
-            return false;
+            var actualQueryParameters = HttpUtility.ParseQueryString(actual.Query);
+            var expectedQueryParameters = HttpUtility.ParseQueryString(expectedUri.Query);
+
+            for(var i = 0; i < expectedQueryParameters.Count; i++)
+            {
+                comparisons.Add((actualQueryParameters[i] ?? string.Empty, expectedQueryParameters[i], false));
+            }
+
+            // Any failure means the whole thing fails.
+
+            return comparisons.Any(x => !EvaluateSimpleUrlPart(x.Actual, x.Expected, x.IsPath));
+        }
+
+        private static bool EvaluateSimpleUrlPart(string actual, string expected, bool isPath)
+        {
+            var escaped = Regex.Replace(expected, @"[*.+?^${}()|[\]\\]", @"\$&");
+            var escapedWithWildcards = escaped.Replace("_____", ".*");
+
+            if (isPath)
+            {
+                // When matching path name, make leading/trailing slashes optional
+
+                escapedWithWildcards = Regex.Replace(escapedWithWildcards, @"(^\/|\/$)", string.Empty);
+                escapedWithWildcards = $@"\/?{escapedWithWildcards}\/?";
+            }
+
+            var regex = new Regex($"^{escapedWithWildcards}$");
+
+            return regex.IsMatch(actual);
         }
 
         private static Regex GetUrlRegex(UrlPattern pattern)
         {
             try
             {
-                var escaped = Regex.Replace(pattern.Pattern, "([^\\\\])\\/", "$1\\/");
+                var match = Regex.IsMatch(pattern.Pattern, @"([^\\])\/");
+                var escaped = Regex.Replace(pattern.Pattern, @"([^\\])\/", @"$1\/");
 
                 return new Regex(escaped);
             }
