@@ -451,13 +451,17 @@ namespace GrowthBook
                 return GetExperimentResult(experiment, featureId: featureId);
             }
 
+            // NOTE: The improved URL targeting mentioned is only applicable on the front end.
+            //       There are potential frontend usages for the C# SDK, but until there is more clarity and more robust tests
+            //       in the JSON test suite to ensure we get an appropriate implementation in place we are going to hold off on this.
+
             // 2.6 Use improved URL targeting if specified.
 
-            if (experiment.UrlPatterns?.Count > 0 && !ExperimentUtilities.IsUrlTargeted(Url ?? string.Empty, experiment.UrlPatterns))
-            {
-                _logger.LogDebug("Skipping due to URL targeting");
-                return GetExperimentResult(experiment, featureId: featureId);
-            }
+            //if (experiment.UrlPatterns?.Count > 0 && !ExperimentUtilities.IsUrlTargeted(Url ?? string.Empty, experiment.UrlPatterns))
+            //{
+            //    _logger.LogDebug("Skipping due to URL targeting");
+            //    return GetExperimentResult(experiment, featureId: featureId);
+            //}
 
             // 3. Use the override value from the query string if one is specified.
 

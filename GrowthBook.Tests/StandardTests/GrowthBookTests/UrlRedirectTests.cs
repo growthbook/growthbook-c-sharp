@@ -29,23 +29,27 @@ public class UrlRedirectTests : UnitTest
         public TestResult[] ExpectedResults { get; set; }
     }
 
-    [Theory]
-    [MemberData(nameof(GetMappedTestsInCategory), typeof(UrlRedirectTestCase))]
-    public void Run(UrlRedirectTestCase testCase)
-    {
-        var gb = new GrowthBook(testCase.Context);
+    // NOTE: These tests refer to advanced URL redirection capabilities, which are only applicable on the front end.
+    //       There are potential frontend usages for the C# SDK, but until there is more clarity and more robust tests
+    //       in the JSON test suite to ensure we get an appropriate implementation in place we are going to hold off on this.
 
-#warning Is this only applicable for auto experiments? Need more clarity around usage/logic as well.
+//    [Theory]
+//    [MemberData(nameof(GetMappedTestsInCategory), typeof(UrlRedirectTestCase))]
+//    public void Run(UrlRedirectTestCase testCase)
+//    {
+//        var gb = new GrowthBook(testCase.Context);
+
+//#warning Is this only applicable for auto experiments? Need more clarity around usage/logic as well.
         
-        //for(var i = 0; i < gb.Experiments.Count; i++)
-        //{
-        //    var experiment = gb.Experiments[i];
-        //    var expectedResult = testCase.ExpectedResults[i];
+//        //for(var i = 0; i < gb.Experiments.Count; i++)
+//        //{
+//        //    var experiment = gb.Experiments[i];
+//        //    var expectedResult = testCase.ExpectedResults[i];
 
-        //    var result = gb.Run(experiment);
+//        //    var result = gb.Run(experiment);
 
-        //    result.InExperiment.Should().Be(expectedResult.InExperiment);
-        //    result.Value["urlRedirect"]?.ToString().Should().Be(expectedResult.UrlRedirect);
-        //}
-    }
+//        //    result.InExperiment.Should().Be(expectedResult.InExperiment);
+//        //    result.Value["urlRedirect"]?.ToString().Should().Be(expectedResult.UrlRedirect);
+//        //}
+//    }
 }
