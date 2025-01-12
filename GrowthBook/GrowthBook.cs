@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using GrowthBook.Api;
 using GrowthBook.Extensions;
 using GrowthBook.Providers;
+using GrowthBook.Services;
 using GrowthBook.Utilities;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
@@ -30,7 +31,10 @@ namespace GrowthBook
         private bool _disposedValue;
         private readonly IConditionEvaluationProvider _conditionEvaluator;
         private readonly IGrowthBookFeatureRepository _featureRepository;
+        private readonly IStickyBucketService _stickyBucketService;
+        private readonly IDictionary<string, StickyAssignmentsDocument> _stickyBucketAssignmentDocs;
         private readonly ILogger<GrowthBook> _logger;
+        private readonly JObject _savedGroups;
 
         /// <summary>
         /// Creates a new GrowthBook instance from the passed context.
@@ -42,6 +46,7 @@ namespace GrowthBook
             Attributes = context.Attributes;
             Url = context.Url;
             Features = context.Features?.ToDictionary(k => k.Key, v => v.Value) ?? new Dictionary<string, Feature>();
+            Experiments = context.Experiments ?? new List<Experiment>();
             ForcedVariations = context.ForcedVariations;
 
             _qaMode = context.QaMode;
@@ -49,6 +54,9 @@ namespace GrowthBook
             _tracked = new HashSet<string>();
             _assigned = new Dictionary<string, ExperimentAssignment>();
             _subscriptions = new List<Action<Experiment, ExperimentResult>>();
+            _stickyBucketService = context.StickyBucketService;
+            _stickyBucketAssignmentDocs = context.StickyBucketAssignmentDocs ?? new Dictionary<string, StickyAssignmentsDocument>();
+            _savedGroups = context.SavedGroups;
 
             var config = new GrowthBookConfigurationOptions
             {
@@ -96,6 +104,11 @@ namespace GrowthBook
         /// Dictionary of the currently loaded feature objects.
         /// </summary>
         public IDictionary<string, Feature> Features { get; set; }
+
+        /// <summary>
+        /// The currently loaded experiments (separate from features).
+        /// </summary>
+        public IList<Experiment> Experiments { get; set; }
 
         /// <summary>
         /// Listing of specific experiments to always assign a specific variation (used for QA).
@@ -219,10 +232,19 @@ namespace GrowthBook
             return EvaluateFeature(featureId);
         }
 
-        private FeatureResult EvaluateFeature(string featureId)
+        private FeatureResult EvaluateFeature(string featureId, ISet<string> evaluatedFeatures = default)
         { 
             try
             {
+                evaluatedFeatures = evaluatedFeatures ?? new HashSet<string>();
+
+                if (evaluatedFeatures.Contains(featureId))
+                {
+                    return GetFeatureResult(default, FeatureResult.SourceId.CyclicPrerequisite);
+                }
+
+                evaluatedFeatures.Add(featureId);
+
                 if (!Features.TryGetValue(featureId, out Feature feature))
                 {
                     return GetFeatureResult(null, FeatureResult.SourceId.UnknownFeature);
@@ -230,12 +252,51 @@ namespace GrowthBook
 
                 foreach (FeatureRule rule in feature?.Rules ?? Enumerable.Empty<FeatureRule>())
                 {
-                    if (!rule.Condition.IsNull() && !_conditionEvaluator.EvalCondition(Attributes, rule.Condition))
+                    if (rule.ParentConditions != null)
+                    {
+                        var passedPrerequisiteEvaluations = true;
+
+                        foreach (var parentCondition in rule.ParentConditions)
+                        {
+                            var parentResult = EvaluateFeature(parentCondition.Id, evaluatedFeatures);
+
+                            // Don't continue evaluating if the prerequisite conditions have cycles.
+
+                            if (parentResult.Source == FeatureResult.SourceId.CyclicPrerequisite)
+                            {
+                                return GetFeatureResult(default, FeatureResult.SourceId.CyclicPrerequisite);
+                            }
+
+                            var evaluationObject = new JObject { ["value"] = parentResult.Value };
+
+                            var isSuccess = _conditionEvaluator.EvalCondition(evaluationObject, parentCondition.Condition ?? new JObject(), _savedGroups);
+
+                            if (!isSuccess)
+                            {
+                                // When the parent evaluation is gated we'll treat that as a complete failure.
+
+                                if (parentCondition.Gate)
+                                {
+                                    return GetFeatureResult(default, FeatureResult.SourceId.Prerequisite);
+                                }
+
+                                passedPrerequisiteEvaluations = false;
+                                break;
+                            }                            
+                        }
+
+                        if (!passedPrerequisiteEvaluations)
+                        {
+                            continue;
+                        }
+                    }             
+
+                    if (rule.Filters?.Any() == true && IsFilteredOut(rule.Filters))
                     {
                         continue;
                     }
 
-                    if (rule.Filters?.Any() == true && IsFilteredOut(rule.Filters))
+                    if (!rule.Condition.IsNull() && !_conditionEvaluator.EvalCondition(Attributes, rule.Condition, _savedGroups))
                     {
                         continue;
                     }
@@ -272,6 +333,10 @@ namespace GrowthBook
                         Coverage = rule.Coverage,
                         Weights = rule.Weights,
                         HashAttribute = rule.HashAttribute,
+                        FallbackAttribute = rule.FallbackAttribute,
+                        DisableStickyBucketing = rule.DisableStickyBucketing,
+                        BucketVersion = rule.BucketVersion,
+                        MinBucketVersion = rule.MinBucketVersion,
                         Namespace = rule.Namespace,
                         Meta = rule.Meta,
                         Ranges = rule.Ranges,
@@ -279,7 +344,8 @@ namespace GrowthBook
                         Phase = rule.Phase,
                         Seed = rule.Seed,
                         Filters = rule.Filters,
-                        HashVersion = rule.HashVersion
+                        HashVersion = rule.HashVersion,
+                        Condition = rule.Condition
                     };
 
                     var result = RunExperiment(experiment, featureId);
@@ -385,6 +451,18 @@ namespace GrowthBook
                 return GetExperimentResult(experiment, featureId: featureId);
             }
 
+            // NOTE: The improved URL targeting mentioned is only applicable on the front end.
+            //       There are potential frontend usages for the C# SDK, but until there is more clarity and more robust tests
+            //       in the JSON test suite to ensure we get an appropriate implementation in place we are going to hold off on this.
+
+            // 2.6 Use improved URL targeting if specified.
+
+            //if (experiment.UrlPatterns?.Count > 0 && !ExperimentUtilities.IsUrlTargeted(Url ?? string.Empty, experiment.UrlPatterns))
+            //{
+            //    _logger.LogDebug("Skipping due to URL targeting");
+            //    return GetExperimentResult(experiment, featureId: featureId);
+            //}
+
             // 3. Use the override value from the query string if one is specified.
 
             if (!Url.IsNullOrWhitespace())
@@ -416,54 +494,132 @@ namespace GrowthBook
 
             // 6. Abort if we're unable to generate a hash identifying this run.
 
-            var hashValue = Attributes.GetHashAttributeValue(experiment.HashAttribute);
+            (var hashAttribute, var hashValue) = Attributes.GetHashAttributeAndValue(experiment.HashAttribute);
 
             if (hashValue.IsNullOrWhitespace())
             {
-                _logger.LogDebug("Aborting experiment, unable to locate a value for the experiment hash attribute \'{ExperimentHashAttribute}\'", experiment.HashAttribute);
-                return GetExperimentResult(experiment, featureId: featureId);
-            }
+                // Check if a fallback attribute for sticky bucketing exists and use it if possible.
 
-            // 7. Abort if this run is ineligible to be included in the experiment.
+                var hasFallback = !experiment.FallbackAttribute.IsNullOrWhitespace();
 
-            if (experiment.Filters?.Any() == true)
-            {
-                if (IsFilteredOut(experiment.Filters))
+                if (hasFallback)
                 {
-                    _logger.LogDebug("Aborting experiment, filters have been applied and matched this run");
-                    return GetExperimentResult(experiment, featureId: featureId);
+                    (hashAttribute, hashValue) = Attributes.GetHashAttributeAndValue(experiment.FallbackAttribute);
                 }
-            }
-            else if (experiment.Namespace != null && !ExperimentUtilities.InNamespace(hashValue, experiment.Namespace))
-            {
-                _logger.LogDebug("Aborting experiment, not within the specified namespace \'{ExperimentNamespace}\'", experiment.Namespace);
-                return GetExperimentResult(experiment, featureId: featureId);
-            }
-
-            // 8. Abort if the conditions for the experiment prohibit this.
-
-            if (!experiment.Condition.IsNull())
-            {
-                if (!_conditionEvaluator.EvalCondition(Attributes, experiment.Condition))
+                else
                 {
-                    _logger.LogDebug("Aborting experiment, associated conditions have prohibited participation");
+                    _logger.LogDebug("Aborting experiment, unable to locate a value for the experiment hash attribute \'{ExperimentHashAttribute}\'", experiment.HashAttribute);
                     return GetExperimentResult(experiment, featureId: featureId);
                 }
             }
 
-            // 9. Attempt to assign this run to an experiment variation and abort if that can't be done.
+            // 6.5 When sticky bucketing is permitted, determine if they already have a value and use it if possible.
 
-            var ranges = experiment.Ranges?.Count > 0 ? experiment.Ranges : ExperimentUtilities.GetBucketRanges(experiment.Variations?.Count ?? 0, experiment.Coverage ?? 1, experiment.Weights ?? new List<double>());
-            var variationHash = HashUtilities.Hash(experiment.Seed ?? experiment.Key, hashValue, experiment.HashVersion);
-            var assigned = ExperimentUtilities.ChooseVariation(variationHash.Value, ranges.ToList());
+            var assignedBucket = -1;
+            var foundStickyBucket = false;
+            var stickyBucketVersionIsBlocked = false;
 
-            if (assigned == -1)
+            if (_stickyBucketService != null && !experiment.DisableStickyBucketing)
             {
-                _logger.LogDebug("Aborting experiment, unable to assign this run to an experiment variation");
+                var bucketVersion = experiment.BucketVersion;
+                var minBucketVersion = experiment.MinBucketVersion;
+                var meta = experiment.Meta ?? new List<VariationMeta>();
+
+                var stickyBucketVariation = ExperimentUtilities.GetStickyBucketVariation(
+                    experiment,
+                    bucketVersion,
+                    minBucketVersion,
+                    meta,
+                    Attributes,
+                    _stickyBucketAssignmentDocs
+                );
+
+                foundStickyBucket = stickyBucketVariation.VariationIndex >= 0;
+                assignedBucket = stickyBucketVariation.VariationIndex;
+                stickyBucketVersionIsBlocked = stickyBucketVariation.IsVersionBlocked;
+            }
+
+            if (!foundStickyBucket)
+            {
+                // 7. Abort if this run is ineligible to be included in the experiment.
+
+                if (experiment.Filters?.Any() == true)
+                {
+                    if (IsFilteredOut(experiment.Filters))
+                    {
+                        _logger.LogDebug("Aborting experiment, filters have been applied and matched this run");
+                        return GetExperimentResult(experiment, featureId: featureId);
+                    }
+                }
+                else if (experiment.Namespace != null && !ExperimentUtilities.InNamespace(hashValue, experiment.Namespace))
+                {
+                    _logger.LogDebug("Aborting experiment, not within the specified namespace \'{ExperimentNamespace}\'", experiment.Namespace);
+                    return GetExperimentResult(experiment, featureId: featureId);
+                }
+
+                // 8. Abort if the conditions for the experiment prohibit this.
+
+                if (!experiment.Condition.IsNull())
+                {
+                    if (!_conditionEvaluator.EvalCondition(Attributes, experiment.Condition, _savedGroups))
+                    {
+                        _logger.LogDebug("Aborting experiment, associated conditions have prohibited participation");
+                        return GetExperimentResult(experiment, featureId: featureId);
+                    }
+                }
+
+                if (experiment.ParentConditions != null)
+                {
+                    foreach (var parentCondition in experiment.ParentConditions)
+                    {
+                        var parentResult = EvaluateFeature(parentCondition.Id);
+
+                        if (parentResult.Source == FeatureResult.SourceId.CyclicPrerequisite)
+                        {
+                            return GetExperimentResult(experiment, featureId: featureId);
+                        }
+
+                        var evaluationObject = new JObject { ["value"] = parentResult.Value };
+
+                        if (!_conditionEvaluator.EvalCondition(evaluationObject, parentCondition.Condition ?? new JObject(), _savedGroups))
+                        {
+                            return GetExperimentResult(experiment, featureId: featureId);
+                        }
+                    }
+                }
+            }
+
+            // 9. Attempt to assign this run to an experiment variation.
+
+            var hash = HashUtilities.Hash(experiment.Seed ?? experiment.Key, hashValue, experiment.HashVersion);
+
+            if (hash is null)
+            {
                 return GetExperimentResult(experiment, featureId: featureId);
             }
 
-            // 10. Use the forced value for the experiment if one is specified.
+            if (!foundStickyBucket)
+            {
+                var ranges = experiment.Ranges?.Count > 0 ? experiment.Ranges : ExperimentUtilities.GetBucketRanges(experiment.Variations?.Count ?? 0, experiment.Coverage ?? 1, experiment.Weights ?? new List<double>());
+                assignedBucket = ExperimentUtilities.ChooseVariation(hash.Value, ranges.ToList());
+
+                // 10. Abort if a variation could not be assigned.
+
+                if (assignedBucket == -1)
+                {
+                    _logger.LogDebug("Aborting experiment, unable to assign this run to an experiment variation");
+                    return GetExperimentResult(experiment, featureId: featureId);
+                }
+            }
+
+            // 9.5 Unenroll if any prior sticky buckets are blocked by version.
+
+            if (stickyBucketVersionIsBlocked)
+            {
+                return GetExperimentResult(experiment, featureId: featureId, wasStickyBucketUsed: true);
+            }
+
+            // 11. Use the forced value for the experiment if one is specified.
 
             if (experiment.Force != null)
             {
@@ -471,7 +627,7 @@ namespace GrowthBook
                 return GetExperimentResult(experiment, experiment.Force.Value, featureId: featureId);
             }
 
-            // 11. Abort if we're currently operating in QA mode.
+            // 12. Abort if we're currently operating in QA mode.
 
             if (_qaMode)
             {
@@ -479,10 +635,29 @@ namespace GrowthBook
                 return GetExperimentResult(experiment, featureId: featureId);
             }
 
-            // 12. Run the experiment and track the result if we haven't seen this one before.
+            // 13. Run the experiment and track the result if we haven't seen this one before.
 
             _logger.LogInformation("Participation in experiment with key \'{ExperimentKey}\' is allowed, running the experiment", experiment.Key);
-            var result = GetExperimentResult(experiment, assigned, true, featureId, variationHash);
+            var result = GetExperimentResult(experiment, assignedBucket, true, featureId, hash, foundStickyBucket);
+
+            // 13.5 Store the value for later if sticky bucketing is enabled.
+
+            if (_stickyBucketService != null && !experiment.DisableStickyBucketing)
+            {
+                var experimentKey = ExperimentUtilities.GetStickyBucketExperimentKey(experiment.Key, experiment.BucketVersion);
+
+                var assignments = new Dictionary<string, string>
+                {
+                    [experimentKey] = result.Key
+                };
+
+                (var document, var isChanged) = ExperimentUtilities.GenerateStickyBucketAssignment(_stickyBucketService, hashAttribute, hashValue, assignments);
+
+                if (isChanged)
+                {
+                    _stickyBucketService.SaveAssignments(document);
+                }
+            }
 
             TryToTrack(experiment, result);
 
@@ -504,7 +679,7 @@ namespace GrowthBook
         {
             foreach(var filter in filters)
             {
-                var hashValue = Attributes.GetHashAttributeValue(filter.Attribute);
+                (_, var hashValue) = Attributes.GetHashAttributeAndValue(filter.Attribute);
 
                 if (hashValue.IsNullOrWhitespace())
                 {
@@ -534,7 +709,13 @@ namespace GrowthBook
                 return true;
             }
 
-            var hashValue = Attributes.GetHashAttributeValue(hashAttribute);
+            if (range is null && coverage == 0)
+            {
+                _logger.LogDebug("Range and coverage were not set, marking as not included in rollout");
+                return false;
+            }
+
+            (_, var hashValue) = Attributes.GetHashAttributeAndValue(hashAttribute);
 
             if (hashValue is null)
             {
@@ -564,10 +745,8 @@ namespace GrowthBook
         /// <param name="variationIndex">The variation id, if specified.</param>
         /// <param name="hashUsed">Whether or not a hash was used in assignment.</param>
         /// <returns>The experiment result.</returns>
-        private ExperimentResult GetExperimentResult(Experiment experiment, int variationIndex = -1, bool hashUsed = false, string featureId = null, double? bucket = null)
+        private ExperimentResult GetExperimentResult(Experiment experiment, int variationIndex = -1, bool hashUsed = false, string featureId = null, double? bucketHash = null, bool wasStickyBucketUsed = false)
         {
-            string hashAttribute = experiment.HashAttribute ?? "id";
-
             var inExperiment = true;
 
             if (variationIndex < 0 || variationIndex >= experiment.Variations.Count)
@@ -576,7 +755,11 @@ namespace GrowthBook
                 inExperiment = false;
             }
 
-            var hashValue = Attributes.GetHashAttributeValue(hashAttribute);
+            var canUseStickyBucketing = _stickyBucketService != null && !experiment.DisableStickyBucketing;
+            var fallbackAttribute = canUseStickyBucketing ? experiment.FallbackAttribute : default;
+
+            (var hashAttribute, var hashValue) = Attributes.GetHashAttributeAndValue(experiment.HashAttribute, fallbackAttributeKey: fallbackAttribute);
+            
             var meta = experiment.Meta?.Count > 0 ? experiment.Meta[variationIndex] : null;
 
             var result = new ExperimentResult
@@ -588,12 +771,16 @@ namespace GrowthBook
                 HashUsed = hashUsed,
                 HashValue = hashValue,
                 Value = experiment.Variations is null ? null : experiment.Variations[variationIndex],
-                VariationId = variationIndex
+                VariationId = variationIndex,
+                Name = meta?.Name,
+                Passthrough = meta?.Passthrough ?? false,
+                Bucket = bucketHash ?? 0d,
+                StickyBucketUsed = wasStickyBucketUsed
             };
 
             result.Name = meta?.Name;
             result.Passthrough = meta?.Passthrough ?? false;
-            result.Bucket = bucket ?? 0f;
+            result.Bucket = bucketHash ?? 0d;
 
             return result;
         }

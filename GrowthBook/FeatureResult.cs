@@ -18,6 +18,8 @@ namespace GrowthBook
             public const string DefaultValue = "defaultValue";
             public const string Force = "force";
             public const string Experiment = "experiment";
+            public const string CyclicPrerequisite = "cyclicPrerequisite";
+            public const string Prerequisite = "prerequisite";
         }
 
         /// <summary>
@@ -48,7 +50,7 @@ namespace GrowthBook
         public bool Off { get { return !On; } }
 
         /// <summary>
-        /// One of "unknownFeature", "defaultValue", "force", or "experiment".
+        /// One of "unknownFeature", "defaultValue", "force", "experiment", or "cyclicPrerequisite".
         /// </summary>
         public string Source { get; set; }
 
