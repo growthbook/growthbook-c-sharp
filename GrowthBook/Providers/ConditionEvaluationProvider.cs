@@ -1,9 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
 using System.Text.RegularExpressions;
-using System.Xml.Linq;
 using GrowthBook.Extensions;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json.Linq;
@@ -14,6 +12,17 @@ namespace GrowthBook.Providers
     internal sealed class ConditionEvaluationProvider : IConditionEvaluationProvider
     {
         private readonly ILogger<ConditionEvaluationProvider> _logger;
+
+        /// <summary>
+        /// Dictionary containing comparison operators and their evaluation functions.
+        /// </summary>
+        private static readonly Dictionary<string, Func<int, bool>> ComparisonOperators = new Dictionary<string, Func<int, bool>>
+        {
+            ["$lt"] = result => result < 0,
+            ["$lte"] = result => result <= 0,
+            ["$gt"] = result => result > 0,
+            ["$gte"] = result => result >= 0
+        };
 
         public ConditionEvaluationProvider(ILogger<ConditionEvaluationProvider> logger) => _logger = logger;
 
@@ -194,24 +203,13 @@ namespace GrowthBook.Providers
                 return !conditionValue.Equals(attributeValue);
             }
 
-            var actualComparableValue = attributeValue as IComparable;
+            // Handle comparison operators with a cleaner approach
+            if (ComparisonOperators.TryGetValue(op, out var comparisonFunc))
+            {
+                return EvaluateComparison(attributeValue, conditionValue, comparisonFunc);
+            }
 
-            if (op == "$lt")
-            {
-                return actualComparableValue is null || actualComparableValue?.CompareTo(conditionValue) < 0;
-            }
-            if (op == "$lte")
-            {
-                return actualComparableValue is null || actualComparableValue?.CompareTo(conditionValue) <= 0;
-            }
-            if (op == "$gt")
-            {
-                return actualComparableValue is null || actualComparableValue?.CompareTo(conditionValue) > 0;
-            }
-            if (op == "$gte")
-            {
-                return actualComparableValue is null || actualComparableValue?.CompareTo(conditionValue) >= 0;
-            }
+            var actualComparableValue = attributeValue as IComparable;
 
             if (op == "$regex")
             {
@@ -470,6 +468,35 @@ namespace GrowthBook.Providers
                 default:
                     return "unknown";
             }
+        }
+
+        /// <summary>
+        /// Evaluates a comparison operation between an attribute value and a condition value.
+        /// Returns false if the attribute is null/missing, as null values should not satisfy any comparison.
+        /// </summary>
+        /// <param name="attributeValue">The attribute value to compare.</param>
+        /// <param name="conditionValue">The condition value to compare against.</param>
+        /// <param name="meetsComparison">Function that determines if the comparison result meets the criteria.</param>
+        /// <returns>True if the comparison is satisfied, false if attribute is null or comparison fails.</returns>
+        private bool EvaluateComparison(JToken attributeValue, JToken conditionValue, Func<int, bool> meetsComparison)
+        {
+            // Null/missing attributes should never satisfy comparison operators
+            if (attributeValue.IsNull())
+            {
+                return false;
+            }
+
+            var actualComparableValue = attributeValue as IComparable;
+
+            if (actualComparableValue == null)
+            {
+                _logger.LogWarning("Unable to compare non-comparable types");
+                return false;
+            }
+
+            var comparisonResult = actualComparableValue.CompareTo(conditionValue);
+
+            return meetsComparison(comparisonResult);
         }
     }
 }

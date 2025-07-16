@@ -629,6 +629,118 @@
                 }
             },
             {},
+            false
+        ],
+        [
+            "null attribute with $gt - security test",
+            {
+                "userLevel": {
+                    "$gte": 5
+                }
+            },
+            {
+                "userLevel": null
+            },
+            false
+        ],
+        [
+            "missing attribute with $gte - age verification test",
+            {
+                "age": {
+                    "$gte": 18
+                }
+            },
+            {},
+            false
+        ],
+        [
+            "null attribute with $gt - credit score test",
+            {
+                "creditScore": {
+                    "$gt": 600
+                }
+            },
+            {
+                "creditScore": null
+            },
+            false
+        ],
+        [
+            "missing attribute with $gte - resource allocation test",
+            {
+                "availableMemory": {
+                    "$gte": 1024
+                }
+            },
+            {},
+            false
+        ],
+        [
+            "null attribute with $gt - data quality test",
+            {
+                "dataQuality": {
+                    "$gt": 0.8
+                }
+            },
+            {
+                "dataQuality": null
+            },
+            false
+        ],
+        [
+            "missing attribute with $lt - upper bound test",
+            {
+                "temperature": {
+                    "$lt": 100
+                }
+            },
+            {},
+            false
+        ],
+        [
+            "null attribute with $lte - lower bound test",
+            {
+                "pressure": {
+                    "$lte": 50
+                }
+            },
+            {
+                "pressure": null
+            },
+            false
+        ],
+        [
+            "mixed conditions with missing attributes",
+            {
+                "$and": [
+                    {
+                        "age": {
+                            "$gte": 18
+                        }
+                    },
+                    {
+                        "creditScore": {
+                            "$gt": 600
+                        }
+                    }
+                ]
+            },
+            {
+                "age": 25
+            },
+            false
+        ],
+        [
+            "comparison with existing valid attribute",
+            {
+                "age": {
+                    "$gte": 18,
+                    "$lt": 65
+                }
+            },
+            {
+                "age": 30
+            },
             true
         ],
         [
