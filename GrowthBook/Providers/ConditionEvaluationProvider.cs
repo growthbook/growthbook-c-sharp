@@ -90,7 +90,7 @@ namespace GrowthBook.Providers
 
             foreach (JObject condition in conditions)
             {
-                if (EvalCondition(attributes, condition))
+                if (EvalCondition(attributes, condition, savedGroups))
                 {
                     return true;
                 }
@@ -111,7 +111,7 @@ namespace GrowthBook.Providers
 
             foreach (JObject condition in conditions)
             {
-                if (!EvalCondition(attributes, condition))
+                if (!EvalCondition(attributes, condition, savedGroups))
                 {
                     return false;
                 }
@@ -174,7 +174,7 @@ namespace GrowthBook.Providers
                     return true;
                 }
 
-                if (EvalCondition(elem, condition))
+                if (EvalCondition(elem, condition, savedGroups))
                 {
                     return true;
                 }
@@ -216,6 +216,17 @@ namespace GrowthBook.Providers
                 try
                 {
                     return Regex.IsMatch(attributeValue?.ToString(), conditionValue?.ToString());
+                }
+                catch (ArgumentException)
+                {
+                    return false;
+                }
+            }
+            if (op == "$nregex")
+            {
+                try
+                {
+                    return !Regex.IsMatch(attributeValue?.ToString(), conditionValue?.ToString());
                 }
                 catch (ArgumentException)
                 {
