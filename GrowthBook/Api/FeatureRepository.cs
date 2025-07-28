@@ -44,7 +44,11 @@ namespace GrowthBook.Api
                 _logger.LogInformation("Cache has expired or option to force refresh was set, refreshing the cache from the API");
                 _logger.LogDebug("Cache expired: \'{CacheIsCacheExpired}\' and option to force refresh: \'{OptionsForceRefresh}\'", _cache.IsCacheExpired, options?.ForceRefresh);
 
-                var refreshTask = _backgroundRefreshWorker.RefreshCacheFromApi(cancellationToken);
+                // Use TaskFactory.StartNew to decouple from the current SynchronizationContext
+                // This prevents threading issues in .NET Framework MVC when the original HttpContext
+                // thread is no longer available after the HTTP request completes
+                var taskFactory = new TaskFactory(cancellationToken ?? CancellationToken.None);
+                var refreshTask = taskFactory.StartNew(async () => await _backgroundRefreshWorker.RefreshCacheFromApi(cancellationToken)).Unwrap();
 
                 // When there aren't any features in the cache to begin with, we need to just wait until
                 // that has been officially refreshed to proceed (otherwise the caller gets nothing up front

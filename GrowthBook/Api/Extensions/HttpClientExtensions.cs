@@ -10,6 +10,7 @@ using GrowthBook.Extensions;
 using Newtonsoft.Json.Linq;
 using Microsoft.Extensions.Logging;
 using System.Linq;
+using GrowthBook.Exceptions;
 
 namespace GrowthBook.Api.Extensions
 {
@@ -28,8 +29,24 @@ namespace GrowthBook.Api.Extensions
 
             if (!response.IsSuccessStatusCode)
             {
-                logger.LogError($"HTTP request to default Features API endpoint '{endpoint}' resulted in a {response.StatusCode} status code");
-                return (null, false);
+                var statusCode = (int)response.StatusCode;
+                var message = $"Failed to load features from API. HTTP {statusCode} ({response.StatusCode}) for endpoint '{endpoint}'";
+                
+                if (statusCode == 400)
+                {
+                    message += ". This usually indicates an invalid ClientKey.";
+                }
+                else if (statusCode == 401)
+                {
+                    message += ". Authentication failed - check your ClientKey.";
+                }
+                else if (statusCode == 403)
+                {
+                    message += ". Access forbidden - check your ClientKey permissions.";
+                }
+                
+                logger.LogError(message);
+                throw new FeatureLoadException(message, statusCode);
             }
 
             var json = await response.Content.ReadAsStringAsync();

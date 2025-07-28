@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Text.RegularExpressions;
 using GrowthBook.Extensions;
@@ -90,7 +91,7 @@ namespace GrowthBook.Providers
 
             foreach (JObject condition in conditions)
             {
-                if (EvalCondition(attributes, condition))
+                if (EvalCondition(attributes, condition, savedGroups))
                 {
                     return true;
                 }
@@ -111,7 +112,7 @@ namespace GrowthBook.Providers
 
             foreach (JObject condition in conditions)
             {
-                if (!EvalCondition(attributes, condition))
+                if (!EvalCondition(attributes, condition, savedGroups))
                 {
                     return false;
                 }
@@ -174,7 +175,7 @@ namespace GrowthBook.Providers
                     return true;
                 }
 
-                if (EvalCondition(elem, condition))
+                if (EvalCondition(elem, condition, savedGroups))
                 {
                     return true;
                 }
@@ -216,6 +217,17 @@ namespace GrowthBook.Providers
                 try
                 {
                     return Regex.IsMatch(attributeValue?.ToString(), conditionValue?.ToString());
+                }
+                catch (ArgumentException)
+                {
+                    return false;
+                }
+            }
+            if (op == "$nregex")
+            {
+                try
+                {
+                    return !Regex.IsMatch(attributeValue?.ToString(), conditionValue?.ToString());
                 }
                 catch (ArgumentException)
                 {
@@ -486,17 +498,74 @@ namespace GrowthBook.Providers
                 return false;
             }
 
-            var actualComparableValue = attributeValue as IComparable;
-
-            if (actualComparableValue == null)
+            // Try to parse both values as DateTime first
+            if (TryParseDateTimes(attributeValue, conditionValue, out var attrDate, out var condDate))
             {
-                _logger.LogWarning("Unable to compare non-comparable types");
+                var dateComparisonResult = attrDate.CompareTo(condDate);
+                return meetsComparison(dateComparisonResult);
+            }
+
+            // Try to parse both values as numbers
+            if (TryParseNumbers(attributeValue, conditionValue, out var attrNumber, out var condNumber))
+            {
+                var numberComparisonResult = attrNumber.CompareTo(condNumber);
+                return meetsComparison(numberComparisonResult);
+            }
+
+            // Fall back to string comparison
+            var attrString = attributeValue.ToString();
+            var condString = conditionValue.ToString();
+            
+            var stringComparisonResult = string.Compare(attrString, condString, StringComparison.Ordinal);
+            return meetsComparison(stringComparisonResult);
+        }
+
+        /// <summary>
+        /// Attempts to parse both values as DateTime objects for proper date comparison.
+        /// </summary>
+        private static bool TryParseDateTimes(JToken attributeValue, JToken conditionValue, out DateTime attrDate, out DateTime condDate)
+        {
+            attrDate = default;
+            condDate = default;
+
+            var attrString = attributeValue.ToString();
+            var condString = conditionValue.ToString();
+
+            // Try parsing both values as DateTime
+            var attrParsed = DateTime.TryParse(attrString, null, DateTimeStyles.RoundtripKind, out attrDate);
+            var condParsed = DateTime.TryParse(condString, null, DateTimeStyles.RoundtripKind, out condDate);
+
+            return attrParsed && condParsed;
+        }
+
+        /// <summary>
+        /// Attempts to parse both values as numeric values for proper numeric comparison.
+        /// </summary>
+        private static bool TryParseNumbers(JToken attributeValue, JToken conditionValue, out double attrNumber, out double condNumber)
+        {
+            attrNumber = default;
+            condNumber = default;
+
+            // First try to get numeric values from JToken types directly
+            if (attributeValue.Type == JTokenType.Integer || attributeValue.Type == JTokenType.Float)
+            {
+                attrNumber = attributeValue.Value<double>();
+            }
+            else if (!double.TryParse(attributeValue.ToString(), out attrNumber))
+            {
                 return false;
             }
 
-            var comparisonResult = actualComparableValue.CompareTo(conditionValue);
+            if (conditionValue.Type == JTokenType.Integer || conditionValue.Type == JTokenType.Float)
+            {
+                condNumber = conditionValue.Value<double>();
+            }
+            else if (!double.TryParse(conditionValue.ToString(), out condNumber))
+            {
+                return false;
+            }
 
-            return meetsComparison(comparisonResult);
+            return true;
         }
     }
 }
