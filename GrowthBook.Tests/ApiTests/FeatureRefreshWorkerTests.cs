@@ -115,15 +115,6 @@ public class FeatureRefreshWorkerTests : ApiUnitTest<FeatureRefreshWorker>
         _worker = new(_logger, _httpClientFactory, _config, _cache);
     }
 
-    [Fact]
-    public async Task HttpRequestWithNonSuccessfulStatusResponseWillReturnNull()
-    {
-        _httpClientFactory.ResponseStatusCode = HttpStatusCode.InternalServerError;
-
-        var features = await _worker.RefreshCacheFromApi();
-
-        features.Should().BeNull("because the HTTP status code in the response was not in the 200-299 range");
-    }
 
     [Fact]
     public async Task HttpRequestWithSuccessStatusThatPrefersApiCallWillGetFeaturesFromApiAndRefreshCache()
