@@ -183,6 +183,75 @@ namespace GrowthBook
             Dispose();
         }
 
+        /// <summary>
+        /// Updates user attributes from an IDictionary for singleton usage pattern.
+        /// </summary>
+        /// <param name="attributes">New user attributes as IDictionary</param>
+        public void UpdateAttributes(IDictionary<string, object> attributes)
+        {
+            if (attributes != null)
+            {
+                Attributes = JObject.FromObject(attributes);
+                _logger?.LogDebug("Updated attributes with {Count} properties", attributes.Count);
+            }
+            else
+            {
+                Attributes = new JObject();
+                _logger?.LogDebug("Cleared attributes");
+            }
+        }
+
+        /// <summary>
+        /// Updates user attributes from an anonymous object for singleton usage pattern.
+        /// </summary>
+        /// <param name="attributes">New user attributes as anonymous object</param>
+        public void UpdateAttributes(object attributes)
+        {
+            if (attributes != null)
+            {
+                Attributes = JObject.FromObject(attributes);
+                _logger?.LogDebug("Updated attributes from object");
+            }
+            else
+            {
+                Attributes = new JObject();
+                _logger?.LogDebug("Cleared attributes");
+            }
+        }
+
+        /// <summary>
+        /// Merges additional attributes with existing ones.
+        /// </summary>
+        /// <param name="additionalAttributes">Additional attributes to merge</param>
+        public void MergeAttributes(IDictionary<string, object> additionalAttributes)
+        {
+            if (additionalAttributes == null) return;
+
+            foreach (var kvp in additionalAttributes)
+            {
+                Attributes[kvp.Key] = JToken.FromObject(kvp.Value);
+            }
+            
+            _logger?.LogDebug("Merged {Count} additional attributes", additionalAttributes.Count);
+        }
+
+        /// <summary>
+        /// Merges additional attributes from an anonymous object with existing ones.
+        /// </summary>
+        /// <param name="additionalAttributes">Additional attributes to merge as anonymous object</param>
+        public void MergeAttributes(object additionalAttributes)
+        {
+            if (additionalAttributes == null) return;
+
+            var additionalJObject = JObject.FromObject(additionalAttributes);
+            foreach (var property in additionalJObject.Properties())
+            {
+                Attributes[property.Name] = property.Value;
+            }
+            
+            _logger?.LogDebug("Merged additional attributes from object");
+        }
+
         /// <inheritdoc />
         public bool IsOn(string key)
         {
