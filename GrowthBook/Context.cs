@@ -100,5 +100,11 @@ namespace GrowthBook
         /// A logger factory implementation that will enable logging throughout the SDK. Optional.
         /// </summary>
         public ILoggerFactory LoggerFactory { get; set; }
+
+        /// <summary>
+        /// Custom cache directory path for cache manager. Optional.
+        /// Uses system temp directory if not specified.
+        /// </summary>
+        public string CachePath { get; set; }
     }
 }

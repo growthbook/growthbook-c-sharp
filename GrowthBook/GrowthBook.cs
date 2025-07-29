@@ -96,15 +96,29 @@ namespace GrowthBook
             }
             else
             {
-                var featureCache = new InMemoryFeatureCache(cacheExpirationInSeconds: 60);
                 var httpClientFactory = new HttpClientFactory(requestTimeoutInSeconds: 60);
 
+                // Use file-based cache (similar to Swift CachingManager)
+                var featureCacheLogger = _loggerFactory.CreateLogger<Api.InMemoryFeatureCache>();
+                var featureCache = new Api.InMemoryFeatureCache(logger: featureCacheLogger);
+                
+                if (!string.IsNullOrEmpty(context.CachePath))
+                {
+                    featureCache.SetCustomCachePath(context.CachePath);
+                }
+                
+                if (!string.IsNullOrEmpty(context.ClientKey))
+                {
+                    featureCache.SetCacheKey(context.ClientKey);
+                }
+                
                 var featureRefreshLogger = _loggerFactory.CreateLogger<FeatureRefreshWorker>();
                 var featureRepositoryLogger = _loggerFactory.CreateLogger<FeatureRepository>();
-
                 var featureRefreshWorker = new FeatureRefreshWorker(featureRefreshLogger, httpClientFactory, config, featureCache);
-
+                
                 _featureRepository = new FeatureRepository(featureRepositoryLogger, featureCache, featureRefreshWorker);
+                
+                _logger.LogDebug("GrowthBook initialized with file-based cache");
             }
         }
 
@@ -223,6 +237,7 @@ namespace GrowthBook
         {
             return _assigned;
         }
+
 
         /// <inheritdoc />
         public Action Subscribe(Action<Experiment, ExperimentResult> callback)
