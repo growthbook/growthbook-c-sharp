@@ -58,13 +58,20 @@ namespace GrowthBook.Api
                 // that has been officially refreshed to proceed (otherwise the caller gets nothing up front
                 // and has no way of determining when to check back). The other way to wait is if they explicitly
                 // have noted that this is something they'd like to do.
-
                 if (_cache.FeatureCount == 0 || options?.WaitForCompletion == true)
                 {
                     _logger.LogInformation("Either cache currently has no features or the option to wait for completion was set, waiting for cache to refresh");
-                    _logger.LogDebug("Feature count: \'{CacheFeatureCount}\' and option to wait for completion: \'{OptionsWaitForCompletion}\'", _cache.FeatureCount, options?.WaitForCompletion);
-
+                    _logger.LogDebug("Feature count: '{CacheFeatureCount}' and option to wait for completion: '{OptionsWaitForCompletion}'", _cache.FeatureCount, options?.WaitForCompletion);
                     return await refreshTask;
+                }
+                else
+                {
+                    // Start the refresh but don't wait - fire and forget
+                    _ = refreshTask.ContinueWith(t =>
+                    {
+                        if (t.IsFaulted)
+                            _logger.LogError(t.Exception, "Background cache refresh failed");
+                    }, TaskContinuationOptions.OnlyOnFaulted);
                 }
             }
 
