@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
@@ -26,7 +27,7 @@ namespace GrowthBook
     {
         private readonly bool _qaMode;
         private readonly Dictionary<string, ExperimentAssignment> _assigned;
-        private readonly HashSet<string> _tracked;
+        private readonly ConcurrentDictionary<string, byte> _tracked;
         private Action<Experiment, ExperimentResult> _trackingCallback;
         private readonly List<Action<Experiment, ExperimentResult>> _subscriptions;
         private bool _disposedValue;
@@ -54,8 +55,8 @@ namespace GrowthBook
 
             _qaMode = context.QaMode;
             _trackingCallback = context.TrackingCallback;
-            _tracked = new HashSet<string>();
             _assigned = new Dictionary<string, ExperimentAssignment>();
+            _tracked = new ConcurrentDictionary<string, byte>();
             _subscriptions = new List<Action<Experiment, ExperimentResult>>();
             _stickyBucketService = context.StickyBucketService;
             _stickyBucketAssignmentDocs = context.StickyBucketAssignmentDocs ?? new Dictionary<string, StickyAssignmentsDocument>();
@@ -152,8 +153,8 @@ namespace GrowthBook
                     Features.Clear();
                     ForcedVariations = null;
                     _trackingCallback = null;
-                    _tracked.Clear();
                     _assigned.Clear();
+                    _tracked.Clear();
                     _subscriptions.Clear();
                     _featureRepository.Cancel();
 
@@ -536,12 +537,30 @@ namespace GrowthBook
 
         private void TryAssignExperimentResult(Experiment experiment, ExperimentResult result)
         {
+            var assignment = new ExperimentAssignment { Experiment = experiment, Result = result };
+            bool shouldFireCallbacks = false;
+            
+            // Always record the assignment locally for GetAllResults()
             if (!_assigned.TryGetValue(experiment.Key, out ExperimentAssignment prev)
                 || prev.Result.InExperiment != result.InExperiment
                 || prev.Result.VariationId != result.VariationId)
             {
-                _assigned.Add(experiment.Key, new ExperimentAssignment { Experiment = experiment, Result = result });
+                _assigned[experiment.Key] = assignment;
+                shouldFireCallbacks = true;
+            }
+            
+            // Also use repository tracking if available (for preventing duplicate callbacks across instances)
+            if (_featureRepository != null)
+            {
+                if (!_featureRepository.HasIdenticalAssignment(experiment.Key, assignment))
+                {
+                    _featureRepository.RecordAssignment(experiment.Key, assignment);
+                }
+            }
 
+            // Fire subscription callbacks if needed
+            if (shouldFireCallbacks)
+            {
                 foreach (Action<Experiment, ExperimentResult> callback in _subscriptions)
                 {
                     try
@@ -922,12 +941,25 @@ namespace GrowthBook
 
             string key = result.HashAttribute + result.HashValue + experiment.Key + result.VariationId;
 
-            if (!_tracked.Contains(key))
+            // Use atomic operations to prevent race conditions in concurrent scenarios
+            bool shouldTrack = false;
+            
+            if (_featureRepository != null)
+            {
+                // TryMarkAsTracked returns true only if key was successfully added (didn't exist before)
+                shouldTrack = _featureRepository.TryMarkAsTracked(key);
+            }
+            else
+            {
+                // TryAdd returns true only if key was successfully added (didn't exist before)
+                shouldTrack = _tracked.TryAdd(key, 0);
+            }
+
+            if (shouldTrack)
             {
                 try
                 {
                     _trackingCallback(experiment, result);
-                    _tracked.Add(key);
                 }
                 catch (Exception ex)
                 {

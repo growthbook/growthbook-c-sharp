@@ -18,12 +18,16 @@ namespace GrowthBook.Api
         private readonly ILogger<FeatureRepository> _logger;
         private readonly IGrowthBookFeatureCache _cache;
         private readonly IGrowthBookFeatureRefreshWorker _backgroundRefreshWorker;
+        private readonly ConcurrentDictionary<string, ExperimentAssignment> _assigned;
+        private readonly ConcurrentDictionary<string, byte> _tracked;
 
         public FeatureRepository(ILogger<FeatureRepository> logger, IGrowthBookFeatureCache cache, IGrowthBookFeatureRefreshWorker backgroundRefreshWorker)
         {
             _logger = logger;
             _cache = cache;
             _backgroundRefreshWorker = backgroundRefreshWorker;
+            _assigned = new ConcurrentDictionary<string, ExperimentAssignment>();
+            _tracked = new ConcurrentDictionary<string, byte>();
         }
 
         /// <inheritdoc/>
@@ -67,6 +71,42 @@ namespace GrowthBook.Api
             _logger.LogInformation("Cache is not expired and the option to force refresh was not set, retrieving features from cache");
 
             return await _cache.GetFeatures(cancellationToken);
+        }
+
+        /// <inheritdoc/>
+        public bool HasIdenticalAssignment(string experimentKey, ExperimentAssignment assignment)
+        {
+            if (!_assigned.TryGetValue(experimentKey, out ExperimentAssignment prev))
+            {
+                return false;
+            }
+
+            return prev.Result.InExperiment == assignment.Result.InExperiment
+                && prev.Result.VariationId == assignment.Result.VariationId;
+        }
+
+        /// <inheritdoc/>
+        public void RecordAssignment(string experimentKey, ExperimentAssignment assignment)
+        {
+            _assigned.AddOrUpdate(experimentKey, assignment, (key, oldValue) => assignment);
+        }
+
+        /// <inheritdoc/>
+        public bool IsAlreadyTracked(string trackingKey)
+        {
+            return _tracked.ContainsKey(trackingKey);
+        }
+
+        /// <inheritdoc/>
+        public void MarkAsTracked(string trackingKey)
+        {
+            _tracked.TryAdd(trackingKey, 0);
+        }
+
+        /// <inheritdoc/>
+        public bool TryMarkAsTracked(string trackingKey)
+        {
+            return _tracked.TryAdd(trackingKey, 0);
         }
     }
 }
