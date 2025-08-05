@@ -28,8 +28,9 @@ namespace GrowthBook
         /// Creates a GrowthBook instance for a specific user with IDictionary attributes.
         /// </summary>
         /// <param name="userAttributes">User-specific attributes</param>
+        /// <param name="trackingCallback">Optional tracking callback for this user context</param>
         /// <returns>New GrowthBook instance with user context</returns>
-        public GrowthBook CreateForUser(IDictionary<string, object> userAttributes)
+        public GrowthBook CreateForUser(IDictionary<string, object> userAttributes, Action<Experiment, ExperimentResult> trackingCallback = null)
         {
             if (_disposed) throw new ObjectDisposedException(nameof(GrowthBookFactory));
             
@@ -48,6 +49,8 @@ namespace GrowthBook
                 context.FeatureRepository = _sharedRepository;
             }
             
+            context.TrackingCallback = trackingCallback;
+            
             return new GrowthBook(context);
         }
 
@@ -55,8 +58,9 @@ namespace GrowthBook
         /// Creates a GrowthBook instance for a specific user with anonymous object attributes.
         /// </summary>
         /// <param name="userAttributes">User-specific attributes as anonymous object</param>
+        /// <param name="trackingCallback">Optional tracking callback for this user context</param>
         /// <returns>New GrowthBook instance with user context</returns>
-        public GrowthBook CreateForUser(object userAttributes)
+        public GrowthBook CreateForUser(object userAttributes, Action<Experiment, ExperimentResult> trackingCallback = null)
         {
             if (_disposed) throw new ObjectDisposedException(nameof(GrowthBookFactory));
             
@@ -75,6 +79,8 @@ namespace GrowthBook
             {
                 context.FeatureRepository = _sharedRepository;
             }
+            
+            context.TrackingCallback = trackingCallback;
             
             return new GrowthBook(context);
         }
