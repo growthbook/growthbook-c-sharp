@@ -21,13 +21,13 @@ public class StickyBucketTests : UnitTest
         [TestPropertyIndex(1)]
         public Context Context { get; set; }
         [TestPropertyIndex(2)]
-        public StickyAssignmentsDocument[] PreExistingAssignmentDocs { get; set; } = [];
+        public StickyAssignmentsDocument[] PreExistingAssignmentDocs { get; set; } = Array.Empty<StickyAssignmentsDocument>();
         [TestPropertyIndex(3)]
         public string FeatureName { get; set; }
         [TestPropertyIndex(4)]
         public JToken ExpectedResult { get; set; }
         [TestPropertyIndex(5)]
-        public Dictionary<string, StickyAssignmentsDocument> ExpectedAssignmentDocs { get; set; } = [];
+        public Dictionary<string, StickyAssignmentsDocument> ExpectedAssignmentDocs { get; set; } = new Dictionary<string, StickyAssignmentsDocument>();
     }
 
     [Theory]
