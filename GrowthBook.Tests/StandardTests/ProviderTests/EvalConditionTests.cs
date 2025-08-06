@@ -26,7 +26,7 @@ public class EvalConditionTests : UnitTest
         [TestPropertyIndex(3)]
         public bool ExpectedValue { get; set; }
         [TestPropertyIndex(4, isOptional: true)]
-        public Dictionary<string, object[]> Groups { get; set; } = [];
+        public Dictionary<string, object[]> Groups { get; set; } = new Dictionary<string, object[]>();
     }
 
     [Theory]

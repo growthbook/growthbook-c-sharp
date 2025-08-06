@@ -108,25 +108,23 @@ public class RegressionTests : UnitTest
     [Fact]
     public void EvalIsInConditionShouldNotDifferWhenAttributeIsEmptyInsteadOfNull()
     {
-        var featureJson = """
-            {
-                "defaultValue": false,
-                "rules": [
+        var featureJson = @"{
+                ""defaultValue"": false,
+                ""rules"": [
                     {
-                        "condition": {
-                        "userId": {
-                            "$in": [
-                            "ac1",
-                            "ac2",
-                            "ac3"
+                        ""condition"": {
+                        ""userId"": {
+                            ""$in"": [
+                            ""ac1"",
+                            ""ac2"",
+                            ""ac3""
                             ]
                         }
                         },
-                        "force": true
+                        ""force"": true
                     }
                 ]
-            }
-            """;
+            }";
 
         var feature = JsonConvert.DeserializeObject<Feature>(featureJson);
 
