@@ -10,13 +10,15 @@ jobs:
       SHOULD_DEPLOY: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
     strategy:
       matrix:
-        dotnet-version: ["3.1.x", "6.0.x", "7.0.x"]
+        dotnet-version: ["6.0.x", "7.0.x"]
     steps:
       - uses: actions/checkout@v4
       - name: Setup dotnet ${{ matrix.dotnet-version }}
         uses: actions/setup-dotnet@v3
         with:
-          dotnet-version: ${{ matrix.dotnet-version }}
+          dotnet-version: |
+            6.0.x
+            ${{ matrix.dotnet-version }}
 
       - name: Restore
         run: dotnet restore GrowthBook/GrowthBook.csproj
