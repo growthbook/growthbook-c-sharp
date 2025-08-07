@@ -25,6 +25,7 @@ namespace GrowthBook.Api
 
         public InMemoryFeatureCache(int cacheExpirationInSeconds = 60, ILogger<InMemoryFeatureCache> logger = null)
         {
+            _cacheExpirationInSeconds = cacheExpirationInSeconds;
             _logger = logger;
             LoadFromFile();
         }
@@ -33,14 +34,19 @@ namespace GrowthBook.Api
         {
             get
             {
-                lock(_cacheLock)
+                lock (_cacheLock)
                 {
                     return _cachedFeatures.Count;
                 }
             }
         }
 
-        public bool IsCacheExpired => false; // File-based cache doesn't expire automatically
+        private DateTime _lastRefreshTime = DateTime.MinValue;
+        private readonly int _cacheExpirationInSeconds;
+
+        public bool IsCacheExpired =>
+            _lastRefreshTime == DateTime.MinValue ||
+            DateTime.UtcNow.Subtract(_lastRefreshTime).TotalSeconds > _cacheExpirationInSeconds;
 
         public Task<IDictionary<string, Feature>> GetFeatures(CancellationToken? cancellationToken = null)
         {
@@ -52,9 +58,10 @@ namespace GrowthBook.Api
 
         public Task RefreshWith(IDictionary<string, Feature> features, CancellationToken? cancellationToken = null)
         {
-            lock(_cacheLock)
+            lock (_cacheLock)
             {
                 _cachedFeatures = new Dictionary<string, Feature>(features);
+                _lastRefreshTime = DateTime.UtcNow;
                 SaveToFile();
                 return Task.CompletedTask;
             }
@@ -65,7 +72,7 @@ namespace GrowthBook.Api
         /// </summary>
         public void SetCacheKey(string key)
         {
-            lock(_cacheLock)
+            lock (_cacheLock)
             {
                 _cacheKey = CreateSha256Hash(key ?? "");
             }
@@ -76,7 +83,7 @@ namespace GrowthBook.Api
         /// </summary>
         public void SetCustomCachePath(string path)
         {
-            lock(_cacheLock)
+            lock (_cacheLock)
             {
                 _customCachePath = path;
             }
@@ -87,7 +94,7 @@ namespace GrowthBook.Api
         /// </summary>
         public void ClearCache()
         {
-            lock(_cacheLock)
+            lock (_cacheLock)
             {
                 try
                 {
@@ -108,7 +115,7 @@ namespace GrowthBook.Api
 
         private void LoadFromFile()
         {
-            lock(_cacheLock)
+            lock (_cacheLock)
             {
                 try
                 {
@@ -149,7 +156,7 @@ namespace GrowthBook.Api
 
                 var content = JsonConvert.SerializeObject(_cachedFeatures, Formatting.None);
                 File.WriteAllText(filePath, content);
-                
+
                 _logger?.LogDebug("Saved {Count} features to cache file", _cachedFeatures.Count);
             }
             catch (Exception ex)
