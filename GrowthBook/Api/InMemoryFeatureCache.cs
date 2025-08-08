@@ -98,17 +98,19 @@ namespace GrowthBook.Api
             {
                 try
                 {
+                    _cachedFeatures.Clear();
+
                     var directoryPath = GetCacheDirectoryPath();
                     if (Directory.Exists(directoryPath))
                     {
                         Directory.Delete(directoryPath, recursive: true);
                         _logger?.LogInformation("Cache cleared successfully: {DirectoryPath}", directoryPath);
                     }
-                    _cachedFeatures.Clear();
                 }
                 catch (Exception ex)
                 {
                     _logger?.LogError(ex, "Failed to clear cache");
+                    _cachedFeatures.Clear();
                 }
             }
         }
