@@ -250,8 +250,13 @@ namespace GrowthBook
                     return GetFeatureResult(null, FeatureResult.SourceId.UnknownFeature);
                 }
 
+                _logger.LogDebug("Evaluating feature '{FeatureId}' with {RuleCount} rules", featureId, feature?.Rules?.Count ?? 0);
+
+                var ruleIndex = 0;
+
                 foreach (FeatureRule rule in feature?.Rules ?? Enumerable.Empty<FeatureRule>())
                 {
+                    ruleIndex++;
                     if (rule.ParentConditions != null)
                     {
                         var passedPrerequisiteEvaluations = true;
@@ -265,6 +270,7 @@ namespace GrowthBook
                             // Don't continue evaluating if the prerequisite conditions have cycles.
                             if (parentResult.Source == FeatureResult.SourceId.CyclicPrerequisite)
                             {
+                                _logger.LogWarning("Detected cyclic prerequisite while evaluating parent feature '{ParentId}' for feature '{FeatureId}'. Evaluated: {EvaluatedFeatures}", parentCondition.Id, featureId, string.Join(",", evaluatedFeatures));
                                 return GetFeatureResult(default, FeatureResult.SourceId.CyclicPrerequisite);
                             }
 
@@ -278,10 +284,12 @@ namespace GrowthBook
 
                                 if (parentCondition.Gate)
                                 {
+                                    _logger.LogDebug("Rule {RuleIndex}: Gated prerequisite '{ParentId}' failed for feature '{FeatureId}', aborting", ruleIndex, parentCondition.Id, featureId);
                                     return GetFeatureResult(default, FeatureResult.SourceId.Prerequisite);
                                 }
 
                                 passedPrerequisiteEvaluations = false;
+                                _logger.LogDebug("Rule {RuleIndex}: Prerequisite '{ParentId}' did not pass for feature '{FeatureId}', continuing to next rule", ruleIndex, parentCondition.Id, featureId);
                                 break;
                             }                            
                         }
@@ -299,6 +307,7 @@ namespace GrowthBook
 
                     if (!rule.Condition.IsNull() && !_conditionEvaluator.EvalCondition(Attributes, rule.Condition, _savedGroups))
                     {
+                        _logger.LogDebug("Rule {RuleIndex}: attribute condition did not match, continuing", ruleIndex);
                         continue;
                     }
 
@@ -306,6 +315,7 @@ namespace GrowthBook
                     {
                         if (!IsIncludedInRollout(rule.Seed ?? featureId, rule.HashAttribute, rule.Range, rule.Coverage, rule.HashVersion))
                         {
+                            _logger.LogDebug("Rule {RuleIndex}: excluded by rollout/coverage, continuing", ruleIndex);
                             continue;
                         }
 
@@ -324,6 +334,7 @@ namespace GrowthBook
                             }
                         }
 
+                        _logger.LogDebug("Rule {RuleIndex}: returning forced value for feature '{FeatureId}'", ruleIndex, featureId);
                         return GetFeatureResult(rule.Force, FeatureResult.SourceId.Force);
                     }
 
@@ -361,6 +372,7 @@ namespace GrowthBook
                     return GetFeatureResult(result.Value, FeatureResult.SourceId.Experiment, experiment, result);
                 }
 
+                _logger.LogDebug("No rules matched for feature '{FeatureId}', returning default value", featureId);
                 return GetFeatureResult(feature.DefaultValue ?? null, FeatureResult.SourceId.DefaultValue);
             }
             catch(Exception ex)
