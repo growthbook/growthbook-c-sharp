@@ -258,10 +258,11 @@ namespace GrowthBook
 
                         foreach (var parentCondition in rule.ParentConditions)
                         {
-                            var parentResult = EvaluateFeature(parentCondition.Id, evaluatedFeatures);
+                            // Use a fresh copy of the evaluated feature ids to avoid
+                            // incorrectly flagging repeated prerequisite evaluations as cycles
+                            var parentResult = EvaluateFeature(parentCondition.Id, new HashSet<string>(evaluatedFeatures));
 
                             // Don't continue evaluating if the prerequisite conditions have cycles.
-
                             if (parentResult.Source == FeatureResult.SourceId.CyclicPrerequisite)
                             {
                                 return GetFeatureResult(default, FeatureResult.SourceId.CyclicPrerequisite);
@@ -572,7 +573,9 @@ namespace GrowthBook
                 {
                     foreach (var parentCondition in experiment.ParentConditions)
                     {
-                        var parentResult = EvaluateFeature(parentCondition.Id);
+                        // Use a fresh copy of the evaluated feature ids to avoid
+                        // incorrectly flagging repeated prerequisite evaluations as cycles
+                        var parentResult = EvaluateFeature(parentCondition.Id, new HashSet<string>());
 
                         if (parentResult.Source == FeatureResult.SourceId.CyclicPrerequisite)
                         {
