@@ -75,6 +75,7 @@ public class FeatureRepositoryTests : ApiUnitTest<FeatureRepository>
         };
 
         var features = await _featureRepository.GetFeatures(options);
+        await Task.Delay(50);
 
         _ = _cache.Received(2).IsCacheExpired;
         _ = _cache.Received(2).FeatureCount;
