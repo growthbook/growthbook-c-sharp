@@ -131,11 +131,15 @@ namespace GrowthBook.Api
                             _logger.LogInformation("Cache has been refreshed with server sent event features");
                         });
                     }
-                    catch(HttpRequestException ex)
+                    catch (IOException ex) when (ex.InnerException is System.Net.WebException)
+                    {
+                        _logger.LogDebug("SSE stream was closed cleanly or cancelled: {Message}", ex.Message);
+                    }
+                    catch (HttpRequestException ex)
                     {
                         _logger.LogError(ex, "Encountered an HTTP exception during request to server sent events endpoint \'{ServerSentEventsApiEndpoint}\'", _serverSentEventsApiEndpoint);
                     }
-                    catch(Exception ex)
+                    catch (Exception ex)
                     {
                         _logger.LogError(ex, "Encountered an unhandled exception during request to server sent events endpoint \'{ServerSentEventsApiEndpoint}\'", _serverSentEventsApiEndpoint);
                     }
@@ -144,6 +148,7 @@ namespace GrowthBook.Api
                 _logger.LogInformation("The listener for server sent events was cancelled and has ended");
             });
         }
+
 
         private IDictionary<string, Feature> GetFeaturesFrom(string json)
         {

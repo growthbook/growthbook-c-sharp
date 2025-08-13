@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
@@ -10,6 +11,7 @@ using GrowthBook.Extensions;
 using GrowthBook.Providers;
 using GrowthBook.Services;
 using GrowthBook.Utilities;
+using GrowthBook.Exceptions;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -25,7 +27,7 @@ namespace GrowthBook
     {
         private readonly bool _qaMode;
         private readonly Dictionary<string, ExperimentAssignment> _assigned;
-        private readonly HashSet<string> _tracked;
+        private readonly ConcurrentDictionary<string, byte> _tracked;
         private Action<Experiment, ExperimentResult> _trackingCallback;
         private readonly List<Action<Experiment, ExperimentResult>> _subscriptions;
         private bool _disposedValue;
@@ -35,6 +37,8 @@ namespace GrowthBook
         private readonly IDictionary<string, StickyAssignmentsDocument> _stickyBucketAssignmentDocs;
         private readonly ILogger<GrowthBook> _logger;
         private readonly JObject _savedGroups;
+        private readonly ILoggerFactory _loggerFactory;
+        private readonly bool _ownsLoggerFactory;
 
         /// <summary>
         /// Creates a new GrowthBook instance from the passed context.
@@ -51,8 +55,8 @@ namespace GrowthBook
 
             _qaMode = context.QaMode;
             _trackingCallback = context.TrackingCallback;
-            _tracked = new HashSet<string>();
             _assigned = new Dictionary<string, ExperimentAssignment>();
+            _tracked = new ConcurrentDictionary<string, byte>();
             _subscriptions = new List<Action<Experiment, ExperimentResult>>();
             _stickyBucketService = context.StickyBucketService;
             _stickyBucketAssignmentDocs = context.StickyBucketAssignmentDocs ?? new Dictionary<string, StickyAssignmentsDocument>();
@@ -71,9 +75,19 @@ namespace GrowthBook
             // create disabled loggers by default so we don't force a particular logging provider
             // or logs on the user if they chose the defaults.
 
-            var loggerFactory = context.LoggerFactory ?? LoggerFactory.Create(builder => { });
-            _logger = loggerFactory.CreateLogger<GrowthBook>();
-            var conditionEvaluatorLogger = loggerFactory.CreateLogger<ConditionEvaluationProvider>();
+            if (context.LoggerFactory != null)
+            {
+                _loggerFactory = context.LoggerFactory;
+                _ownsLoggerFactory = false;
+            }
+            else
+            {
+                _loggerFactory = LoggerFactory.Create(builder => { });
+                _ownsLoggerFactory = true;
+            }
+
+            _logger = _loggerFactory.CreateLogger<GrowthBook>();
+            var conditionEvaluatorLogger = _loggerFactory.CreateLogger<ConditionEvaluationProvider>();
 
             _conditionEvaluator = new ConditionEvaluationProvider(conditionEvaluatorLogger);
 
@@ -86,8 +100,8 @@ namespace GrowthBook
                 var featureCache = new InMemoryFeatureCache(cacheExpirationInSeconds: 60);
                 var httpClientFactory = new HttpClientFactory(requestTimeoutInSeconds: 60);
 
-                var featureRefreshLogger = loggerFactory.CreateLogger<FeatureRefreshWorker>();
-                var featureRepositoryLogger = loggerFactory.CreateLogger<FeatureRepository>();
+                var featureRefreshLogger = _loggerFactory.CreateLogger<FeatureRefreshWorker>();
+                var featureRepositoryLogger = _loggerFactory.CreateLogger<FeatureRepository>();
 
                 var featureRefreshWorker = new FeatureRefreshWorker(featureRefreshLogger, httpClientFactory, config, featureCache);
 
@@ -139,12 +153,16 @@ namespace GrowthBook
                     Features.Clear();
                     ForcedVariations = null;
                     _trackingCallback = null;
-                    _tracked.Clear();
                     _assigned.Clear();
+                    _tracked.Clear();
                     _subscriptions.Clear();
                     _featureRepository.Cancel();
-                }
 
+                    if (_ownsLoggerFactory && _loggerFactory is IDisposable disposableFactory)
+                    {
+                        disposableFactory.Dispose();
+                    }
+                }
                 _disposedValue = true;
             }
         }
@@ -164,6 +182,75 @@ namespace GrowthBook
         public void Destroy()
         {
             Dispose();
+        }
+
+        /// <summary>
+        /// Updates user attributes from an IDictionary for singleton usage pattern.
+        /// </summary>
+        /// <param name="attributes">New user attributes as IDictionary</param>
+        public void UpdateAttributes(IDictionary<string, object> attributes)
+        {
+            if (attributes != null)
+            {
+                Attributes = JObject.FromObject(attributes);
+                _logger?.LogDebug("Updated attributes with {Count} properties", attributes.Count);
+            }
+            else
+            {
+                Attributes = new JObject();
+                _logger?.LogDebug("Cleared attributes");
+            }
+        }
+
+        /// <summary>
+        /// Updates user attributes from an anonymous object for singleton usage pattern.
+        /// </summary>
+        /// <param name="attributes">New user attributes as anonymous object</param>
+        public void UpdateAttributes(object attributes)
+        {
+            if (attributes != null)
+            {
+                Attributes = JObject.FromObject(attributes);
+                _logger?.LogDebug("Updated attributes from object");
+            }
+            else
+            {
+                Attributes = new JObject();
+                _logger?.LogDebug("Cleared attributes");
+            }
+        }
+
+        /// <summary>
+        /// Merges additional attributes with existing ones.
+        /// </summary>
+        /// <param name="additionalAttributes">Additional attributes to merge</param>
+        public void MergeAttributes(IDictionary<string, object> additionalAttributes)
+        {
+            if (additionalAttributes == null) return;
+
+            foreach (var kvp in additionalAttributes)
+            {
+                Attributes[kvp.Key] = JToken.FromObject(kvp.Value);
+            }
+            
+            _logger?.LogDebug("Merged {Count} additional attributes", additionalAttributes.Count);
+        }
+
+        /// <summary>
+        /// Merges additional attributes from an anonymous object with existing ones.
+        /// </summary>
+        /// <param name="additionalAttributes">Additional attributes to merge as anonymous object</param>
+        public void MergeAttributes(object additionalAttributes)
+        {
+            if (additionalAttributes == null) return;
+
+            var additionalJObject = JObject.FromObject(additionalAttributes);
+            foreach (var property in additionalJObject.Properties())
+            {
+                Attributes[property.Name] = property.Value;
+            }
+            
+            _logger?.LogDebug("Merged additional attributes from object");
         }
 
         /// <inheritdoc />
@@ -233,7 +320,7 @@ namespace GrowthBook
         }
 
         private FeatureResult EvaluateFeature(string featureId, ISet<string> evaluatedFeatures = default)
-        { 
+        {
             try
             {
                 evaluatedFeatures = evaluatedFeatures ?? new HashSet<string>();
@@ -291,14 +378,14 @@ namespace GrowthBook
                                 passedPrerequisiteEvaluations = false;
                                 _logger.LogDebug("Rule {RuleIndex}: Prerequisite '{ParentId}' did not pass for feature '{FeatureId}', continuing to next rule", ruleIndex, parentCondition.Id, featureId);
                                 break;
-                            }                            
+                            }
                         }
 
                         if (!passedPrerequisiteEvaluations)
                         {
                             continue;
                         }
-                    }             
+                    }
 
                     if (rule.Filters?.Any() == true && IsFilteredOut(rule.Filters))
                     {
@@ -375,7 +462,7 @@ namespace GrowthBook
                 _logger.LogDebug("No rules matched for feature '{FeatureId}', returning default value", featureId);
                 return GetFeatureResult(feature.DefaultValue ?? null, FeatureResult.SourceId.DefaultValue);
             }
-            catch(Exception ex)
+            catch (Exception ex)
             {
                 _logger.LogError(ex, $"Encountered an unhandled exception while executing '{nameof(EvalFeature)}'");
 
@@ -410,28 +497,83 @@ namespace GrowthBook
         /// <inheritdoc />
         public async Task LoadFeatures(GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null)
         {
+            var result = await LoadFeaturesWithResult(options, cancellationToken);
+
+            if (!result.Success)
+            {
+                // For backward compatibility, we still throw exceptions in the original LoadFeatures method
+                // Users who want better error handling should use LoadFeaturesWithResult
+                throw result.Exception ?? new GrowthBookException(result.ErrorMessage);
+            }
+        }
+
+        /// <inheritdoc />
+        public async Task<FeatureLoadResult> LoadFeaturesWithResult(GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null)
+        {
             try
             {
                 _logger.LogInformation("Loading features from the repository");
 
-                Features = await _featureRepository.GetFeatures(options, cancellationToken);
+                var features = await _featureRepository.GetFeatures(options, cancellationToken);
 
-                _logger.LogInformation($"Loading features has completed, retrieved '{Features?.Count}' features");
+                if (features == null)
+                {
+                    var errorMessage = "Feature repository returned null - no features were loaded";
+                    _logger.LogWarning(errorMessage);
+                    return FeatureLoadResult.CreateFailure(errorMessage);
+                }
+
+                Features = features;
+                var featureCount = Features.Count;
+
+                _logger.LogInformation($"Loading features has completed, retrieved '{featureCount}' features");
+
+                return FeatureLoadResult.CreateSuccess(featureCount);
             }
-            catch(Exception ex)
+            catch (FeatureLoadException ex)
             {
-                _logger.LogError(ex, $"Encountered an unhandled exception while executing '{nameof(LoadFeatures)}'");
+                var errorMessage = $"Failed to load features: {ex.Message}";
+                _logger.LogError(ex, errorMessage);
+
+                // Keep Features as is (don't set to null) to avoid NullReferenceExceptions
+                return FeatureLoadResult.CreateFailure(errorMessage, ex, ex.StatusCode);
+            }
+            catch (Exception ex)
+            {
+                var errorMessage = $"Encountered an unhandled exception while loading features: {ex.Message}";
+                _logger.LogError(ex, errorMessage);
+
+                // Keep Features as is (don't set to null) to avoid NullReferenceExceptions
+                return FeatureLoadResult.CreateFailure(errorMessage, ex);
             }
         }
 
         private void TryAssignExperimentResult(Experiment experiment, ExperimentResult result)
         {
+            var assignment = new ExperimentAssignment { Experiment = experiment, Result = result };
+            bool shouldFireCallbacks = false;
+            
+            // Always record the assignment locally for GetAllResults()
             if (!_assigned.TryGetValue(experiment.Key, out ExperimentAssignment prev)
                 || prev.Result.InExperiment != result.InExperiment
                 || prev.Result.VariationId != result.VariationId)
             {
-                _assigned.Add(experiment.Key, new ExperimentAssignment { Experiment = experiment, Result = result });
+                _assigned[experiment.Key] = assignment;
+                shouldFireCallbacks = true;
+            }
+            
+            // Also use repository tracking if available (for preventing duplicate callbacks across instances)
+            if (_featureRepository != null)
+            {
+                if (!_featureRepository.HasIdenticalAssignment(experiment.Key, assignment))
+                {
+                    _featureRepository.RecordAssignment(experiment.Key, assignment);
+                }
+            }
 
+            // Fire subscription callbacks if needed
+            if (shouldFireCallbacks)
+            {
                 foreach (Action<Experiment, ExperimentResult> callback in _subscriptions)
                 {
                     try
@@ -692,7 +834,7 @@ namespace GrowthBook
 
         private bool IsFilteredOut(IEnumerable<Filter> filters)
         {
-            foreach(var filter in filters)
+            foreach (var filter in filters)
             {
                 (_, var hashValue) = Attributes.GetHashAttributeAndValue(filter.Attribute);
 
@@ -774,7 +916,7 @@ namespace GrowthBook
             var fallbackAttribute = canUseStickyBucketing ? experiment.FallbackAttribute : default;
 
             (var hashAttribute, var hashValue) = Attributes.GetHashAttributeAndValue(experiment.HashAttribute, fallbackAttributeKey: fallbackAttribute);
-            
+
             var meta = experiment.Meta?.Count > 0 ? experiment.Meta[variationIndex] : null;
 
             var result = new ExperimentResult
@@ -814,12 +956,25 @@ namespace GrowthBook
 
             string key = result.HashAttribute + result.HashValue + experiment.Key + result.VariationId;
 
-            if (!_tracked.Contains(key))
+            // Use atomic operations to prevent race conditions in concurrent scenarios
+            bool shouldTrack = false;
+            
+            if (_featureRepository != null)
+            {
+                // TryMarkAsTracked returns true only if key was successfully added (didn't exist before)
+                shouldTrack = _featureRepository.TryMarkAsTracked(key);
+            }
+            else
+            {
+                // TryAdd returns true only if key was successfully added (didn't exist before)
+                shouldTrack = _tracked.TryAdd(key, 0);
+            }
+
+            if (shouldTrack)
             {
                 try
                 {
                     _trackingCallback(experiment, result);
-                    _tracked.Add(key);
                 }
                 catch (Exception ex)
                 {

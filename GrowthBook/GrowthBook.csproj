@@ -5,7 +5,7 @@
     <Authors>Ben Whatley,Norhaven</Authors>
     <Description>Powerful feature flagging and A/B testing for C# apps using GrowthBook.</Description>
     <Company>GrowthBook</Company>
-    <PackageLicenseFile>LICENSE</PackageLicenseFile>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <Copyright>Copyright (c) 2022 GrowthBook</Copyright>
     <PackageId>growthbook-c-sharp</PackageId>
     <RepositoryUrl>https://github.com/growthbook/growthbook-csharp.git</RepositoryUrl>
