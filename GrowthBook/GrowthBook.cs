@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
@@ -26,7 +27,7 @@ namespace GrowthBook
     {
         private readonly bool _qaMode;
         private readonly Dictionary<string, ExperimentAssignment> _assigned;
-        private readonly HashSet<string> _tracked;
+        private readonly ConcurrentDictionary<string, byte> _tracked;
         private Action<Experiment, ExperimentResult> _trackingCallback;
         private readonly List<Action<Experiment, ExperimentResult>> _subscriptions;
         private bool _disposedValue;
@@ -54,8 +55,8 @@ namespace GrowthBook
 
             _qaMode = context.QaMode;
             _trackingCallback = context.TrackingCallback;
-            _tracked = new HashSet<string>();
             _assigned = new Dictionary<string, ExperimentAssignment>();
+            _tracked = new ConcurrentDictionary<string, byte>();
             _subscriptions = new List<Action<Experiment, ExperimentResult>>();
             _stickyBucketService = context.StickyBucketService;
             _stickyBucketAssignmentDocs = context.StickyBucketAssignmentDocs ?? new Dictionary<string, StickyAssignmentsDocument>();
@@ -166,8 +167,8 @@ namespace GrowthBook
                     Features.Clear();
                     ForcedVariations = null;
                     _trackingCallback = null;
-                    _tracked.Clear();
                     _assigned.Clear();
+                    _tracked.Clear();
                     _subscriptions.Clear();
                     _featureRepository.Cancel();
 
@@ -195,6 +196,75 @@ namespace GrowthBook
         public void Destroy()
         {
             Dispose();
+        }
+
+        /// <summary>
+        /// Updates user attributes from an IDictionary for singleton usage pattern.
+        /// </summary>
+        /// <param name="attributes">New user attributes as IDictionary</param>
+        public void UpdateAttributes(IDictionary<string, object> attributes)
+        {
+            if (attributes != null)
+            {
+                Attributes = JObject.FromObject(attributes);
+                _logger?.LogDebug("Updated attributes with {Count} properties", attributes.Count);
+            }
+            else
+            {
+                Attributes = new JObject();
+                _logger?.LogDebug("Cleared attributes");
+            }
+        }
+
+        /// <summary>
+        /// Updates user attributes from an anonymous object for singleton usage pattern.
+        /// </summary>
+        /// <param name="attributes">New user attributes as anonymous object</param>
+        public void UpdateAttributes(object attributes)
+        {
+            if (attributes != null)
+            {
+                Attributes = JObject.FromObject(attributes);
+                _logger?.LogDebug("Updated attributes from object");
+            }
+            else
+            {
+                Attributes = new JObject();
+                _logger?.LogDebug("Cleared attributes");
+            }
+        }
+
+        /// <summary>
+        /// Merges additional attributes with existing ones.
+        /// </summary>
+        /// <param name="additionalAttributes">Additional attributes to merge</param>
+        public void MergeAttributes(IDictionary<string, object> additionalAttributes)
+        {
+            if (additionalAttributes == null) return;
+
+            foreach (var kvp in additionalAttributes)
+            {
+                Attributes[kvp.Key] = JToken.FromObject(kvp.Value);
+            }
+            
+            _logger?.LogDebug("Merged {Count} additional attributes", additionalAttributes.Count);
+        }
+
+        /// <summary>
+        /// Merges additional attributes from an anonymous object with existing ones.
+        /// </summary>
+        /// <param name="additionalAttributes">Additional attributes to merge as anonymous object</param>
+        public void MergeAttributes(object additionalAttributes)
+        {
+            if (additionalAttributes == null) return;
+
+            var additionalJObject = JObject.FromObject(additionalAttributes);
+            foreach (var property in additionalJObject.Properties())
+            {
+                Attributes[property.Name] = property.Value;
+            }
+            
+            _logger?.LogDebug("Merged additional attributes from object");
         }
 
         /// <inheritdoc />
@@ -282,20 +352,27 @@ namespace GrowthBook
                     return GetFeatureResult(null, FeatureResult.SourceId.UnknownFeature);
                 }
 
+                _logger.LogDebug("Evaluating feature '{FeatureId}' with {RuleCount} rules", featureId, feature?.Rules?.Count ?? 0);
+
+                var ruleIndex = 0;
+
                 foreach (FeatureRule rule in feature?.Rules ?? Enumerable.Empty<FeatureRule>())
                 {
+                    ruleIndex++;
                     if (rule.ParentConditions != null)
                     {
                         var passedPrerequisiteEvaluations = true;
 
                         foreach (var parentCondition in rule.ParentConditions)
                         {
-                            var parentResult = EvaluateFeature(parentCondition.Id, evaluatedFeatures);
+                            // Use a fresh copy of the evaluated feature ids to avoid
+                            // incorrectly flagging repeated prerequisite evaluations as cycles
+                            var parentResult = EvaluateFeature(parentCondition.Id, new HashSet<string>(evaluatedFeatures));
 
                             // Don't continue evaluating if the prerequisite conditions have cycles.
-
                             if (parentResult.Source == FeatureResult.SourceId.CyclicPrerequisite)
                             {
+                                _logger.LogWarning("Detected cyclic prerequisite while evaluating parent feature '{ParentId}' for feature '{FeatureId}'. Evaluated: {EvaluatedFeatures}", parentCondition.Id, featureId, string.Join(",", evaluatedFeatures));
                                 return GetFeatureResult(default, FeatureResult.SourceId.CyclicPrerequisite);
                             }
 
@@ -309,10 +386,12 @@ namespace GrowthBook
 
                                 if (parentCondition.Gate)
                                 {
+                                    _logger.LogDebug("Rule {RuleIndex}: Gated prerequisite '{ParentId}' failed for feature '{FeatureId}', aborting", ruleIndex, parentCondition.Id, featureId);
                                     return GetFeatureResult(default, FeatureResult.SourceId.Prerequisite);
                                 }
 
                                 passedPrerequisiteEvaluations = false;
+                                _logger.LogDebug("Rule {RuleIndex}: Prerequisite '{ParentId}' did not pass for feature '{FeatureId}', continuing to next rule", ruleIndex, parentCondition.Id, featureId);
                                 break;
                             }
                         }
@@ -330,6 +409,7 @@ namespace GrowthBook
 
                     if (!rule.Condition.IsNull() && !_conditionEvaluator.EvalCondition(Attributes, rule.Condition, _savedGroups))
                     {
+                        _logger.LogDebug("Rule {RuleIndex}: attribute condition did not match, continuing", ruleIndex);
                         continue;
                     }
 
@@ -337,6 +417,7 @@ namespace GrowthBook
                     {
                         if (!IsIncludedInRollout(rule.Seed ?? featureId, rule.HashAttribute, rule.Range, rule.Coverage, rule.HashVersion))
                         {
+                            _logger.LogDebug("Rule {RuleIndex}: excluded by rollout/coverage, continuing", ruleIndex);
                             continue;
                         }
 
@@ -355,6 +436,7 @@ namespace GrowthBook
                             }
                         }
 
+                        _logger.LogDebug("Rule {RuleIndex}: returning forced value for feature '{FeatureId}'", ruleIndex, featureId);
                         return GetFeatureResult(rule.Force, FeatureResult.SourceId.Force);
                     }
 
@@ -392,6 +474,7 @@ namespace GrowthBook
                     return GetFeatureResult(result.Value, FeatureResult.SourceId.Experiment, experiment, result);
                 }
 
+                _logger.LogDebug("No rules matched for feature '{FeatureId}', returning default value", featureId);
                 return GetFeatureResult(feature.DefaultValue ?? null, FeatureResult.SourceId.DefaultValue);
             }
             catch (Exception ex)
@@ -482,12 +565,30 @@ namespace GrowthBook
 
         private void TryAssignExperimentResult(Experiment experiment, ExperimentResult result)
         {
+            var assignment = new ExperimentAssignment { Experiment = experiment, Result = result };
+            bool shouldFireCallbacks = false;
+            
+            // Always record the assignment locally for GetAllResults()
             if (!_assigned.TryGetValue(experiment.Key, out ExperimentAssignment prev)
                 || prev.Result.InExperiment != result.InExperiment
                 || prev.Result.VariationId != result.VariationId)
             {
-                _assigned.Add(experiment.Key, new ExperimentAssignment { Experiment = experiment, Result = result });
+                _assigned[experiment.Key] = assignment;
+                shouldFireCallbacks = true;
+            }
+            
+            // Also use repository tracking if available (for preventing duplicate callbacks across instances)
+            if (_featureRepository != null)
+            {
+                if (!_featureRepository.HasIdenticalAssignment(experiment.Key, assignment))
+                {
+                    _featureRepository.RecordAssignment(experiment.Key, assignment);
+                }
+            }
 
+            // Fire subscription callbacks if needed
+            if (shouldFireCallbacks)
+            {
                 foreach (Action<Experiment, ExperimentResult> callback in _subscriptions)
                 {
                     try
@@ -641,7 +742,9 @@ namespace GrowthBook
                 {
                     foreach (var parentCondition in experiment.ParentConditions)
                     {
-                        var parentResult = EvaluateFeature(parentCondition.Id);
+                        // Use a fresh copy of the evaluated feature ids to avoid
+                        // incorrectly flagging repeated prerequisite evaluations as cycles
+                        var parentResult = EvaluateFeature(parentCondition.Id, new HashSet<string>());
 
                         if (parentResult.Source == FeatureResult.SourceId.CyclicPrerequisite)
                         {
@@ -868,12 +971,25 @@ namespace GrowthBook
 
             string key = result.HashAttribute + result.HashValue + experiment.Key + result.VariationId;
 
-            if (!_tracked.Contains(key))
+            // Use atomic operations to prevent race conditions in concurrent scenarios
+            bool shouldTrack = false;
+            
+            if (_featureRepository != null)
+            {
+                // TryMarkAsTracked returns true only if key was successfully added (didn't exist before)
+                shouldTrack = _featureRepository.TryMarkAsTracked(key);
+            }
+            else
+            {
+                // TryAdd returns true only if key was successfully added (didn't exist before)
+                shouldTrack = _tracked.TryAdd(key, 0);
+            }
+
+            if (shouldTrack)
             {
                 try
                 {
                     _trackingCallback(experiment, result);
-                    _tracked.Add(key);
                 }
                 catch (Exception ex)
                 {

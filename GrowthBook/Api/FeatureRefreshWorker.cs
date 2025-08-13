@@ -13,10 +13,11 @@ using System.Linq;
 using System.IO;
 using Microsoft.Extensions.Logging;
 using GrowthBook.Api.Extensions;
+using GrowthBook.Api.SSE;
 
 namespace GrowthBook.Api
 {
-    public class FeatureRefreshWorker : IGrowthBookFeatureRefreshWorker
+    public class FeatureRefreshWorker : IGrowthBookFeatureRefreshWorker, IDisposable
     {
         private sealed class FeaturesResponse
         {
@@ -32,8 +33,7 @@ namespace GrowthBook.Api
         private readonly string _featuresApiEndpoint;
         private readonly string _serverSentEventsApiEndpoint;
         private bool _isServerSentEventsEnabled;
-        private Task _serverSentEventsListener;
-        private CancellationTokenSource _serverSentEventsListenerCancellation;
+        private SSEClient _sseClient;
         private CancellationTokenSource _refreshWorkerCancellation = new CancellationTokenSource();
 
         public FeatureRefreshWorker(ILogger<FeatureRefreshWorker> logger, IHttpClientFactory httpClientFactory, GrowthBookConfigurationOptions config, IGrowthBookFeatureCache cache)
@@ -56,7 +56,7 @@ namespace GrowthBook.Api
         public void Cancel()
         {
             _refreshWorkerCancellation.Cancel();
-            _serverSentEventsListenerCancellation?.Cancel();
+            _sseClient?.Disconnect();
         }
 
         public async Task<IDictionary<string, Feature>> RefreshCacheFromApi(CancellationToken? cancellationToken = null)
@@ -92,59 +92,77 @@ namespace GrowthBook.Api
         {
             if (_isServerSentEventsEnabled)
             {
-                if (_serverSentEventsListener is null || _serverSentEventsListener.IsCompleted)
+                if (_sseClient == null || _sseClient.ConnectionStatus == SSEConnectionStatus.Disconnected)
                 {
-                    _logger.LogDebug("Server sent events are enabled but not being listened for, starting the listener now");
-                    _serverSentEventsListenerCancellation = new CancellationTokenSource();
-                    _serverSentEventsListener = ListenForServerSentEvents();
+                    _logger.LogDebug("Server sent events are enabled but not connected, starting SSE client now");
+                    StartSSEClient();
                 }
             }
             else
             {
-                if (_serverSentEventsListener != null)
+                if (_sseClient != null && _sseClient.ConnectionStatus != SSEConnectionStatus.Disconnected)
                 {
-                    _logger.LogDebug("Server sent events are disabled but being listened for, cancelling the listener now");
-
-                    _serverSentEventsListenerCancellation.Cancel();
-                    _serverSentEventsListener = null;
+                    _logger.LogDebug("Server sent events are disabled but client is connected, disconnecting now");
+                    _sseClient.Disconnect();
                 }
             }
         }
 
-        private Task ListenForServerSentEvents()
+        private void StartSSEClient()
         {
-            return Task.Run(async () =>
+            try
             {
-                _logger.LogInformation("The listener for server sent events is now running");
+                _sseClient?.Dispose();
+                
+                var sseLogger = _logger as ILogger<SSEClient> ?? 
+                    new Microsoft.Extensions.Logging.Abstractions.NullLogger<SSEClient>();
+                
+                _sseClient = new SSEClient(sseLogger, _httpClientFactory, _serverSentEventsApiEndpoint, null, ConfiguredClients.ServerSentEventsApiClient);
+                
+                // Add general event listener for all events (handles data field)
+                _sseClient.AddEventListener(null, async (sseEvent) =>
+                {
+                    if (sseEvent.HasData)
+                    {
+                        _logger.LogDebug("Received SSE event: {Data}", sseEvent.Data?.Substring(0, Math.Min(sseEvent.Data?.Length ?? 0, 100)));
+                        
+                        var features = GetFeaturesFrom(sseEvent.Data);
+                        await _cache.RefreshWith(features, _refreshWorkerCancellation.Token);
+                        
+                        _logger.LogInformation("Cache has been refreshed with server sent event features");
+                    }
+                });
 
-                while (!_serverSentEventsListenerCancellation.IsCancellationRequested && !_refreshWorkerCancellation.IsCancellationRequested)
+                // Add connection status event handlers
+                _sseClient.ConnectionStatusChanged += (status) =>
+                {
+                    _logger.LogInformation("SSE connection status changed to: {Status}", status);
+                };
+
+                _sseClient.ConnectionError += (exception) =>
+                {
+                    _logger.LogError(exception, "SSE connection error occurred");
+                };
+
+                // Start the connection
+                _ = Task.Run(async () =>
                 {
                     try
                     {
-                        _logger.LogInformation("Making an HTTP request to server sent events endpoint \'{ServerSentEventsApiEndpoint}\'", _serverSentEventsApiEndpoint);
-
-                        var httpClient = _httpClientFactory.CreateClient(ConfiguredClients.ServerSentEventsApiClient);
-
-                        await httpClient.UpdateWithFeaturesStreamFrom(_serverSentEventsApiEndpoint, _logger, _config, _serverSentEventsListenerCancellation.Token, async features =>
-                        {
-                            await _cache.RefreshWith(features, _serverSentEventsListenerCancellation.Token);
-
-                            _logger.LogInformation("Cache has been refreshed with server sent event features");
-                        });
-                    }
-                    catch (HttpRequestException ex)
-                    {
-                        _logger.LogError(ex, "Encountered an HTTP exception during request to server sent events endpoint \'{ServerSentEventsApiEndpoint}\'", _serverSentEventsApiEndpoint);
+                        await _sseClient.ConnectAsync(_refreshWorkerCancellation.Token);
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex, "Encountered an unhandled exception during request to server sent events endpoint \'{ServerSentEventsApiEndpoint}\'", _serverSentEventsApiEndpoint);
+                        _logger.LogError(ex, "Failed to start SSE client");
                     }
-                }
-
-                _logger.LogInformation("The listener for server sent events was cancelled and has ended");
-            });
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error initializing SSE client");
+            }
         }
+
 
         private IDictionary<string, Feature> GetFeaturesFrom(string json)
         {
@@ -166,6 +184,13 @@ namespace GrowthBook.Api
             var jsonObject = JObject.Parse(decryptedFeaturesJson);
 
             return jsonObject.ToObject<Dictionary<string, Feature>>();
+        }
+
+        public void Dispose()
+        {
+            Cancel();
+            _sseClient?.Dispose();
+            _refreshWorkerCancellation?.Dispose();
         }
     }
 }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using GrowthBook.Services;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
@@ -14,6 +15,31 @@ namespace GrowthBook
     [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
     public class Context
     {
+        /// <summary>
+        /// Creates a new Context with optional user attributes.
+        /// </summary>
+        /// <param name="attributes">User attributes as IDictionary</param>
+        public Context(IDictionary<string, object> attributes = null)
+        {
+            Attributes = attributes != null ? JObject.FromObject(attributes) : new JObject();
+        }
+
+        /// <summary>
+        /// Creates a new Context with optional user attributes.
+        /// </summary>
+        /// <param name="attributes">User attributes as anonymous object</param>
+        public Context(object attributes)
+        {
+            Attributes = attributes != null ? JObject.FromObject(attributes) : new JObject();
+        }
+
+        /// <summary>
+        /// Creates a new Context instance.
+        /// </summary>
+        public Context()
+        {
+            Attributes = new JObject();
+        }
         /// <summary>
         /// Switch to globally disable all experiments. Default true.
         /// </summary>
@@ -106,5 +132,53 @@ namespace GrowthBook
         /// Uses system temp directory if not specified.
         /// </summary>
         public string CachePath { get; set; }
+
+        /// <summary>
+        /// Sets user attributes from an IDictionary.
+        /// </summary>
+        /// <param name="attributes">User attributes as IDictionary</param>
+        public void SetAttributes(IDictionary<string, object> attributes)
+        {
+            Attributes = attributes != null ? JObject.FromObject(attributes) : new JObject();
+        }
+
+        /// <summary>
+        /// Sets user attributes from an anonymous object.
+        /// </summary>
+        /// <param name="attributes">User attributes as anonymous object</param>
+        public void SetAttributes(object attributes)
+        {
+            Attributes = attributes != null ? JObject.FromObject(attributes) : new JObject();
+        }
+
+        /// <summary>
+        /// Creates a deep copy of this Context instance.
+        /// </summary>
+        /// <returns>A new Context instance with copied values</returns>
+        public Context Clone()
+        {
+            var cloned = new Context
+            {
+                Enabled = this.Enabled,
+                ApiHost = this.ApiHost,
+                ClientKey = this.ClientKey,
+                DecryptionKey = this.DecryptionKey,
+                Attributes = this.Attributes?.DeepClone() as JObject ?? new JObject(),
+                Url = this.Url,
+                Features = new Dictionary<string, Feature>(this.Features ?? new Dictionary<string, Feature>()),
+                Experiments = this.Experiments?.ToList(),
+                StickyBucketService = this.StickyBucketService,
+                StickyBucketAssignmentDocs = new Dictionary<string, StickyAssignmentsDocument>(this.StickyBucketAssignmentDocs ?? new Dictionary<string, StickyAssignmentsDocument>()),
+                EncryptedFeatures = this.EncryptedFeatures,
+                ForcedVariations = new Dictionary<string, int>(this.ForcedVariations ?? new Dictionary<string, int>()),
+                SavedGroups = this.SavedGroups?.DeepClone() as JObject,
+                QaMode = this.QaMode,
+                TrackingCallback = this.TrackingCallback,
+                FeatureRepository = this.FeatureRepository,
+                LoggerFactory = this.LoggerFactory,
+                CachePath = this.CachePath
+            };
+            return cloned;
+        }
     }
 }
