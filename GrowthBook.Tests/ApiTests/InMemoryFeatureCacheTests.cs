@@ -22,6 +22,7 @@ public class InMemoryFeatureCacheTests : UnitTest
     public InMemoryFeatureCacheTests()
     {
         _cache = new(60);
+        _cache.ClearCache();
 
         _firstFeature = new() { DefaultValue = 1 };
         _secondFeature = new() { DefaultValue = 2 };

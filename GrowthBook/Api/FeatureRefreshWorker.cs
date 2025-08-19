@@ -61,22 +61,22 @@ namespace GrowthBook.Api
 
         public async Task<IDictionary<string, Feature>> RefreshCacheFromApi(CancellationToken? cancellationToken = null)
         {
-            _logger.LogInformation("Making an HTTP request to the default Features API endpoint \'{FeaturesApiEndpoint}\'", _featuresApiEndpoint);
+            _logger.LogInformation("Making an HTTP request to the default Features API endpoint '{FeaturesApiEndpoint}'", _featuresApiEndpoint);
 
             var httpClient = _httpClientFactory.CreateClient(ConfiguredClients.DefaultApiClient);
 
-            var response = await httpClient.GetFeaturesFrom(_featuresApiEndpoint, _logger, _config, cancellationToken ?? _refreshWorkerCancellation.Token);
+            var response = await httpClient
+                .GetFeaturesFrom(_featuresApiEndpoint, _logger, _config, cancellationToken ?? _refreshWorkerCancellation.Token)
+                .ConfigureAwait(false);
 
             if (response.Features is null)
             {
                 return null;
             }
 
-            await _cache.RefreshWith(response.Features, cancellationToken);
-
-            // Now that the cache has been populated at least once, we need to see if we're allowed
-            // to kick off the server sent events listener and make sure we're in the intended mode
-            // of operating going forward.
+            await _cache
+                .RefreshWith(response.Features, cancellationToken)
+                .ConfigureAwait(false);
 
             if (_config.PreferServerSentEvents)
             {
@@ -86,6 +86,7 @@ namespace GrowthBook.Api
 
             return response.Features;
         }
+
 
         private void EnsureCorrectRefreshModeIsActive()
         {
