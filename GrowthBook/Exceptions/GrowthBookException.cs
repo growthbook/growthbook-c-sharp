@@ -44,4 +44,46 @@ namespace GrowthBook.Exceptions
             StatusCode = statusCode;
         }
     }
+
+    /// <summary>
+    /// Exception thrown when remote evaluation fails.
+    /// </summary>
+    public class RemoteEvaluationException : GrowthBookException
+    {
+        /// <summary>
+        /// HTTP status code returned from the remote evaluation API, if applicable.
+        /// </summary>
+        public int? StatusCode { get; }
+
+        /// <summary>
+        /// Response body from the failed request, if available.
+        /// </summary>
+        public string ResponseBody { get; }
+
+        public RemoteEvaluationException(string message) : base(message)
+        {
+        }
+
+        public RemoteEvaluationException(string message, int? statusCode) : base(message)
+        {
+            StatusCode = statusCode;
+        }
+
+        public RemoteEvaluationException(string message, int? statusCode, Exception innerException) : base(message, innerException)
+        {
+            StatusCode = statusCode;
+        }
+
+        public RemoteEvaluationException(string message, int? statusCode, string responseBody) : base(message)
+        {
+            StatusCode = statusCode;
+            ResponseBody = responseBody;
+        }
+
+        public RemoteEvaluationException(string message, int? statusCode, string responseBody, Exception innerException) : base(message, innerException)
+        {
+            StatusCode = statusCode;
+            ResponseBody = responseBody;
+        }
+    }
 }

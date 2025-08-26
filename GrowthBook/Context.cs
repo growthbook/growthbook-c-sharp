@@ -134,6 +134,21 @@ namespace GrowthBook
         public string CachePath { get; set; }
 
         /// <summary>
+        /// Enable remote evaluation of features. When true, the SDK will send user attributes
+        /// to the server for evaluation instead of evaluating features locally.
+        /// Cannot be used with encryption or GrowthBook Cloud.
+        /// </summary>
+        public bool RemoteEval { get; set; } = false;
+
+        /// <summary>
+        /// List of attribute keys to include in cache key generation for remote evaluation.
+        /// When specified, remote evaluation will only be triggered when these specific
+        /// attributes change. If null, all attribute changes will trigger remote evaluation.
+        /// Only used when RemoteEval is true.
+        /// </summary>
+        public string[] CacheKeyAttributes { get; set; }
+
+        /// <summary>
         /// Sets user attributes from an IDictionary.
         /// </summary>
         /// <param name="attributes">User attributes as IDictionary</param>
@@ -176,7 +191,9 @@ namespace GrowthBook
                 TrackingCallback = this.TrackingCallback,
                 FeatureRepository = this.FeatureRepository,
                 LoggerFactory = this.LoggerFactory,
-                CachePath = this.CachePath
+                CachePath = this.CachePath,
+                RemoteEval = this.RemoteEval,
+                CacheKeyAttributes = this.CacheKeyAttributes?.ToArray()
             };
             return cloned;
         }
