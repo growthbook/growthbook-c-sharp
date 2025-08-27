@@ -59,5 +59,14 @@ namespace GrowthBook
         /// <param name="trackingKey">The tracking key to mark as tracked</param>
         /// <returns>True if successfully marked as tracked (wasn't tracked before), false if already tracked</returns>
         bool TryMarkAsTracked(string trackingKey);
+
+        /// <summary>
+        /// Gets features using remote evaluation if enabled in the context, otherwise falls back to regular feature retrieval.
+        /// </summary>
+        /// <param name="context">The GrowthBook context containing remote evaluation settings and user attributes</param>
+        /// <param name="options">A set of options to determine how the features are retrieved. Optional.</param>
+        /// <param name="cancellationToken">Used for monitoring the need to cancel a feature retrieval.</param>
+        /// <returns>A <see cref="Task{IDictionary{string, Feature}}"/> that represents the retrieval action.</returns>
+        Task<IDictionary<string, Feature>> GetFeaturesWithContext(Context context, GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null);
     }
 }
