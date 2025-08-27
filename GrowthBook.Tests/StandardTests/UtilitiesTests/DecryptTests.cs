@@ -40,11 +40,11 @@ public class DecryptTests : UnitTest
 
             actualValue.Trim().Should().Be(testCase.ExpectedResult, "because the decryption should behave correctly");
         }
-        catch(DecryptionException ex)
+        catch(DecryptionException)
         {
             testCase.ExpectedResult.Should().BeNull("because a null value should mean that a decryption exception is being provoked");
         }
-        catch(XunitException _)
+        catch(XunitException)
         {
             // There was a mismatch between the expected and actual but it wasn't a decryption issue,
             // so it's likely to be garbage characters as a result of incorrect keys or similar. Double check that.
@@ -53,7 +53,7 @@ public class DecryptTests : UnitTest
             {
                 var jsonObject = JObject.Parse(actualValue);
             }
-            catch(JsonReaderException ex)
+            catch(JsonReaderException)
             {
                 return;
             }
