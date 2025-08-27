@@ -63,12 +63,12 @@ namespace GrowthBook.Tests.ApiTests
 
         private HttpClient CreateHttpClientWithResponse(HttpStatusCode statusCode, string content)
         {
-            var handler = new TestHttpMessageHandler(async (request, cancellationToken) =>
+            var handler = new TestHttpMessageHandler((request, cancellationToken) =>
             {
-                return new HttpResponseMessage(statusCode)
+                return Task.FromResult(new HttpResponseMessage(statusCode)
                 {
                     Content = new StringContent(content, Encoding.UTF8, "application/json")
-                };
+                });
             });
             return new HttpClient(handler);
         }

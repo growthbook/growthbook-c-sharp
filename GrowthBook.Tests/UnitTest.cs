@@ -11,7 +11,7 @@ using Newtonsoft.Json.Linq;
 using Xunit;
 
 namespace GrowthBook.Tests;
-
+#nullable enable
 /// <summary>
 /// Represents a unit test and provides basic functionality for executing JSON-based test cases.
 /// </summary>
@@ -105,7 +105,12 @@ public abstract class UnitTest
 
         var concreteMethod = getTests.MakeGenericMethod(categoryType);
 
-        var testsInCategory = (IEnumerable<object>)concreteMethod.Invoke(null, null);
+        var testsInCategory = (IEnumerable<object>?)concreteMethod.Invoke(null, null);
+
+        if (testsInCategory is null)
+        {
+            throw new InvalidOperationException($"Failed to retrieve tests in category {categoryType}");
+        }
 
         return testsInCategory.Select(x => new object[] { x });
     }
@@ -150,7 +155,7 @@ public abstract class UnitTest
 
         var json = reader.ReadToEnd();
         var jsonObject = JObject.Parse(json);
-        var tests = (JArray)jsonObject.SelectToken(testCategory);
+        var tests = (JArray)jsonObject.SelectToken(testCategory)!;
 
         if (tests is null)
         {
@@ -162,7 +167,7 @@ public abstract class UnitTest
 
     private static T DeserializeFromJsonArray<T>(JArray array) where T : new()
     {
-        return (T)DeserializeFromJsonArray(array, typeof(T));
+        return (T)DeserializeFromJsonArray(array, typeof(T))!;
     }
 
     private static object? DeserializeFromJsonArray(JArray array, Type instanceType)
@@ -177,11 +182,11 @@ public abstract class UnitTest
 
         if (instanceType.IsArray)
         {
-            var arrayElements = Array.CreateInstance(instanceType.GetElementType(), array.Count);
+            var arrayElements = Array.CreateInstance(instanceType.GetElementType()!, array.Count);
 
             for(var i = 0; i < array.Count; i++)
             {
-                arrayElements.SetValue(array[i].ToObject(instanceType.GetElementType()), i);
+                arrayElements.SetValue(array[i].ToObject(instanceType.GetElementType()!), i);
             }
 
             return arrayElements;
@@ -227,7 +232,7 @@ public abstract class UnitTest
 
             var jsonInstance = array[testIndex];
 
-            if (jsonInstance.Type == JTokenType.Array)
+            if (jsonInstance!.Type == JTokenType.Array)
             {
                 var propertyInstance = DeserializeFromJsonArray((JArray)jsonInstance, property.PropertyType);
 
