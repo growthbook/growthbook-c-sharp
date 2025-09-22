@@ -75,6 +75,12 @@ namespace GrowthBook
         /// </summary>
         public IDictionary<string, Feature> Features { get; set; } = new Dictionary<string, Feature>();
 
+                /// <summary>
+        /// Feature definitions (usually pulled from an API or cache).
+        /// </summary>
+        public IDictionary<string, Feature> ForcedFeatures { get; set; } = new Dictionary<string, Feature>();
+
+
         /// <summary>
         /// Experiment definitions.
         /// </summary>
@@ -193,7 +199,8 @@ namespace GrowthBook
                 LoggerFactory = this.LoggerFactory,
                 CachePath = this.CachePath,
                 RemoteEval = this.RemoteEval,
-                CacheKeyAttributes = this.CacheKeyAttributes?.ToArray()
+                CacheKeyAttributes = this.CacheKeyAttributes?.ToArray(),
+                ForcedFeatures = this.ForcedFeatures
             };
             return cloned;
         }

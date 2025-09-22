@@ -57,7 +57,7 @@ namespace GrowthBook.Api
 
             try
             {
-                using (var httpClient = _httpClientFactory.CreateClient())
+                using (var httpClient = _httpClientFactory.CreateClient(ConfiguredClients.DefaultApiClient))
                 {
                     // Set default timeout if not configured
                     if (httpClient.Timeout == Timeout.InfiniteTimeSpan)
@@ -93,7 +93,8 @@ namespace GrowthBook.Api
 
                             if (response.IsSuccessStatusCode)
                             {
-                                var featuresResponse = JsonConvert.DeserializeObject<Dictionary<string, Feature>>(responseContent);
+                                var apiResponse = JsonConvert.DeserializeObject<RemoteEvaluationResponse>(responseContent);
+                                var featuresResponse = apiResponse.Features;
 
                                 _logger.LogInformation("Remote evaluation successful, received {Count} features",
                                     featuresResponse?.Count ?? 0);

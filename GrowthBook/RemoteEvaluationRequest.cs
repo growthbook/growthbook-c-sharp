@@ -26,11 +26,12 @@ namespace GrowthBook
         public IDictionary<string, int> ForcedVariations { get; set; } = new Dictionary<string, int>();
 
         /// <summary>
-        /// Map of feature keys to forced values.
+        /// Array of [key, value] pairs for forced features.
         /// Used for testing and overriding feature values.
+        /// Format: [["featureKey", value], ["anotherKey", value2]]
         /// </summary>
         [JsonProperty("forcedFeatures")]
-        public IDictionary<string, object> ForcedFeatures { get; set; } = new Dictionary<string, object>();
+        public List<List<object>> ForcedFeatures { get; set; } = new List<List<object>>();
 
         /// <summary>
         /// The current URL for URL-based targeting rules.
@@ -50,16 +51,31 @@ namespace GrowthBook
         /// Creates a new RemoteEvaluationRequest from a GrowthBook Context.
         /// </summary>
         /// <param name="context">The GrowthBook context to extract data from</param>
+       /// <summary>
+        /// Creates a new RemoteEvaluationRequest from a GrowthBook Context.
+        /// </summary>
+        /// <param name="context">The GrowthBook context to extract data from</param>
         public static RemoteEvaluationRequest FromContext(Context context)
         {
             if (context == null)
                 return new RemoteEvaluationRequest();
 
+            // Convert ForcedFeatures dictionary to list of [key, value] pairs
+            var forcedFeaturesList = new List<List<object>>();
+            if (context.ForcedFeatures != null)
+            {
+                foreach (var entry in context.ForcedFeatures)
+                {
+                    forcedFeaturesList.Add(new List<object> { entry.Key, entry.Value });
+                }
+            }
+
             return new RemoteEvaluationRequest
             {
                 Attributes = context.Attributes?.DeepClone() as JObject ?? new JObject(),
                 ForcedVariations = new Dictionary<string, int>(context.ForcedVariations ?? new Dictionary<string, int>()),
-                Url = context.Url
+                ForcedFeatures = forcedFeaturesList,
+                Url = context.Url ?? ""
             };
         }
 
