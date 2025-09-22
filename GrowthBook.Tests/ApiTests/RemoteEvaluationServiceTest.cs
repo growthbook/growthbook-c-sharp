@@ -9,6 +9,7 @@ using GrowthBook;
 using GrowthBook.Api;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using NSubstitute;
 using Xunit;
 
@@ -23,13 +24,28 @@ namespace GrowthBook.Tests.ApiTests
             var httpClientFactory = Substitute.For<IHttpClientFactory>();
             var service = new RemoteEvaluationService(logger, httpClientFactory);
 
-            var features = new Dictionary<string, Feature> { { "test", new Feature { DefaultValue = true } } };
-            var responseJson = JsonConvert.SerializeObject(features);
+        
+            var features = new Dictionary<string, Feature>
+            {
+                { "test", new Feature { DefaultValue = true } }
+            };
+
+            var apiResponse = new RemoteEvaluationResponse
+            {
+                Features = features,
+                DateUpdated = DateTimeOffset.UtcNow
+            };
+
+            var responseJson = JsonConvert.SerializeObject(apiResponse);
 
             var httpClient = CreateHttpClientWithResponse(HttpStatusCode.OK, responseJson);
-            httpClientFactory.CreateClient().Returns(httpClient);
+            httpClientFactory.CreateClient(Arg.Is(ConfiguredClients.DefaultApiClient)).Returns(httpClient);
 
-            var request = new RemoteEvaluationRequest();
+            var request = new RemoteEvaluationRequest
+            {
+                Attributes = new JObject { ["id"] = "user_123" },
+                 Url = "https://api.example.com"
+            };
             var result = await service.EvaluateAsync("https://api.example.com", "clientKey", request);
 
             result.IsSuccess.Should().BeTrue();
