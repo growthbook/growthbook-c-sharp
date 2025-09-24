@@ -379,40 +379,40 @@ The result of running an experiment given a specific context.
 ```csharp
 public class ExperimentResult
 {
-    Whether or not the user is part of the experiment.
+    // Whether or not the user is part of the experiment.
     public bool InExperiment { get; set; }
 
-    The array index of the assigned variation.
+    // The array index of the assigned variation.
     public int VariationId { get; set; }
 
-    The array value of the assigned variation.
+    // The array value of the assigned variation.
     public JToken Value { get; set; } = JValue.CreateNull();
 
-    If a hash was used to assign a variation.
+    // If a hash was used to assign a variation.
     public bool HashUsed { get; set; }
 
-    The user attribute used to assign a variation.
+    // The user attribute used to assign a variation.
     public string HashAttribute { get; set; } = string.Empty;
 
-    The value of that attribute.
+    // The value of that attribute.
     public string HashValue { get; set; } = string.Empty;
 
-    The id of the feature (if any) that the experiment came from.
+    // The id of the feature (if any) that the experiment came from.
     public string FeatureId { get; set; }
 
-    The unique key for the assigned variation.
+    // The unique key for the assigned variation.
     public string Key { get; set; }
 
-    The hash value used to assign a variation (float from 0 to 1).
+    // The hash value used to assign a variation (float from 0 to 1).
     public double Bucket { get; set; }
 
-    The human-readable name of the assigned variation.
+    // The human-readable name of the assigned variation.
     public string Name { get; set; }
 
-    Used for holdout groups.
+    // Used for holdout groups.
     public bool Passthrough { get; set; }
 
-    If sticky bucketing was used to assign a variation.
+    // If sticky bucketing was used to assign a variation.
     public bool StickyBucketUsed { get; set; }
 }
 ```
@@ -427,10 +427,10 @@ Represents an object consisting of a default value plus rules that can override 
 ```csharp
 public class Feature
 {
-    The default value (should use null if not specified).
+    // The default value (should use null if not specified).
     public JToken DefaultValue { get; set; }
 
-    Array of FeatureRule objects that determine when and how the defaultValue gets overridden.
+    // Array of FeatureRule objects that determine when and how the defaultValue gets overridden.
     public IList<FeatureRule> Rules { get; set; }
 }
 ```
