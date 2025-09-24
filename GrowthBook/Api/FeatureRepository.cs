@@ -18,16 +18,18 @@ namespace GrowthBook.Api
         private readonly ILogger<FeatureRepository> _logger;
         private readonly IGrowthBookFeatureCache _cache;
         private readonly IGrowthBookFeatureRefreshWorker _backgroundRefreshWorker;
+        private readonly IRemoteEvaluationService _remoteEvaluationService;
         private readonly ConcurrentDictionary<string, ExperimentAssignment> _assigned;
         private readonly ConcurrentDictionary<string, byte> _tracked;
 
-        public FeatureRepository(ILogger<FeatureRepository> logger, IGrowthBookFeatureCache cache, IGrowthBookFeatureRefreshWorker backgroundRefreshWorker)
+        public FeatureRepository(ILogger<FeatureRepository> logger, IGrowthBookFeatureCache cache, IGrowthBookFeatureRefreshWorker backgroundRefreshWorker, IRemoteEvaluationService remoteEvaluationService = null)
         {
             _logger = logger;
             _cache = cache;
             _backgroundRefreshWorker = backgroundRefreshWorker;
             _assigned = new ConcurrentDictionary<string, ExperimentAssignment>();
             _tracked = new ConcurrentDictionary<string, byte>();
+            _remoteEvaluationService = remoteEvaluationService;
         }
 
         /// <inheritdoc/>
@@ -114,6 +116,82 @@ namespace GrowthBook.Api
         public bool TryMarkAsTracked(string trackingKey)
         {
             return _tracked.TryAdd(trackingKey, 0);
+        }
+ /// <inheritdoc/>
+        public async Task<IDictionary<string, Feature>> GetFeaturesWithContext(Context context, GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null)
+        {
+            if (context == null)
+                throw new ArgumentNullException(nameof(context));
+
+            // If remote evaluation is not enabled, fall back to regular feature retrieval
+            if (!context.RemoteEval)
+            {
+                _logger.LogDebug("Remote evaluation is disabled, using regular feature retrieval");
+                return await GetFeatures(options, cancellationToken);
+            }
+
+            // Validate remote evaluation configuration
+            if (_remoteEvaluationService == null)
+            {
+                _logger.LogWarning("Remote evaluation is enabled but IRemoteEvaluationService is not available, falling back to regular feature retrieval");
+                return await GetFeatures(options, cancellationToken);
+            }
+
+            try
+            {
+                _remoteEvaluationService.ValidateRemoteEvaluationConfiguration(context);
+            }
+            catch (ArgumentException ex)
+            {
+                _logger.LogError(ex, "Remote evaluation configuration is invalid: {Message}", ex.Message);
+                throw;
+            }
+
+            _logger.LogInformation("Remote evaluation is enabled, performing remote feature evaluation");
+
+            try
+            {
+                // Create remote evaluation request from context
+                var request = RemoteEvaluationRequest.FromContext(context);
+
+                // Perform remote evaluation
+                var response = await _remoteEvaluationService.EvaluateAsync(
+                    context.ApiHost,
+                    context.ClientKey,
+                    request,
+                    GetApiRequestHeaders(context),
+                    cancellationToken ?? CancellationToken.None);
+
+                if (response.IsSuccess)
+                {
+                    _logger.LogInformation("Remote evaluation successful, received {Count} features", response.Features.Count);
+                    return response.Features;
+                }
+                else
+                {
+                    var errorMessage = $"Remote evaluation failed: {response.ErrorMessage}";
+                    _logger.LogError(errorMessage);
+                    throw new Exceptions.RemoteEvaluationException(errorMessage, (int)response.StatusCode);
+                }
+            }
+            catch (Exceptions.RemoteEvaluationException)
+            {
+                // Re-throw remote evaluation exceptions as-is
+                throw;
+            }
+            catch (Exception ex)
+            {
+                var errorMessage = $"Unexpected error during remote evaluation: {ex.Message}";
+                _logger.LogError(ex, errorMessage);
+                throw new Exceptions.RemoteEvaluationException(errorMessage, null, ex);
+            }
+        }
+
+        private IDictionary<string, string> GetApiRequestHeaders(Context context)
+        {
+            // For now, return empty headers. This can be extended later to support custom headers
+            // from context or configuration
+            return new Dictionary<string, string>();
         }
     }
 }
