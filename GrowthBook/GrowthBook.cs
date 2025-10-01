@@ -373,7 +373,7 @@ namespace GrowthBook
             return EvaluateFeature(featureId);
         }
 
-        private FeatureResult EvaluateFeature(string featureId, ISet<string> evaluatedFeatures = default)
+        private FeatureResult EvaluateFeature(string featureId, ISet<string>? evaluatedFeatures = default)
         {
             try
             {
@@ -530,7 +530,7 @@ namespace GrowthBook
         }
 
         /// <inheritdoc />
-        public ExperimentResult Run(Experiment experiment)
+        public ExperimentResult? Run(Experiment experiment)
         {
             try
             {
@@ -549,7 +549,7 @@ namespace GrowthBook
         }
 
         /// <inheritdoc />
-        public async Task LoadFeatures(GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null)
+        public async Task LoadFeatures(GrowthBookRetrievalOptions? options = null, CancellationToken? cancellationToken = null)
         {
             var result = await LoadFeaturesWithResult(options, cancellationToken);
 
@@ -562,7 +562,7 @@ namespace GrowthBook
         }
 
         /// <inheritdoc />
-        public async Task<FeatureLoadResult> LoadFeaturesWithResult(GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null)
+        public async Task<FeatureLoadResult> LoadFeaturesWithResult(GrowthBookRetrievalOptions? options = null, CancellationToken? cancellationToken = null)
         {
             try
             {
@@ -652,7 +652,7 @@ namespace GrowthBook
             }
         }
 
-        private ExperimentResult RunExperiment(Experiment experiment, string featureId)
+        private ExperimentResult RunExperiment(Experiment experiment, string? featureId)
         {
             // 1. Abort if there aren't enough variations present.
 

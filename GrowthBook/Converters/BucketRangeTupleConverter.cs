@@ -15,7 +15,7 @@ namespace GrowthBook.Converters
             return objectType == typeof(BucketRange);
         }
 
-        public override object ReadJson(JsonReader reader, Type objectType, object existingValue, JsonSerializer serializer)
+        public override object? ReadJson(JsonReader reader, Type objectType, object? existingValue, JsonSerializer serializer)
         {
             var token = JToken.Load(reader);
 
@@ -32,9 +32,13 @@ namespace GrowthBook.Converters
             return null;
         }
 
-        public override void WriteJson(JsonWriter writer, object value, JsonSerializer serializer)
+        public override void WriteJson(JsonWriter writer, object? value, JsonSerializer serializer)
         {
-            var valueNamespace = (Namespace)value;
+            if (value is not Namespace valueNamespace)
+            {
+                writer.WriteNull();
+                return;
+             }
 
             var array = new JArray
             {
