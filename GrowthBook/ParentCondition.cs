@@ -13,7 +13,7 @@ namespace GrowthBook
         /// <summary>
         /// The feature ID.
         /// </summary>
-        public string? Id { get; set; }
+        public required string Id { get; set; }
 
         /// <summary>
         /// The condition to evaluate.

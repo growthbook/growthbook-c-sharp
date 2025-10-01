@@ -96,7 +96,7 @@ namespace GrowthBook.Utilities
         /// <returns>True if remote evaluation should be triggered</returns>
         public static bool ShouldTriggerRemoteEvaluationForForcedVariations(
             IDictionary<string, int>? oldForcedVariations,
-            IDictionary<string, int> newForcedVariations)
+            IDictionary<string, int>? newForcedVariations)
         {
             if (oldForcedVariations == null && newForcedVariations == null)
                 return false;

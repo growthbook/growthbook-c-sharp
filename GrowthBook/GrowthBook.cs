@@ -128,7 +128,7 @@ namespace GrowthBook
         /// <summary>
         /// Arbitrary JSON object containing user and request attributes.
         /// </summary>
-        public JObject Attributes { get; set; }
+        public JObject? Attributes { get; set; } = new JObject();
 
         /// <summary>
         /// Dictionary of the currently loaded feature objects.
@@ -143,7 +143,7 @@ namespace GrowthBook
         /// <summary>
         /// Listing of specific experiments to always assign a specific variation (used for QA).
         /// </summary>
-        public IDictionary<string, int> ForcedVariations { get; set; }
+        public IDictionary<string, int>? ForcedVariations { get; set; }
 
         /// <summary>
         /// The URL of the current page.
@@ -330,7 +330,7 @@ namespace GrowthBook
             var result = EvaluateFeature(key);
             var value = result.Value;
 
-            return value.IsNull() ? fallback : value.ToObject<T>();
+            return value == null || value!.IsNull() ? fallback : value.ToObject<T>()!;
         }
 
         /// <inheritdoc />
@@ -339,7 +339,7 @@ namespace GrowthBook
             var result = await EvalFeatureAsync(key, cancellationToken);
             var value = result.Value;
 
-            return value.IsNull() ? fallback : value.ToObject<T>();
+            return value == null || value.IsNull() ? fallback : value.ToObject<T>()!;
         }
 
         /// <inheritdoc />
@@ -386,7 +386,7 @@ namespace GrowthBook
 
                 evaluatedFeatures.Add(featureId);
 
-                if (!Features.TryGetValue(featureId, out Feature feature))
+                if (!Features.TryGetValue(featureId, out Feature? feature))
                 {
                     return GetFeatureResult(null, FeatureResult.SourceId.UnknownFeature);
                 }
@@ -778,7 +778,7 @@ namespace GrowthBook
 
                 // 8. Abort if the conditions for the experiment prohibit this.
 
-                if (!experiment.Condition.IsNull())
+                if (experiment != null && experiment.Condition != null && !experiment.Condition.IsNull())
                 {
                     if (!_conditionEvaluator.EvalCondition(Attributes, experiment.Condition, _savedGroups))
                     {
@@ -787,7 +787,7 @@ namespace GrowthBook
                     }
                 }
 
-                if (experiment.ParentConditions != null)
+                if (experiment?.ParentConditions != null)
                 {
                     foreach (var parentCondition in experiment.ParentConditions)
                     {
@@ -867,7 +867,7 @@ namespace GrowthBook
             {
                 var experimentKey = ExperimentUtilities.GetStickyBucketExperimentKey(experiment.Key, experiment.BucketVersion);
 
-                var assignments = new Dictionary<string, string>
+                var assignments = new Dictionary<string, string?>
                 {
                     [experimentKey] = result.Key
                 };
@@ -885,7 +885,7 @@ namespace GrowthBook
             return result;
         }
 
-        private FeatureResult GetFeatureResult(JToken value, string source, Experiment? experiment = null, ExperimentResult? experimentResult = null)
+        private FeatureResult GetFeatureResult(JToken? value, string source, Experiment? experiment = null, ExperimentResult? experimentResult = null)
         {
             return new FeatureResult
             {
@@ -977,11 +977,11 @@ namespace GrowthBook
             }
 
             var canUseStickyBucketing = _stickyBucketService != null && !experiment.DisableStickyBucketing;
-            var fallbackAttribute = canUseStickyBucketing ? experiment.FallbackAttribute : default;
+            var fallbackAttribute = canUseStickyBucketing ? experiment?.FallbackAttribute : default;
 
-            (var hashAttribute, var hashValue) = Attributes.GetHashAttributeAndValue(experiment.HashAttribute, fallbackAttributeKey: fallbackAttribute);
+            (var hashAttribute, var hashValue) = Attributes.GetHashAttributeAndValue(experiment?.HashAttribute, fallbackAttributeKey: fallbackAttribute);
 
-            var meta = experiment.Meta?.Count > 0 ? experiment.Meta[variationIndex] : null;
+            var meta = experiment?.Meta?.Count > 0 ? experiment.Meta[variationIndex] : null;
 
             var result = new ExperimentResult
             {
@@ -991,7 +991,7 @@ namespace GrowthBook
                 HashAttribute = hashAttribute,
                 HashUsed = hashUsed,
                 HashValue = hashValue,
-                Value = experiment.Variations is null ? null : experiment.Variations[variationIndex],
+                Value = experiment?.Variations is null ? null : experiment.Variations[variationIndex],
                 VariationId = variationIndex,
                 Name = meta?.Name,
                 Passthrough = meta?.Passthrough ?? false,

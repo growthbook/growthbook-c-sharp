@@ -63,7 +63,7 @@ namespace GrowthBook
         /// <summary>
         /// Map of user attributes that are used to assign variations.
         /// </summary>
-        public JObject Attributes { get; set; } = new JObject();
+        public JObject? Attributes { get; set; } = new JObject();
 
         /// <summary>
         /// The URL of the current page.
@@ -105,7 +105,7 @@ namespace GrowthBook
         /// <summary>
         /// Force specific experiments to always assign a specific variation (used for QA).
         /// </summary>
-        public IDictionary<string, int> ForcedVariations { get; set; } = new Dictionary<string, int>();
+        public IDictionary<string, int>? ForcedVariations { get; set; } = new Dictionary<string, int>();
 
         /// <summary>
         /// Gets groups that have been saved, if any.
