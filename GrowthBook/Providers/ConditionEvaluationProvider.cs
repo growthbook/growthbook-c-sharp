@@ -28,7 +28,7 @@ namespace GrowthBook.Providers
         public ConditionEvaluationProvider(ILogger<ConditionEvaluationProvider> logger) => _logger = logger;
 
         /// <inheritdoc/>
-        public bool EvalCondition(JToken attributes, JObject condition, JObject savedGroups = default)
+        public bool EvalCondition(JToken attributes, JObject condition, JObject? savedGroups = default)
         {
             _logger.LogInformation("Beginning to evaluate attributes based on the provided JSON condition");
             _logger.LogDebug("Attribute evaluation is based on the JSON condition \'{Condition}\'", condition);
@@ -79,7 +79,7 @@ namespace GrowthBook.Providers
         /// <param name="attributes">The attributes to compare against.</param>
         /// <param name="condition">The condition to evaluate.</param>
         /// <returns>True if the attributes satisfy any of the conditions.</returns>
-        private bool EvalOr(JToken attributes, JArray conditions, JObject savedGroups)
+        private bool EvalOr(JToken attributes, JArray conditions, JObject? savedGroups)
         {
             if (conditions.Count == 0)
             {
@@ -127,7 +127,7 @@ namespace GrowthBook.Providers
         /// <param name="conditionValue">The condition value to check.</param>
         /// <param name="attributeValue">The attribute value to check.</param>
         /// <returns>True if the condition value matches the attribute value.</returns>
-        private bool EvalConditionValue(JToken conditionValue, JToken attributeValue, JObject savedGroups)
+        private bool EvalConditionValue(JToken conditionValue, JToken attributeValue, JObject? savedGroups)
         {
             _logger.LogDebug("Evaluating condition value \'{ConditionValue}\'", conditionValue);
 
@@ -160,11 +160,11 @@ namespace GrowthBook.Providers
         /// <param name="condition">The condition to check.</param>
         /// <param name="attributeValue">The attribute value to check.</param>
         /// <returns>True if attributeValue is an array and at least one of the array items matches the condition.</returns>
-        private bool ElemMatch(JObject condition, JToken attributeValue, JObject savedGroups)
+        private bool ElemMatch(JObject condition, JToken attributeValue, JObject? savedGroups)
         {
             if (attributeValue?.Type != JTokenType.Array)
             {
-                _logger.LogDebug("Unable to match array elements with a non-array type of '{AttributeValueType}'", attributeValue.Type);
+                _logger.LogDebug("Unable to match array elements with a non-array type of '{AttributeValueType}'", attributeValue?.Type);
                 return false;
             }
 

@@ -24,7 +24,7 @@ namespace GrowthBook
         /// <summary>
         /// The array value of the assigned variation.
         /// </summary>
-        public JToken Value { get; set; } = JValue.CreateNull();
+        public JToken? Value { get; set; } = JValue.CreateNull();
 
         /// <summary>
         /// If a hash was used to assign a variation.
@@ -34,22 +34,22 @@ namespace GrowthBook
         /// <summary>
         /// The user attribute used to assign a variation.
         /// </summary>
-        public string HashAttribute { get; set; } = string.Empty;
+        public string? HashAttribute { get; set; } = string.Empty;
 
         /// <summary>
         /// The value of that attribute.
         /// </summary>
-        public string HashValue { get; set; } = string.Empty;
+        public string? HashValue { get; set; } = string.Empty;
 
         /// <summary>
         /// The id of the feature (if any) that the experiment came from.
         /// </summary>
-        public string FeatureId { get; set; }
+        public string? FeatureId { get; set; }
 
         /// <summary>
         /// The unique key for the assigned variation.
         /// </summary>
-        public string Key { get; set; }
+        public string? Key { get; set; }
 
         /// <summary>
         /// The hash value used to assign a variation (float from 0 to 1).
@@ -59,7 +59,7 @@ namespace GrowthBook
         /// <summary>
         /// The human-readable name of the assigned variation.
         /// </summary>
-        public string Name { get; set; }
+        public string? Name { get; set; }
 
         /// <summary>
         /// Used for holdout groups.
@@ -78,14 +78,13 @@ namespace GrowthBook
         /// <returns>The value of the assigned variation cast to the specified type.</returns>
         public T GetValue<T>()
         {
-            return Value.ToObject<T>();
+            return Value != null ? Value.ToObject<T>()! : default!;
         }
 
-        public override bool Equals(object obj)
+        public override bool Equals(object? obj)
         {
-            if (obj.GetType() == typeof(ExperimentResult))
+            if (obj is ExperimentResult objResult) 
             {
-                ExperimentResult objResult = (ExperimentResult)obj;
                 return InExperiment == objResult.InExperiment
                     && HashAttribute == objResult.HashAttribute
                     && HashUsed == objResult.HashUsed

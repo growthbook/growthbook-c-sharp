@@ -91,7 +91,7 @@ namespace GrowthBook.Utilities
         /// <param name="coverage">The experiment's coverage (defaults to 1).</param>
         /// <param name="weights">Optional list of variant weights.</param>
         /// <returns>A list of bucket ranges.</returns>
-        public static IEnumerable<BucketRange> GetBucketRanges(int numVariations, double coverage = 1f, IEnumerable<double> weights = null)
+        public static IEnumerable<BucketRange> GetBucketRanges(int numVariations, double coverage = 1f, IEnumerable<double>? weights = null)
         {
             if (coverage < 0)
             {

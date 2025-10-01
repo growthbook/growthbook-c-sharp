@@ -44,7 +44,7 @@ namespace GrowthBook
         /// Error message if the remote evaluation failed.
         /// </summary>
         [JsonIgnore]
-        public string ErrorMessage { get; set; }
+        public string? ErrorMessage { get; set; }
 
         /// <summary>
         /// Creates a new RemoteEvaluationResponse with default values.
@@ -60,7 +60,7 @@ namespace GrowthBook
         /// <param name="dateUpdated">When the features were last updated</param>
         /// <returns>A successful response</returns>
         public static RemoteEvaluationResponse CreateSuccess(
-            IDictionary<string, Feature> features,
+            IDictionary<string, Feature>? features,
             DateTimeOffset? dateUpdated = null)
         {
             return new RemoteEvaluationResponse

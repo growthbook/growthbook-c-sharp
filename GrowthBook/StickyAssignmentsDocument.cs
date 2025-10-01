@@ -10,13 +10,13 @@ namespace GrowthBook
 
         public string FormattedAttribute => $"{AttributeName}||{AttributeValue}";
 
-        public string AttributeName { get; set; }
-        public string AttributeValue { get; set; }
+        public string? AttributeName { get; set; }
+        public string? AttributeValue { get; set; }
         public IDictionary<string, string> Assignments { get; set; } = new Dictionary<string, string>();
 
         public StickyAssignmentsDocument() { }
 
-        public StickyAssignmentsDocument(string attributeName, string attributeValue, IDictionary<string, string> stickyAssignments = default)
+        public StickyAssignmentsDocument(string attributeName, string attributeValue, IDictionary<string, string>? stickyAssignments = default)
         {
             AttributeName = attributeName;
             AttributeValue = attributeValue;

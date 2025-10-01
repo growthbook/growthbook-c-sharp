@@ -148,7 +148,7 @@ namespace GrowthBook
         /// <summary>
         /// The URL of the current page.
         /// </summary>
-        public string Url { get; set; }
+        public string? Url { get; set; }
 
         /// <summary>
         ///  Switch to globally disable all experiments. Default true.
@@ -885,7 +885,7 @@ namespace GrowthBook
             return result;
         }
 
-        private FeatureResult GetFeatureResult(JToken value, string source, Experiment experiment = null, ExperimentResult experimentResult = null)
+        private FeatureResult GetFeatureResult(JToken value, string source, Experiment? experiment = null, ExperimentResult? experimentResult = null)
         {
             return new FeatureResult
             {
@@ -922,7 +922,7 @@ namespace GrowthBook
             return false;
         }
 
-        private bool IsIncludedInRollout(string seed, string hashAttribute = null, BucketRange range = null, double? coverage = null, int? hashVersion = null)
+        private bool IsIncludedInRollout(string seed, string? hashAttribute = null, BucketRange? range = null, double? coverage = null, int? hashVersion = null)
         {
             if (coverage == null && range == null)
             {
@@ -966,7 +966,7 @@ namespace GrowthBook
         /// <param name="variationIndex">The variation id, if specified.</param>
         /// <param name="hashUsed">Whether or not a hash was used in assignment.</param>
         /// <returns>The experiment result.</returns>
-        private ExperimentResult GetExperimentResult(Experiment experiment, int variationIndex = -1, bool hashUsed = false, string featureId = null, double? bucketHash = null, bool wasStickyBucketUsed = false)
+        private ExperimentResult GetExperimentResult(Experiment experiment, int variationIndex = -1, bool hashUsed = false, string? featureId = null, double? bucketHash = null, bool wasStickyBucketUsed = false)
         {
             var inExperiment = true;
 

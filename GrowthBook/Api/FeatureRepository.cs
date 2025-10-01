@@ -18,11 +18,11 @@ namespace GrowthBook.Api
         private readonly ILogger<FeatureRepository> _logger;
         private readonly IGrowthBookFeatureCache _cache;
         private readonly IGrowthBookFeatureRefreshWorker _backgroundRefreshWorker;
-        private readonly IRemoteEvaluationService _remoteEvaluationService;
+        private readonly IRemoteEvaluationService? _remoteEvaluationService;
         private readonly ConcurrentDictionary<string, ExperimentAssignment> _assigned;
         private readonly ConcurrentDictionary<string, byte> _tracked;
 
-        public FeatureRepository(ILogger<FeatureRepository> logger, IGrowthBookFeatureCache cache, IGrowthBookFeatureRefreshWorker backgroundRefreshWorker, IRemoteEvaluationService remoteEvaluationService = null)
+        public FeatureRepository(ILogger<FeatureRepository> logger, IGrowthBookFeatureCache cache, IGrowthBookFeatureRefreshWorker backgroundRefreshWorker, IRemoteEvaluationService? remoteEvaluationService = null)
         {
             _logger = logger;
             _cache = cache;
@@ -36,7 +36,7 @@ namespace GrowthBook.Api
         public void Cancel() => _backgroundRefreshWorker.Cancel();
 
         /// <inheritdoc/>
-        public async Task<IDictionary<string, Feature>> GetFeatures(GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null)
+        public async Task<IDictionary<string, Feature>> GetFeatures(GrowthBookRetrievalOptions? options = null, CancellationToken? cancellationToken = null)
         {
             _logger.LogInformation("Getting features from repository, verifying cache expiration and option to force refresh");
 
@@ -85,7 +85,7 @@ namespace GrowthBook.Api
         /// <inheritdoc/>
         public bool HasIdenticalAssignment(string experimentKey, ExperimentAssignment assignment)
         {
-            if (!_assigned.TryGetValue(experimentKey, out ExperimentAssignment prev))
+            if (!_assigned.TryGetValue(experimentKey, out ExperimentAssignment? prev))
             {
                 return false;
             }
@@ -118,7 +118,7 @@ namespace GrowthBook.Api
             return _tracked.TryAdd(trackingKey, 0);
         }
  /// <inheritdoc/>
-        public async Task<IDictionary<string, Feature>> GetFeaturesWithContext(Context context, GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null)
+        public async Task<IDictionary<string, Feature>> GetFeaturesWithContext(Context context, GrowthBookRetrievalOptions? options = null, CancellationToken? cancellationToken = null)
         {
             if (context == null)
                 throw new ArgumentNullException(nameof(context));

@@ -99,12 +99,12 @@ namespace GrowthBook.Extensions
         /// <param name="key">Attribute key</param>
         /// <param name="defaultValue">Default value if attribute doesn't exist</param>
         /// <returns>Attribute value or default</returns>
-        public static T GetAttribute<T>(this GrowthBook growthBook, string key, T defaultValue = default(T))
+        public static T? GetAttribute<T>(this GrowthBook growthBook, string key, T? defaultValue = default(T))
         {
             if (string.IsNullOrEmpty(key) || growthBook.Attributes == null)
                 return defaultValue;
 
-            if (growthBook.Attributes.TryGetValue(key, out JToken token))
+            if (growthBook.Attributes.TryGetValue(key, out JToken? token))
             {
                 try
                 {

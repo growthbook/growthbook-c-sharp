@@ -11,7 +11,7 @@ namespace GrowthBook
     public class GrowthBookFactory : IDisposable
     {
         private readonly Context _baseContext;
-        private readonly IGrowthBookFeatureRepository _sharedRepository;
+        private readonly IGrowthBookFeatureRepository? _sharedRepository;
         private bool _disposed = false;
 
         /// <summary>
@@ -30,7 +30,7 @@ namespace GrowthBook
         /// <param name="userAttributes">User-specific attributes</param>
         /// <param name="trackingCallback">Optional tracking callback for this user context</param>
         /// <returns>New GrowthBook instance with user context</returns>
-        public GrowthBook CreateForUser(IDictionary<string, object> userAttributes, Action<Experiment, ExperimentResult> trackingCallback = null)
+        public GrowthBook CreateForUser(IDictionary<string, object> userAttributes, Action<Experiment, ExperimentResult>? trackingCallback = null)
         {
             if (_disposed) throw new ObjectDisposedException(nameof(GrowthBookFactory));
             
@@ -60,7 +60,7 @@ namespace GrowthBook
         /// <param name="userAttributes">User-specific attributes as anonymous object</param>
         /// <param name="trackingCallback">Optional tracking callback for this user context</param>
         /// <returns>New GrowthBook instance with user context</returns>
-        public GrowthBook CreateForUser(object userAttributes, Action<Experiment, ExperimentResult> trackingCallback = null)
+        public GrowthBook CreateForUser(object userAttributes, Action<Experiment, ExperimentResult>? trackingCallback = null)
         {
             if (_disposed) throw new ObjectDisposedException(nameof(GrowthBookFactory));
             

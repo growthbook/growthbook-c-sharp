@@ -27,11 +27,10 @@ namespace GrowthBook
         /// </summary>
         public double End { get; set; }
 
-        public override bool Equals(object obj)
+        public override bool Equals(object? obj)
         {
-            if (obj.GetType() == typeof(BucketRange))
+            if (obj is BucketRange objRange)
             {
-                BucketRange objRange = (BucketRange)obj;
                 return Start == objRange.Start && End == objRange.End;
             }
             return false;

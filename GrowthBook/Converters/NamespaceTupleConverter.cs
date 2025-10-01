@@ -15,7 +15,7 @@ namespace GrowthBook.Converters
             return objectType == typeof(Namespace);
         }
 
-        public override object ReadJson(JsonReader reader, Type objectType, object existingValue, JsonSerializer serializer)
+        public override object? ReadJson(JsonReader reader, Type objectType, object? existingValue, JsonSerializer serializer)
         {
             var token = JToken.Load(reader);
 
@@ -27,18 +27,19 @@ namespace GrowthBook.Converters
             return null;
         }
 
-        public override void WriteJson(JsonWriter writer, object value, JsonSerializer serializer)
+        public override void WriteJson(JsonWriter writer, object? value, JsonSerializer serializer)
         {
-            var valueNamespace = (Namespace)value;
-
-            var array = new JArray
+            if (value is Namespace valueNamespace)
+            {
+                var array = new JArray
             {
                 JToken.FromObject(valueNamespace.Id),
                 JToken.FromObject(valueNamespace.Start),
                 JToken.FromObject(valueNamespace.End)
             };
 
-            array.WriteTo(writer);
+                array.WriteTo(writer);
+            }
         }
     }
 }

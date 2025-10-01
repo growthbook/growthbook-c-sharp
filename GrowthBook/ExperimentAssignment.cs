@@ -12,11 +12,11 @@ namespace GrowthBook
         /// <summary>
         /// The experiment the user is assigned to.
         /// </summary>
-        public Experiment Experiment { get; set; }
+        public Experiment? Experiment { get; set; }
 
         /// <summary>
         /// The experiment assignment data.
         /// </summary>
-        public ExperimentResult Result { get; set; }
+        public ExperimentResult? Result { get; set; }
     }
 }

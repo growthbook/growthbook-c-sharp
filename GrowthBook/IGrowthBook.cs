@@ -87,14 +87,14 @@ namespace GrowthBook
         /// </summary>
         /// <param name="experiment">The experiment to evaluate.</param>
         /// <returns>The experiment result.</returns>
-        ExperimentResult Run(Experiment experiment);
+        ExperimentResult? Run(Experiment experiment);
 
         /// <summary>
         /// Loads all available features from the API and caches them for faster retrieval.
         /// </summary>
         /// <param name="options">An optional set of choices that affect how the features will be loaded.</param>
         /// <returns>A <see cref="Task"/> that represents the feature retrieval action.</returns>
-        Task LoadFeatures(GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null);
+        Task LoadFeatures(GrowthBookRetrievalOptions? options = null, CancellationToken? cancellationToken = null);
 
         /// <summary>
         /// Loads all available features from the API and returns detailed result information.
@@ -102,6 +102,6 @@ namespace GrowthBook
         /// <param name="options">An optional set of choices that affect how the features will be loaded.</param>
         /// <param name="cancellationToken">The cancellation token for this operation.</param>
         /// <returns>A <see cref="FeatureLoadResult"/> indicating success or failure with details.</returns>
-        Task<FeatureLoadResult> LoadFeaturesWithResult(GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null);
+        Task<FeatureLoadResult> LoadFeaturesWithResult(GrowthBookRetrievalOptions? options = null, CancellationToken? cancellationToken = null);
     }
 }

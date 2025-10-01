@@ -38,11 +38,10 @@ namespace GrowthBook
         /// </summary>
         public double End { get; }
 
-        public override bool Equals(object obj)
+        public override bool Equals(object? obj)
         {
-            if (obj.GetType() == typeof(Namespace))
+            if (obj is Namespace objNamespace)
             {
-                var objNamespace = (Namespace)obj;
                 return Id == objNamespace.Id && Start == objNamespace.Start && End == objNamespace.End;
             }
             return false;

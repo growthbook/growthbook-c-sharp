@@ -25,7 +25,7 @@ namespace GrowthBook
         /// <summary>
         /// The assigned value of the feature.
         /// </summary>
-        public JToken Value { get; set; }
+        public JToken? Value { get; set; }
 
         /// <summary>
         /// The assigned value cast to a boolean.
@@ -52,17 +52,17 @@ namespace GrowthBook
         /// <summary>
         /// One of "unknownFeature", "defaultValue", "force", "experiment", or "cyclicPrerequisite".
         /// </summary>
-        public string Source { get; set; }
+        public string? Source { get; set; }
 
         /// <summary>
         /// When source is "experiment", this will be an Experiment object.
         /// </summary>
-        public Experiment Experiment { get; set; }
+        public Experiment? Experiment { get; set; }
 
         /// <summary>
         /// When source is "experiment", this will be an ExperimentResult object.
         /// </summary>
-        public ExperimentResult ExperimentResult { get; set; }
+        public ExperimentResult? ExperimentResult { get; set; }
 
         /// <summary>
         /// Returns the value of the feature cast to the specified type.
@@ -71,14 +71,13 @@ namespace GrowthBook
         /// <returns>The value of the feature cast to the specified type.</returns>
         public T GetValue<T>()
         {
-            return Value.ToObject<T>();
+            return Value != null ? Value.ToObject<T>()! : default!;
         }
 
-        public override bool Equals(object obj)
+        public override bool Equals(object? obj)
         {
-            if (obj.GetType() == typeof(FeatureResult))
+            if (obj is FeatureResult objResult)
             {
-                FeatureResult objResult = (FeatureResult)obj;
                 return object.Equals(Experiment, objResult.Experiment)
                     && object.Equals(ExperimentResult, objResult.ExperimentResult)
                     && Off == objResult.Off

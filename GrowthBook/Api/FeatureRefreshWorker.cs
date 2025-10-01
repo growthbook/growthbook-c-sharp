@@ -22,8 +22,8 @@ namespace GrowthBook.Api
         private sealed class FeaturesResponse
         {
             public int FeatureCount => Features?.Count ?? 0;
-            public Dictionary<string, Feature> Features { get; set; }
-            public string EncryptedFeatures { get; set; }
+            public Dictionary<string, Feature>? Features { get; set; }
+            public string? EncryptedFeatures { get; set; }
         }
 
         private readonly ILogger<FeatureRefreshWorker> _logger;
@@ -33,7 +33,7 @@ namespace GrowthBook.Api
         private readonly string _featuresApiEndpoint;
         private readonly string _serverSentEventsApiEndpoint;
         private bool _isServerSentEventsEnabled;
-        private SSEClient _sseClient;
+        private SSEClient? _sseClient;
         private CancellationTokenSource _refreshWorkerCancellation = new CancellationTokenSource();
 
         public FeatureRefreshWorker(ILogger<FeatureRefreshWorker> logger, IHttpClientFactory httpClientFactory, GrowthBookConfigurationOptions config, IGrowthBookFeatureCache cache)
@@ -59,7 +59,7 @@ namespace GrowthBook.Api
             _sseClient?.Disconnect();
         }
 
-        public async Task<IDictionary<string, Feature>> RefreshCacheFromApi(CancellationToken? cancellationToken = null)
+        public async Task<IDictionary<string, Feature>?> RefreshCacheFromApi(CancellationToken? cancellationToken = null)
         {
             _logger.LogInformation("Making an HTTP request to the default Features API endpoint \'{FeaturesApiEndpoint}\'", _featuresApiEndpoint);
 

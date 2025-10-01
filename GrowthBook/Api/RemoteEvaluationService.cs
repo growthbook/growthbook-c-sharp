@@ -35,10 +35,10 @@ namespace GrowthBook.Api
 
         /// <inheritdoc />
         public async Task<RemoteEvaluationResponse> EvaluateAsync(
-            string apiHost,
-            string clientKey,
+            string? apiHost,
+            string? clientKey,
             RemoteEvaluationRequest request,
-            IDictionary<string, string> headers = null,
+            IDictionary<string, string>? headers = null,
             CancellationToken cancellationToken = default)
         {
             if (string.IsNullOrWhiteSpace(apiHost))
@@ -94,7 +94,7 @@ namespace GrowthBook.Api
                             if (response.IsSuccessStatusCode)
                             {
                                 var apiResponse = JsonConvert.DeserializeObject<RemoteEvaluationResponse>(responseContent);
-                                var featuresResponse = apiResponse.Features;
+                                var featuresResponse = apiResponse?.Features;
 
                                 _logger.LogInformation("Remote evaluation successful, received {Count} features",
                                     featuresResponse?.Count ?? 0);

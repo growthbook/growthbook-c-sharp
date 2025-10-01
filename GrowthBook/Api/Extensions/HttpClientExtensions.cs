@@ -19,8 +19,8 @@ namespace GrowthBook.Api.Extensions
         private sealed class FeaturesResponse
         {
             public int FeatureCount => Features?.Count ?? 0;
-            public Dictionary<string, Feature> Features { get; set; }
-            public string EncryptedFeatures { get; set; }
+            public Dictionary<string, Feature>? Features { get; set; }
+            public string? EncryptedFeatures { get; set; }
         }
 
         public static async Task<(IDictionary<string, Feature> Features, bool IsServerSentEventsEnabled)> GetFeaturesFrom(this HttpClient httpClient, string endpoint, ILogger logger, GrowthBookConfigurationOptions config, CancellationToken cancellationToken)

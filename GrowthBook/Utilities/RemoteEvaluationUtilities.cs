@@ -16,7 +16,7 @@ namespace GrowthBook.Utilities
         /// </summary>
         /// <param name="context">The GrowthBook context</param>
         /// <returns>A cache key string for remote evaluation</returns>
-        public static string GenerateCacheKey(Context context)
+        public static string? GenerateCacheKey(Context context)
         {
             if (context == null || !context.RemoteEval)
                 return null;
@@ -59,7 +59,7 @@ namespace GrowthBook.Utilities
         public static bool ShouldTriggerRemoteEvaluation(
             JObject oldAttributes,
             JObject newAttributes,
-            string[] cacheKeyAttributes)
+            string[]? cacheKeyAttributes)
         {
             if (oldAttributes == null && newAttributes == null)
                 return false;
@@ -122,14 +122,14 @@ namespace GrowthBook.Utilities
         /// <param name="allAttributes">All available attributes</param>
         /// <param name="cacheKeyAttributes">Attributes to include in cache key</param>
         /// <returns>Filtered attributes object</returns>
-        private static JObject GetRelevantAttributes(JObject allAttributes, string[] cacheKeyAttributes)
+        private static JObject GetRelevantAttributes(JObject allAttributes, string[]? cacheKeyAttributes)
         {
             if (allAttributes == null)
                 return new JObject();
 
             // If no cache key attributes specified, use all attributes
             if (cacheKeyAttributes == null || cacheKeyAttributes.Length == 0)
-                return allAttributes.DeepClone() as JObject;
+                return (allAttributes.DeepClone() as JObject)!;
 
             // Filter to only include specified cache key attributes
             var relevantAttributes = new JObject();
