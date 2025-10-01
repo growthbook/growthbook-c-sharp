@@ -57,7 +57,7 @@ namespace GrowthBook.Utilities
         /// <param name="cacheKeyAttributes">Attributes to monitor for changes</param>
         /// <returns>True if remote evaluation should be triggered</returns>
         public static bool ShouldTriggerRemoteEvaluation(
-            JObject oldAttributes,
+            JObject? oldAttributes,
             JObject newAttributes,
             string[]? cacheKeyAttributes)
         {
@@ -95,7 +95,7 @@ namespace GrowthBook.Utilities
         /// <param name="newForcedVariations">New forced variations</param>
         /// <returns>True if remote evaluation should be triggered</returns>
         public static bool ShouldTriggerRemoteEvaluationForForcedVariations(
-            IDictionary<string, int> oldForcedVariations,
+            IDictionary<string, int>? oldForcedVariations,
             IDictionary<string, int> newForcedVariations)
         {
             if (oldForcedVariations == null && newForcedVariations == null)

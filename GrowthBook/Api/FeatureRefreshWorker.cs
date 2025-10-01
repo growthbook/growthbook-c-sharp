@@ -125,7 +125,7 @@ namespace GrowthBook.Api
                     {
                         _logger.LogDebug("Received SSE event: {Data}", sseEvent.Data?.Substring(0, Math.Min(sseEvent.Data?.Length ?? 0, 100)));
                         
-                        var features = GetFeaturesFrom(sseEvent.Data);
+                        var features = GetFeaturesFrom(sseEvent.Data ?? "");
                         await _cache.RefreshWith(features, _refreshWorkerCancellation.Token);
                         
                         _logger.LogInformation("Cache has been refreshed with server sent event features");
@@ -163,7 +163,7 @@ namespace GrowthBook.Api
         }
 
 
-        private IDictionary<string, Feature> GetFeaturesFrom(string json)
+        private IDictionary<string, Feature>? GetFeaturesFrom(string json)
         {
             var featuresResponse = JsonConvert.DeserializeObject<FeaturesResponse>(json);
 
@@ -176,7 +176,7 @@ namespace GrowthBook.Api
             _logger.LogInformation("API response JSON contained encrypted features, decrypting them now");
             _logger.LogDebug("Attempting to decrypt features with the provided decryption key \'{ConfigDecryptionKey}\'", _config.DecryptionKey);
 
-            var decryptedFeaturesJson = featuresResponse.EncryptedFeatures.DecryptWith(_config.DecryptionKey);
+            var decryptedFeaturesJson = featuresResponse?.EncryptedFeatures?.DecryptWith(_config.DecryptionKey);
 
             _logger.LogDebug("Completed attempt to decrypt features which resulted in plaintext value of \'{DecryptedFeaturesJson}\'", decryptedFeaturesJson);
 

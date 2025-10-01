@@ -36,7 +36,7 @@ namespace GrowthBook.Api
         public void Cancel() => _backgroundRefreshWorker.Cancel();
 
         /// <inheritdoc/>
-        public async Task<IDictionary<string, Feature>> GetFeatures(GrowthBookRetrievalOptions? options = null, CancellationToken? cancellationToken = null)
+        public async Task<IDictionary<string, Feature>?> GetFeatures(GrowthBookRetrievalOptions? options = null, CancellationToken? cancellationToken = null)
         {
             _logger.LogInformation("Getting features from repository, verifying cache expiration and option to force refresh");
 
@@ -90,8 +90,8 @@ namespace GrowthBook.Api
                 return false;
             }
 
-            return prev.Result.InExperiment == assignment.Result.InExperiment
-                && prev.Result.VariationId == assignment.Result.VariationId;
+            return prev?.Result?.InExperiment == assignment?.Result?.InExperiment
+                && prev?.Result?.VariationId == assignment?.Result?.VariationId;
         }
 
         /// <inheritdoc/>
@@ -118,7 +118,7 @@ namespace GrowthBook.Api
             return _tracked.TryAdd(trackingKey, 0);
         }
  /// <inheritdoc/>
-        public async Task<IDictionary<string, Feature>> GetFeaturesWithContext(Context context, GrowthBookRetrievalOptions? options = null, CancellationToken? cancellationToken = null)
+        public async Task<IDictionary<string, Feature>?> GetFeaturesWithContext(Context context, GrowthBookRetrievalOptions? options = null, CancellationToken? cancellationToken = null)
         {
             if (context == null)
                 throw new ArgumentNullException(nameof(context));

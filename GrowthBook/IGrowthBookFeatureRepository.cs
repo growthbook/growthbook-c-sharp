@@ -22,7 +22,7 @@ namespace GrowthBook
         /// <param name="options">A set of options to determine how the features are retrieved. Optional.</param>
         /// <param name="cancellationToken">Used for monitoring the need to cancel a feature retrieval.</param>
         /// <returns>A <see cref="Task{IDictionary{string, Feature}}"/> that represents the retrieval action.</returns>
-        Task<IDictionary<string, Feature>> GetFeatures(GrowthBookRetrievalOptions? options = null, CancellationToken? cancellationToken = null);
+        Task<IDictionary<string, Feature>?> GetFeatures(GrowthBookRetrievalOptions? options = null, CancellationToken? cancellationToken = null);
 
         /// <summary>
         /// Checks if the experiment assignment has already been recorded to prevent duplicate callbacks.
@@ -67,6 +67,6 @@ namespace GrowthBook
         /// <param name="options">A set of options to determine how the features are retrieved. Optional.</param>
         /// <param name="cancellationToken">Used for monitoring the need to cancel a feature retrieval.</param>
         /// <returns>A <see cref="Task{IDictionary{string, Feature}}"/> that represents the retrieval action.</returns>
-        Task<IDictionary<string, Feature>> GetFeaturesWithContext(Context context, GrowthBookRetrievalOptions? options = null, CancellationToken? cancellationToken = null);
+        Task<IDictionary<string, Feature>?> GetFeaturesWithContext(Context context, GrowthBookRetrievalOptions? options = null, CancellationToken? cancellationToken = null);
     }
 }

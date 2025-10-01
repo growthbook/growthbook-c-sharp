@@ -23,7 +23,7 @@ namespace GrowthBook.Api.Extensions
             public string? EncryptedFeatures { get; set; }
         }
 
-        public static async Task<(IDictionary<string, Feature> Features, bool IsServerSentEventsEnabled)> GetFeaturesFrom(this HttpClient httpClient, string endpoint, ILogger logger, GrowthBookConfigurationOptions config, CancellationToken cancellationToken)
+        public static async Task<(IDictionary<string, Feature>? Features, bool IsServerSentEventsEnabled)> GetFeaturesFrom(this HttpClient httpClient, string endpoint, ILogger logger, GrowthBookConfigurationOptions config, CancellationToken cancellationToken)
         {
             var response = await httpClient.GetAsync(endpoint, cancellationToken);
 
@@ -62,7 +62,7 @@ namespace GrowthBook.Api.Extensions
             return (features, isServerSentEventsEnabled);
         }
 
-        public static async Task UpdateWithFeaturesStreamFrom(this HttpClient httpClient, string endpoint, ILogger logger, GrowthBookConfigurationOptions config, CancellationToken cancellationToken, Func<IDictionary<string, Feature>, Task> onFeaturesRetrieved)
+        public static async Task UpdateWithFeaturesStreamFrom(this HttpClient httpClient, string endpoint, ILogger logger, GrowthBookConfigurationOptions config, CancellationToken cancellationToken, Func<IDictionary<string, Feature>?, Task> onFeaturesRetrieved)
         {
             var stream = await httpClient.GetStreamAsync(endpoint);
 
@@ -102,11 +102,11 @@ namespace GrowthBook.Api.Extensions
             }
         }
 
-        private static IDictionary<string, Feature> ParseFeaturesFrom(string json, ILogger logger, GrowthBookConfigurationOptions config)
+        private static IDictionary<string, Feature>? ParseFeaturesFrom(string json, ILogger logger, GrowthBookConfigurationOptions config)
         {
             var featuresResponse = JsonConvert.DeserializeObject<FeaturesResponse>(json);
 
-            if (featuresResponse.EncryptedFeatures.IsNullOrWhitespace())
+            if (featuresResponse == null || featuresResponse.EncryptedFeatures.IsNullOrWhitespace())
             {
                 logger.LogInformation($"API response JSON contained no encrypted features, returning '{featuresResponse.FeatureCount}' unencrypted features");
                 return featuresResponse.Features;

@@ -278,7 +278,7 @@ namespace GrowthBook.Utilities
             return regex.IsMatch(actual);
         }
 
-        private static Regex GetUrlRegex(UrlPattern pattern)
+        private static Regex? GetUrlRegex(UrlPattern pattern)
         {
             try
             {
@@ -334,7 +334,7 @@ namespace GrowthBook.Utilities
             return new StickyBucketVariation(variationIndex, isVersionBlocked: false);
         }
 
-        private static IDictionary<string, string> GetStickyBucketAssignments(JObject attributes, IDictionary<string, StickyAssignmentsDocument> stickyAssignmentDocs, string hashAttribute, string fallbackAttribute)
+        private static IDictionary<string, string> GetStickyBucketAssignments(JObject attributes, IDictionary<string, StickyAssignmentsDocument> stickyAssignmentDocs, string hashAttribute, string? fallbackAttribute)
         {
             var mergedAssignments = new Dictionary<string, string>();
 
@@ -379,6 +379,6 @@ namespace GrowthBook.Utilities
             return -1;
         }
 
-        public static string GetStickyBucketExperimentKey(string key, int bucketVersion) => $"{key}__{bucketVersion}";
+        public static string GetStickyBucketExperimentKey(string? key, int bucketVersion) => $"{key}__{bucketVersion}";
     }
 }

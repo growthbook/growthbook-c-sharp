@@ -16,7 +16,7 @@ namespace GrowthBook.Utilities
         /// <param name="decryptionKey">The caller's decryption key.</param>
         /// <returns>The decrypted data. Note that if the key is incorrect, this will return garbage data that will not be usable.</returns>
         /// <exception cref="DecryptionException">Thrown if an exception is encountered during decryption.</exception>
-        public static string Decrypt(string encryptedString, string decryptionKey)
+        public static string? Decrypt(string encryptedString, string? decryptionKey)
         {
             try
             {
@@ -24,7 +24,7 @@ namespace GrowthBook.Utilities
 
                 var iv = Convert.FromBase64String(parts[0]);
                 var cipherBytes = Convert.FromBase64String(parts[1]);
-                var keyBytes = Convert.FromBase64String(decryptionKey);
+                var keyBytes = Convert.FromBase64String(decryptionKey ?? "");
 
                 // Right now we're using the AES 128 CBC algorithm.
 

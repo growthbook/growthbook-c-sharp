@@ -28,20 +28,20 @@ namespace GrowthBook
         private readonly bool _qaMode;
         private readonly Dictionary<string, ExperimentAssignment> _assigned;
         private readonly ConcurrentDictionary<string, byte> _tracked;
-        private Action<Experiment, ExperimentResult> _trackingCallback;
+        private Action<Experiment, ExperimentResult>? _trackingCallback;
         private readonly List<Action<Experiment, ExperimentResult>> _subscriptions;
         private bool _disposedValue;
         private readonly IConditionEvaluationProvider _conditionEvaluator;
         private readonly IGrowthBookFeatureRepository _featureRepository;
-        private readonly IStickyBucketService _stickyBucketService;
+        private readonly IStickyBucketService? _stickyBucketService;
         private readonly IDictionary<string, StickyAssignmentsDocument> _stickyBucketAssignmentDocs;
         private readonly ILogger<GrowthBook> _logger;
-        private readonly JObject _savedGroups;
+        private readonly JObject? _savedGroups;
         private readonly ILoggerFactory _loggerFactory;
         private readonly bool _ownsLoggerFactory;
         private readonly Context _context;
-        private JObject _previousAttributes;
-        private IDictionary<string, int> _previousForcedVariations;
+        private JObject? _previousAttributes;
+        private IDictionary<string, int>? _previousForcedVariations;
 
         /// <summary>
         /// Creates a new GrowthBook instance from the passed context.
@@ -114,7 +114,7 @@ namespace GrowthBook
 
                 var featureRefreshWorker = new FeatureRefreshWorker(featureRefreshLogger, httpClientFactory, config, featureCache);
 
-                IRemoteEvaluationService remoteEvaluationService = null;
+                IRemoteEvaluationService? remoteEvaluationService = null;
                 if (context.RemoteEval)
                 {
                     var remoteEvaluationLogger = _loggerFactory.CreateLogger<RemoteEvaluationService>();
@@ -618,8 +618,8 @@ namespace GrowthBook
             bool shouldFireCallbacks = false;
 
             // Always record the assignment locally for GetAllResults()
-            if (!_assigned.TryGetValue(experiment.Key, out ExperimentAssignment prev)
-                || prev.Result.InExperiment != result.InExperiment
+            if (!_assigned.TryGetValue(experiment.Key, out ExperimentAssignment? prev)
+                || prev?.Result?.InExperiment != result.InExperiment
                 || prev.Result.VariationId != result.VariationId)
             {
                 _assigned[experiment.Key] = assignment;
@@ -970,7 +970,7 @@ namespace GrowthBook
         {
             var inExperiment = true;
 
-            if (variationIndex < 0 || variationIndex >= experiment.Variations.Count)
+            if (variationIndex < 0 || variationIndex >= experiment?.Variations?.Count)
             {
                 variationIndex = 0;
                 inExperiment = false;

@@ -106,7 +106,7 @@ namespace GrowthBook.Providers
         /// <param name="attributes">The attributes to compare against.</param>
         /// <param name="condition">The condition to evaluate.</param>
         /// <returns>True if the attributes satisfy all of the conditions.</returns>
-        private bool EvalAnd(JToken attributes, JArray conditions, JObject savedGroups)
+        private bool EvalAnd(JToken attributes, JArray conditions, JObject? savedGroups)
         {
             _logger.LogDebug("Evaluating all conditions within an 'and' context");
 
@@ -191,7 +191,7 @@ namespace GrowthBook.Providers
         /// <param name="attributeValue">The attribute value to check.</param>
         /// <param name="conditionValue">The condition value to check.</param>
         /// <returns></returns>
-        private bool EvalOperatorCondition(string op, JToken attributeValue, JToken conditionValue, JObject savedGroups)
+        private bool EvalOperatorCondition(string op, JToken attributeValue, JToken conditionValue, JObject? savedGroups)
         {
             _logger.LogDebug("Evaluating operator condition \'{Op}\'", op);
 
@@ -216,7 +216,11 @@ namespace GrowthBook.Providers
             {
                 try
                 {
-                    return Regex.IsMatch(attributeValue?.ToString(), conditionValue?.ToString());
+                    if (attributeValue == null || conditionValue == null)
+                    {
+                        return false;
+                    }
+                    return Regex.IsMatch(attributeValue.ToString(), conditionValue.ToString());
                 }
                 catch (ArgumentException)
                 {
@@ -227,7 +231,11 @@ namespace GrowthBook.Providers
             {
                 try
                 {
-                    return !Regex.IsMatch(attributeValue?.ToString(), conditionValue?.ToString());
+                    if (attributeValue == null || conditionValue == null)
+                    {
+                        return false;
+                    }
+                    return !Regex.IsMatch(attributeValue.ToString(), conditionValue.ToString());
                 }
                 catch (ArgumentException)
                 {
@@ -335,7 +343,7 @@ namespace GrowthBook.Providers
             {
                 if (attributeValue != null && conditionValue != null)
                 {
-                    var array = savedGroups[conditionValue.ToString()]?.AsArray() ?? new JArray();
+                    var array = savedGroups?[conditionValue.ToString()]?.AsArray() ?? new JArray();
 
                     return IsIn(array, attributeValue, savedGroups);
                 }
@@ -344,7 +352,7 @@ namespace GrowthBook.Providers
             {
                 if (attributeValue != null && conditionValue != null)
                 {
-                    var array = savedGroups[conditionValue.ToString()]?.AsArray() ?? new JArray();
+                    var array = savedGroups?[conditionValue.ToString()]?.AsArray() ?? new JArray();
 
                     return !IsIn(array, attributeValue, savedGroups);
                 }
@@ -401,7 +409,7 @@ namespace GrowthBook.Providers
             return true;
         }
 
-        private bool IsIn(JToken conditionValue, JToken actualValue, JObject savedGroups)
+        private bool IsIn(JToken conditionValue, JToken actualValue, JObject? savedGroups)
         {
             if (actualValue?.Type == JTokenType.Array)
             {

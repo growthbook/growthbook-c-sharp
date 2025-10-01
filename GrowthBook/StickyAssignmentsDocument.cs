@@ -16,7 +16,7 @@ namespace GrowthBook
 
         public StickyAssignmentsDocument() { }
 
-        public StickyAssignmentsDocument(string attributeName, string attributeValue, IDictionary<string, string>? stickyAssignments = default)
+        public StickyAssignmentsDocument(string? attributeName, string? attributeValue, IDictionary<string, string>? stickyAssignments = default)
         {
             AttributeName = attributeName;
             AttributeValue = attributeValue;

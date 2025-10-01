@@ -13,12 +13,12 @@ namespace GrowthBook
         /// <summary>
         /// The feature ID.
         /// </summary>
-        public string Id { get; set; }
+        public string? Id { get; set; }
 
         /// <summary>
         /// The condition to evaluate.
         /// </summary>
-        public JObject Condition { get; set; }
+        public JObject? Condition { get; set; }
 
         /// <summary>
         /// Requires that the parent feature must be set to on if true.

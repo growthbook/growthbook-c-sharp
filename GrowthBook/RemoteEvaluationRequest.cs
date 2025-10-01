@@ -38,7 +38,7 @@ namespace GrowthBook
         /// Optional parameter used for experiments with URL conditions.
         /// </summary>
         [JsonProperty("url")]
-        public string Url { get; set; }
+        public string? Url { get; set; }
 
         /// <summary>
         /// Creates a new RemoteEvaluationRequest with default values.

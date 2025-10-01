@@ -52,7 +52,7 @@ namespace GrowthBook.Api.SSE
         /// </summary>
         /// <param name="eventType">Event type to listen for (null for all events)</param>
         /// <param name="handler">Event handler function</param>
-        public void AddEventListener(string eventType, Func<SSEEvent, Task> handler)
+        public void AddEventListener(string? eventType, Func<SSEEvent, Task> handler)
         {
             if (handler == null)
                 throw new ArgumentNullException(nameof(handler));
