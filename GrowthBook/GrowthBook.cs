@@ -575,7 +575,7 @@ namespace GrowthBook
             try
             {
                 _logger.LogInformation("Loading features from the repository");
-                IDictionary<string, Feature> features;
+                IDictionary<string, Feature>? features;
 
                 // Use remote evaluation if enabled and configured
                 if (_context.RemoteEval && RemoteEvaluationUtilities.IsValidForRemoteEvaluation(_context))
@@ -916,9 +916,9 @@ namespace GrowthBook
                     return true;
                 }
 
-                var bucket = HashUtilities.Hash(filter.Seed, hashValue, filter.HashVersion);
+                var bucket = HashUtilities.Hash(filter.Seed?? string.Empty, hashValue, filter.HashVersion);
 
-                var isInAnyRange = filter.Ranges.Any(x => ExperimentUtilities.InRange(bucket.Value, x));
+                var isInAnyRange = filter.Ranges != null && filter.Ranges.Any(x => ExperimentUtilities.InRange(bucket.Value, x));
 
                 if (!isInAnyRange)
                 {
@@ -956,6 +956,10 @@ namespace GrowthBook
 
             if (range != null)
             {
+                if (!bucket.HasValue)
+                {
+                    return false;
+                }
                 return ExperimentUtilities.InRange(bucket.Value, range);
             }
 

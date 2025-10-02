@@ -32,10 +32,11 @@ namespace GrowthBook.Providers
         {
             _logger.LogInformation("Beginning to evaluate attributes based on the provided JSON condition");
             _logger.LogDebug("Attribute evaluation is based on the JSON condition \'{Condition}\'", condition);
+            if (condition == null) return false;
 
             foreach (var innerCondition in condition.Properties())
             {
-                switch(innerCondition.Name)
+                switch (innerCondition.Name)
                 {
                     case "$or":
                         if (!EvalOr(attributes, innerCondition.AsArray(), savedGroups))

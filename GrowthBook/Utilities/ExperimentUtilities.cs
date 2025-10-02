@@ -334,9 +334,9 @@ namespace GrowthBook.Utilities
             return new StickyBucketVariation(variationIndex, isVersionBlocked: false);
         }
 
-        private static IDictionary<string, string> GetStickyBucketAssignments(JObject attributes, IDictionary<string, StickyAssignmentsDocument> stickyAssignmentDocs, string hashAttribute, string? fallbackAttribute)
+        private static IDictionary<string, string?> GetStickyBucketAssignments(JObject attributes, IDictionary<string, StickyAssignmentsDocument> stickyAssignmentDocs, string hashAttribute, string? fallbackAttribute)
         {
-            var mergedAssignments = new Dictionary<string, string>();
+            var mergedAssignments = new Dictionary<string, string?>();
 
             if (stickyAssignmentDocs is null)
             {
@@ -349,7 +349,7 @@ namespace GrowthBook.Utilities
             (var hashAttributeWithFallback, var hashValueWithFallback) = attributes.GetHashAttributeAndValue(fallbackAttribute, default);
             var fallbackKey = new StickyAssignmentsDocument(hashAttributeWithFallback, hashValueWithFallback);
 
-            var pendingAssignments = new List<IDictionary<string, string>>();
+            var pendingAssignments = new List<IDictionary<string, string?>>();
 
             // We're grabbing any fallback values first so that the original can override them if present as well.
 
@@ -366,7 +366,7 @@ namespace GrowthBook.Utilities
             return mergedAssignments.MergeWith(pendingAssignments);
         }
 
-        private static int FindVariationIndex(IList<VariationMeta> meta, string key)
+        private static int FindVariationIndex(IList<VariationMeta> meta, string? key)
         {
             for(var i = 0; i < meta.Count; i++)
             {
