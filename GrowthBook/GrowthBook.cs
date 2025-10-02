@@ -28,7 +28,7 @@ namespace GrowthBook
         private readonly bool _qaMode;
         private readonly Dictionary<string, ExperimentAssignment> _assigned;
         private readonly ConcurrentDictionary<string, byte> _tracked;
-        private Action<Experiment, ExperimentResult>? _trackingCallback;
+        private Action<Experiment?, ExperimentResult?>? _trackingCallback;
         private readonly List<Action<Experiment, ExperimentResult>> _subscriptions;
         private bool _disposedValue;
         private readonly IConditionEvaluationProvider _conditionEvaluator;
@@ -265,7 +265,11 @@ namespace GrowthBook
             if (additionalAttributes == null) return;
             var oldAttributes = Attributes?.DeepClone() as JObject;
 
-
+            if (Attributes == null)
+            {
+                Attributes = new JObject();
+            }
+            
             foreach (var kvp in additionalAttributes)
             {
                 Attributes[kvp.Key] = JToken.FromObject(kvp.Value);
@@ -290,6 +294,10 @@ namespace GrowthBook
             if (additionalAttributes == null) return;
 
             var oldAttributes = Attributes?.DeepClone() as JObject;
+            if (Attributes == null)
+            {
+                Attributes = new JObject();
+            }
 
             var additionalJObject = JObject.FromObject(additionalAttributes);
             foreach (var property in additionalJObject.Properties())
@@ -514,13 +522,13 @@ namespace GrowthBook
                 }
 
                 _logger.LogDebug("No rules matched for feature '{FeatureId}', returning default value", featureId);
-                return GetFeatureResult(feature.DefaultValue ?? null, FeatureResult.SourceId.DefaultValue);
+                return GetFeatureResult(feature?.DefaultValue ?? null, FeatureResult.SourceId.DefaultValue);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, $"Encountered an unhandled exception while executing '{nameof(EvalFeature)}'");
 
-                if (!Features.TryGetValue(featureId, out Feature feature))
+                if (!Features.TryGetValue(featureId, out Feature? feature))
                 {
                     return GetFeatureResult(null, FeatureResult.SourceId.UnknownFeature);
                 }
@@ -812,7 +820,7 @@ namespace GrowthBook
 
             // 9. Attempt to assign this run to an experiment variation.
 
-            var hash = HashUtilities.Hash(experiment.Seed ?? experiment.Key, hashValue, experiment.HashVersion);
+            var hash = HashUtilities.Hash(experiment?.Seed ?? experiment?.Key ?? "", hashValue, experiment?.HashVersion);
 
             if (hash is null)
             {
@@ -821,7 +829,7 @@ namespace GrowthBook
 
             if (!foundStickyBucket)
             {
-                var ranges = experiment.Ranges?.Count > 0 ? experiment.Ranges : ExperimentUtilities.GetBucketRanges(experiment.Variations?.Count ?? 0, experiment.Coverage ?? 1, experiment.Weights ?? new List<double>());
+                var ranges = experiment?.Ranges?.Count > 0 ? experiment.Ranges : ExperimentUtilities.GetBucketRanges(experiment?.Variations?.Count ?? 0, experiment?.Coverage ?? 1, experiment?.Weights ?? new List<double>());
                 assignedBucket = ExperimentUtilities.ChooseVariation(hash.Value, ranges.ToList());
 
                 // 10. Abort if a variation could not be assigned.
@@ -966,7 +974,7 @@ namespace GrowthBook
         /// <param name="variationIndex">The variation id, if specified.</param>
         /// <param name="hashUsed">Whether or not a hash was used in assignment.</param>
         /// <returns>The experiment result.</returns>
-        private ExperimentResult GetExperimentResult(Experiment experiment, int variationIndex = -1, bool hashUsed = false, string? featureId = null, double? bucketHash = null, bool wasStickyBucketUsed = false)
+        private ExperimentResult GetExperimentResult(Experiment? experiment, int variationIndex = -1, bool hashUsed = false, string? featureId = null, double? bucketHash = null, bool wasStickyBucketUsed = false)
         {
             var inExperiment = true;
 
@@ -976,10 +984,10 @@ namespace GrowthBook
                 inExperiment = false;
             }
 
-            var canUseStickyBucketing = _stickyBucketService != null && !experiment.DisableStickyBucketing;
+            var canUseStickyBucketing = _stickyBucketService != null && experiment != null && !experiment.DisableStickyBucketing;
             var fallbackAttribute = canUseStickyBucketing ? experiment?.FallbackAttribute : default;
 
-            (var hashAttribute, var hashValue) = Attributes.GetHashAttributeAndValue(experiment?.HashAttribute, fallbackAttributeKey: fallbackAttribute);
+            (var hashAttribute, var hashValue) = Attributes.GetHashAttributeAndValue(experiment?.HashAttribute , fallbackAttributeKey: fallbackAttribute);
 
             var meta = experiment?.Meta?.Count > 0 ? experiment.Meta[variationIndex] : null;
 
@@ -1076,7 +1084,7 @@ namespace GrowthBook
         /// </summary>
         /// <param name="newAttributes">The new attributes to check</param>
         /// <returns>True if remote evaluation should be triggered</returns>
-        private bool ShouldTriggerRemoteEvaluation(JObject newAttributes)
+        private bool ShouldTriggerRemoteEvaluation(JObject? newAttributes)
         {
             // Check if attributes changed
             var attributesChanged = RemoteEvaluationUtilities.ShouldTriggerRemoteEvaluation(
@@ -1098,7 +1106,7 @@ namespace GrowthBook
         /// Triggers remote evaluation asynchronously when attribute changes are detected.
         /// </summary>
         /// <param name="newAttributes">The new attributes</param>
-        private async Task TriggerRemoteEvaluationAsync(JObject newAttributes)
+        private async Task TriggerRemoteEvaluationAsync(JObject? newAttributes)
         {
             try
             {

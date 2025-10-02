@@ -28,7 +28,7 @@ namespace GrowthBook.Providers
         public ConditionEvaluationProvider(ILogger<ConditionEvaluationProvider> logger) => _logger = logger;
 
         /// <inheritdoc/>
-        public bool EvalCondition(JToken attributes, JObject condition, JObject? savedGroups = default)
+        public bool EvalCondition(JToken? attributes, JObject? condition, JObject? savedGroups = default)
         {
             _logger.LogInformation("Beginning to evaluate attributes based on the provided JSON condition");
             _logger.LogDebug("Attribute evaluation is based on the JSON condition \'{Condition}\'", condition);
@@ -79,7 +79,7 @@ namespace GrowthBook.Providers
         /// <param name="attributes">The attributes to compare against.</param>
         /// <param name="condition">The condition to evaluate.</param>
         /// <returns>True if the attributes satisfy any of the conditions.</returns>
-        private bool EvalOr(JToken attributes, JArray conditions, JObject? savedGroups)
+        private bool EvalOr(JToken? attributes, JArray conditions, JObject? savedGroups)
         {
             if (conditions.Count == 0)
             {
@@ -106,7 +106,7 @@ namespace GrowthBook.Providers
         /// <param name="attributes">The attributes to compare against.</param>
         /// <param name="condition">The condition to evaluate.</param>
         /// <returns>True if the attributes satisfy all of the conditions.</returns>
-        private bool EvalAnd(JToken attributes, JArray conditions, JObject? savedGroups)
+        private bool EvalAnd(JToken? attributes, JArray conditions, JObject? savedGroups)
         {
             _logger.LogDebug("Evaluating all conditions within an 'and' context");
 
@@ -127,7 +127,7 @@ namespace GrowthBook.Providers
         /// <param name="conditionValue">The condition value to check.</param>
         /// <param name="attributeValue">The attribute value to check.</param>
         /// <returns>True if the condition value matches the attribute value.</returns>
-        private bool EvalConditionValue(JToken conditionValue, JToken attributeValue, JObject? savedGroups)
+        private bool EvalConditionValue(JToken conditionValue, JToken? attributeValue, JObject? savedGroups)
         {
             _logger.LogDebug("Evaluating condition value \'{ConditionValue}\'", conditionValue);
 
@@ -160,7 +160,7 @@ namespace GrowthBook.Providers
         /// <param name="condition">The condition to check.</param>
         /// <param name="attributeValue">The attribute value to check.</param>
         /// <returns>True if attributeValue is an array and at least one of the array items matches the condition.</returns>
-        private bool ElemMatch(JObject condition, JToken attributeValue, JObject? savedGroups)
+        private bool ElemMatch(JObject condition, JToken? attributeValue, JObject? savedGroups)
         {
             if (attributeValue?.Type != JTokenType.Array)
             {
@@ -191,7 +191,7 @@ namespace GrowthBook.Providers
         /// <param name="attributeValue">The attribute value to check.</param>
         /// <param name="conditionValue">The condition value to check.</param>
         /// <returns></returns>
-        private bool EvalOperatorCondition(string op, JToken attributeValue, JToken conditionValue, JObject? savedGroups)
+        private bool EvalOperatorCondition(string op, JToken? attributeValue, JToken conditionValue, JObject? savedGroups)
         {
             _logger.LogDebug("Evaluating operator condition \'{Op}\'", op);
 
@@ -363,13 +363,13 @@ namespace GrowthBook.Providers
             return false;
         }
 
-        internal static string PaddedVersionString(string input)
+        internal static string PaddedVersionString(string? input)
         {
             // Remove build info and leading `v` if any
             // Split version into parts (both core version numbers and pre-release tags)
             // "v1.2.3-rc.1+build123" -> ["1","2","3","rc","1"]
 
-            var trimmedVersion = Regex.Replace(input, @"(^v|\+.*$)", string.Empty);
+            var trimmedVersion = Regex.Replace(input?? string.Empty, @"(^v|\+.*$)", string.Empty);
             var versionParts = Regex.Split(trimmedVersion, "[-.]").ToList();
 
             // If it's SemVer without a pre-release, add `~` to the end
@@ -409,7 +409,7 @@ namespace GrowthBook.Providers
             return true;
         }
 
-        private bool IsIn(JToken conditionValue, JToken actualValue, JObject? savedGroups)
+        private bool IsIn(JToken conditionValue, JToken? actualValue, JObject? savedGroups)
         {
             if (actualValue?.Type == JTokenType.Array)
             {
@@ -440,13 +440,13 @@ namespace GrowthBook.Providers
                     return false;
                 }
 
-                return conditionValue.ToString().Contains(actualValue.ToString());
+                return conditionValue.ToString().Contains(actualValue?.ToString() ?? string.Empty);
             }
         }
 
-        private static bool CompareVersions(JToken left, JToken right, Func<int, bool> meetsComparison)
+        private static bool CompareVersions(JToken? left, JToken right, Func<int, bool> meetsComparison)
         {
-            var leftValue = PaddedVersionString(left.ToString());
+            var leftValue = PaddedVersionString(left?.ToString());
             var rightValue = PaddedVersionString(right.ToString());
 
             var comparisonResult = string.CompareOrdinal(leftValue, rightValue);
@@ -454,14 +454,14 @@ namespace GrowthBook.Providers
             return meetsComparison(comparisonResult);
         }
 
-        private static JToken GetPath(JToken attributes, string key) => attributes.SelectToken(key);
+        private static JToken? GetPath(JToken? attributes, string key) => attributes?.SelectToken(key);
 
         /// <summary>
         /// Gets a string value representing the data type of an attribute value.
         /// </summary>
         /// <param name="attributeValue">The attribute value to check.</param>
         /// <returns>String value representing the data type of an attribute value.</returns>
-        private static string GetType(JToken attributeValue)
+        private static string GetType(JToken? attributeValue)
         {
             if (attributeValue == null)
             {
@@ -498,7 +498,7 @@ namespace GrowthBook.Providers
         /// <param name="conditionValue">The condition value to compare against.</param>
         /// <param name="meetsComparison">Function that determines if the comparison result meets the criteria.</param>
         /// <returns>True if the comparison is satisfied, false if attribute is null or comparison fails.</returns>
-        private bool EvaluateComparison(JToken attributeValue, JToken conditionValue, Func<int, bool> meetsComparison)
+        private bool EvaluateComparison(JToken? attributeValue, JToken conditionValue, Func<int, bool> meetsComparison)
         {
             // Null/missing attributes should never satisfy comparison operators
             if (attributeValue.IsNull())
@@ -521,7 +521,7 @@ namespace GrowthBook.Providers
             }
 
             // Fall back to string comparison
-            var attrString = attributeValue.ToString();
+            var attrString = attributeValue?.ToString();
             var condString = conditionValue.ToString();
             
             var stringComparisonResult = string.Compare(attrString, condString, StringComparison.Ordinal);
@@ -531,12 +531,12 @@ namespace GrowthBook.Providers
         /// <summary>
         /// Attempts to parse both values as DateTime objects for proper date comparison.
         /// </summary>
-        private static bool TryParseDateTimes(JToken attributeValue, JToken conditionValue, out DateTime attrDate, out DateTime condDate)
+        private static bool TryParseDateTimes(JToken? attributeValue, JToken conditionValue, out DateTime attrDate, out DateTime condDate)
         {
             attrDate = default;
             condDate = default;
 
-            var attrString = attributeValue.ToString();
+            var attrString = attributeValue?.ToString();
             var condString = conditionValue.ToString();
 
             // Try parsing both values as DateTime
@@ -549,17 +549,17 @@ namespace GrowthBook.Providers
         /// <summary>
         /// Attempts to parse both values as numeric values for proper numeric comparison.
         /// </summary>
-        private static bool TryParseNumbers(JToken attributeValue, JToken conditionValue, out double attrNumber, out double condNumber)
+        private static bool TryParseNumbers(JToken? attributeValue, JToken conditionValue, out double attrNumber, out double condNumber)
         {
             attrNumber = default;
             condNumber = default;
 
             // First try to get numeric values from JToken types directly
-            if (attributeValue.Type == JTokenType.Integer || attributeValue.Type == JTokenType.Float)
+            if (attributeValue?.Type == JTokenType.Integer || attributeValue?.Type == JTokenType.Float)
             {
                 attrNumber = attributeValue.Value<double>();
             }
-            else if (!double.TryParse(attributeValue.ToString(), out attrNumber))
+            else if (!double.TryParse(attributeValue?.ToString(), out attrNumber))
             {
                 return false;
             }

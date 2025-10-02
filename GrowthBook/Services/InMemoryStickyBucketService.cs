@@ -19,7 +19,7 @@ namespace GrowthBook.Services
             return assignments.ToDictionary(x => x.Attribute, x => x.Document);
         }
 
-        public StickyAssignmentsDocument GetAssignments(string attributeName, string attributeValue)
+        public StickyAssignmentsDocument? GetAssignments(string attributeName, string attributeValue)
         {
             var attribute = FormatAttribute(attributeName, attributeValue);
 

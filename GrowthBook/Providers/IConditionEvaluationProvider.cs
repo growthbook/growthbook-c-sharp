@@ -16,6 +16,6 @@ namespace GrowthBook.Providers
         /// <param name="attributes">The attributes to compare against.</param>
         /// <param name="condition">The condition to evaluate.</param>
         /// <returns>True if the attributes satisfy the condition.</returns>
-        bool EvalCondition(JToken attributes, JObject condition, JObject? savedGroups = default);
+        bool EvalCondition(JToken? attributes, JObject? condition, JObject? savedGroups = default);
     }
 }

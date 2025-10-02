@@ -13,6 +13,6 @@ namespace GrowthBook.Extensions
         /// <param name="encryptedValue">The encrypted value.</param>
         /// <param name="decryptionKey">The caller's decryption key.</param>
         /// <returns>The decrypted data. Note that if the key is incorrect, this will return garbage data that will not be usable.</returns>
-        public static string DecryptWith(this string? encryptedValue, string? decryptionKey) => CryptographyUtilities.Decrypt(encryptedValue, decryptionKey);
+        public static string? DecryptWith(this string? encryptedValue, string? decryptionKey) => CryptographyUtilities.Decrypt(encryptedValue, decryptionKey);
     }
 }

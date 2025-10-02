@@ -12,15 +12,15 @@ namespace GrowthBook
 
         public string? AttributeName { get; set; }
         public string? AttributeValue { get; set; }
-        public IDictionary<string, string> Assignments { get; set; } = new Dictionary<string, string>();
+        public IDictionary<string, string?> Assignments { get; set; } = new Dictionary<string, string?>();
 
         public StickyAssignmentsDocument() { }
 
-        public StickyAssignmentsDocument(string? attributeName, string? attributeValue, IDictionary<string, string>? stickyAssignments = default)
+        public StickyAssignmentsDocument(string? attributeName, string? attributeValue, IDictionary<string, string?>? stickyAssignments = default)
         {
             AttributeName = attributeName;
             AttributeValue = attributeValue;
-            Assignments = stickyAssignments ?? new Dictionary<string, string>();
+            Assignments = stickyAssignments ?? new Dictionary<string, string?>();
         }
     }
 }

@@ -30,11 +30,12 @@ namespace GrowthBook
         /// <param name="userAttributes">User-specific attributes</param>
         /// <param name="trackingCallback">Optional tracking callback for this user context</param>
         /// <returns>New GrowthBook instance with user context</returns>
-        public GrowthBook CreateForUser(IDictionary<string, object> userAttributes, Action<Experiment, ExperimentResult>? trackingCallback = null)
+        public GrowthBook CreateForUser(IDictionary<string, object> userAttributes, Action<Experiment?, ExperimentResult?>? trackingCallback = null)
         {
             if (_disposed) throw new ObjectDisposedException(nameof(GrowthBookFactory));
             
             var context = _baseContext.Clone();
+            context.Attributes ??= new JObject();
             
             if (userAttributes != null)
             {
@@ -60,11 +61,12 @@ namespace GrowthBook
         /// <param name="userAttributes">User-specific attributes as anonymous object</param>
         /// <param name="trackingCallback">Optional tracking callback for this user context</param>
         /// <returns>New GrowthBook instance with user context</returns>
-        public GrowthBook CreateForUser(object userAttributes, Action<Experiment, ExperimentResult>? trackingCallback = null)
+        public GrowthBook CreateForUser(object userAttributes, Action<Experiment?, ExperimentResult?>? trackingCallback = null)
         {
             if (_disposed) throw new ObjectDisposedException(nameof(GrowthBookFactory));
             
             var context = _baseContext.Clone();
+            context.Attributes ??= new JObject();
             
             if (userAttributes != null)
             {

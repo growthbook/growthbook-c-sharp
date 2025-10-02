@@ -120,7 +120,7 @@ namespace GrowthBook
         /// <summary>
         /// Callback function used for tracking Experiment assignment.
         /// </summary>
-        public Action<Experiment, ExperimentResult>? TrackingCallback { get; set; }
+        public Action<Experiment?, ExperimentResult?>? TrackingCallback { get; set; }
 
         /// <summary>
         /// A repository implementation for retrieving and caching features that will override

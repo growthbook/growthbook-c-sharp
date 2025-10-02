@@ -62,7 +62,7 @@ namespace GrowthBook.Utilities
         /// <param name="userId">The user id string to check.</param>
         /// <param name="nSpace">The namespace to check.</param>
         /// <returns>True if the userid is within the experiment namespace.</returns>
-        public static bool InNamespace(string userId, Namespace nSpace)
+        public static bool InNamespace(string? userId, Namespace nSpace)
         {
             var n = HashUtilities.Hash("__" + nSpace.Id, userId, 1);
             return n >= nSpace.Start && n < nSpace.End;
@@ -151,7 +151,7 @@ namespace GrowthBook.Utilities
         /// <param name="number">The number to verify.</param>
         /// <param name="range">The bucket range.</param>
         /// <returns>True if the value is in the range, false otherwise.</returns>
-        public static bool InRange(double number, BucketRange range) => number >= range.Start && number < range.End;
+        public static bool InRange(double? number, BucketRange range) => number >= range.Start && number < range.End;
 
         public static bool IsUrlTargeted(string url, IEnumerable<UrlPattern> urlPatterns)
         {
@@ -220,7 +220,7 @@ namespace GrowthBook.Utilities
             // If a protocol is missing, but a host is specified, add `https://` to the front
             // Use "_____" as the wildcard since `*` is not a valid hostname in some browsers
 
-            var currentPattern = pattern.Pattern;
+            var currentPattern = pattern.Pattern ?? "";
 
             var match = Regex.Match(currentPattern, "^([^:/?]*)\\.");
 
@@ -244,7 +244,7 @@ namespace GrowthBook.Utilities
 
             if (expectedUri.ContainsHashInPath())
             {
-                comparisons.Add((actual.GetHashContents(), expectedUri.GetHashContents(), false));
+                comparisons.Add((actual.GetHashContents() ?? string.Empty, expectedUri.GetHashContents() ?? string.Empty, false));
             }
 
             var actualQueryParameters = HttpUtility.ParseQueryString(actual.Query);
@@ -252,7 +252,7 @@ namespace GrowthBook.Utilities
 
             for(var i = 0; i < expectedQueryParameters.Count; i++)
             {
-                comparisons.Add((actualQueryParameters[i] ?? string.Empty, expectedQueryParameters[i], false));
+                comparisons.Add((actualQueryParameters[i] ?? string.Empty, expectedQueryParameters[i] ?? string.Empty, false));
             }
 
             // Any failure means the whole thing fails.
@@ -282,8 +282,8 @@ namespace GrowthBook.Utilities
         {
             try
             {
-                var match = Regex.IsMatch(pattern.Pattern, @"([^\\])\/");
-                var escaped = Regex.Replace(pattern.Pattern, @"([^\\])\/", @"$1\/");
+                var match = Regex.IsMatch(pattern.Pattern ?? "", @"([^\\])\/");
+                var escaped = Regex.Replace(pattern.Pattern ?? "", @"([^\\])\/", @"$1\/");
 
                 return new Regex(escaped);
             }
@@ -293,10 +293,10 @@ namespace GrowthBook.Utilities
             }
         }
 
-        public static (StickyAssignmentsDocument Document, bool IsChanged) GenerateStickyBucketAssignment(IStickyBucketService stickyBucketService, string attributeName, string attributeValue, IDictionary<string, string> assignments)
+        public static (StickyAssignmentsDocument Document, bool IsChanged) GenerateStickyBucketAssignment(IStickyBucketService stickyBucketService, string? attributeName, string? attributeValue, IDictionary<string, string?> assignments)
         {
             var existingDocument = stickyBucketService is null ? new StickyAssignmentsDocument(attributeName, attributeValue) : stickyBucketService.GetAssignments(attributeName, attributeValue);
-            var newAssignments = new Dictionary<string, string>(existingDocument?.Assignments ?? new Dictionary<string, string>());
+            var newAssignments = new Dictionary<string, string?>(existingDocument?.Assignments ?? new Dictionary<string, string?>());
 
             newAssignments.MergeWith(new[] { assignments });
 

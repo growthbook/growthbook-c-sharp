@@ -108,8 +108,8 @@ namespace GrowthBook.Api.Extensions
 
             if (featuresResponse == null || featuresResponse.EncryptedFeatures.IsNullOrWhitespace())
             {
-                logger.LogInformation($"API response JSON contained no encrypted features, returning '{featuresResponse.FeatureCount}' unencrypted features");
-                return featuresResponse.Features;
+                logger.LogInformation($"API response JSON contained no encrypted features, returning '{featuresResponse?.FeatureCount}' unencrypted features");
+                return featuresResponse?.Features;
             }
 
             logger.LogInformation("API response JSON contained encrypted features, decrypting them now");
@@ -119,6 +119,11 @@ namespace GrowthBook.Api.Extensions
 
             logger.LogDebug($"Completed attempt to decrypt features which resulted in plaintext value of '{decryptedFeaturesJson}'");
 
+            if (string.IsNullOrWhiteSpace(decryptedFeaturesJson))
+            {
+                logger.LogWarning("Decrypted features JSON is null or empty");
+                return null;
+            }
             var jsonObject = JObject.Parse(decryptedFeaturesJson);
 
             return jsonObject.ToObject<Dictionary<string, Feature>>();

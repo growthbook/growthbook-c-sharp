@@ -167,6 +167,10 @@ namespace GrowthBook.Api
         {
             var featuresResponse = JsonConvert.DeserializeObject<FeaturesResponse>(json);
 
+            if (featuresResponse == null)
+            {
+                return null;
+            }
             if (featuresResponse.EncryptedFeatures.IsNullOrWhitespace())
             {
                 _logger.LogInformation("API response JSON contained no encrypted features, returning \'{FeaturesResponseFeatureCount}\' unencrypted features", featuresResponse.FeatureCount);
@@ -180,6 +184,11 @@ namespace GrowthBook.Api
 
             _logger.LogDebug("Completed attempt to decrypt features which resulted in plaintext value of \'{DecryptedFeaturesJson}\'", decryptedFeaturesJson);
 
+            if (string.IsNullOrWhiteSpace(decryptedFeaturesJson))
+            {
+                _logger.LogWarning("Decrypted features JSON is null or empty.");
+                return null;
+            }
             var jsonObject = JObject.Parse(decryptedFeaturesJson);
 
             return jsonObject.ToObject<Dictionary<string, Feature>>();

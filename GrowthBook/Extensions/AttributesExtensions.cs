@@ -72,8 +72,13 @@ namespace GrowthBook.Extensions
             if (string.IsNullOrEmpty(key))
                 throw new ArgumentException("Attribute key cannot be null or empty", nameof(key));
 
+            if (growthBook.Attributes == null)
+            {
+                growthBook.Attributes = new JObject();
+            }
+
             growthBook.Attributes[key] = JToken.FromObject(value);
-            return growthBook;
+            return growthBook!;
         }
 
         /// <summary>
@@ -86,7 +91,7 @@ namespace GrowthBook.Extensions
         {
             if (!string.IsNullOrEmpty(key))
             {
-                growthBook.Attributes.Remove(key);
+                growthBook.Attributes?.Remove(key);
             }
             return growthBook;
         }

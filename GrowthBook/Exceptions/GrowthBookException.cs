@@ -7,7 +7,7 @@ namespace GrowthBook.Exceptions
     /// </summary>
     public class GrowthBookException : Exception
     {
-        public GrowthBookException(string message) : base(message)
+        public GrowthBookException(string? message) : base(message)
         {
         }
 

@@ -58,7 +58,7 @@ namespace GrowthBook.Utilities
         /// <returns>True if remote evaluation should be triggered</returns>
         public static bool ShouldTriggerRemoteEvaluation(
             JObject? oldAttributes,
-            JObject newAttributes,
+            JObject? newAttributes,
             string[]? cacheKeyAttributes)
         {
             if (oldAttributes == null && newAttributes == null)
@@ -122,7 +122,7 @@ namespace GrowthBook.Utilities
         /// <param name="allAttributes">All available attributes</param>
         /// <param name="cacheKeyAttributes">Attributes to include in cache key</param>
         /// <returns>Filtered attributes object</returns>
-        private static JObject GetRelevantAttributes(JObject allAttributes, string[]? cacheKeyAttributes)
+        private static JObject GetRelevantAttributes(JObject? allAttributes, string[]? cacheKeyAttributes)
         {
             if (allAttributes == null)
                 return new JObject();
