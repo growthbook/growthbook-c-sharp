@@ -626,20 +626,20 @@ namespace GrowthBook
             bool shouldFireCallbacks = false;
 
             // Always record the assignment locally for GetAllResults()
-            if (!_assigned.TryGetValue(experiment.Key, out ExperimentAssignment? prev)
+            if (!_assigned.TryGetValue(experiment.Key ?? "", out ExperimentAssignment? prev)
                 || prev?.Result?.InExperiment != result.InExperiment
                 || prev.Result.VariationId != result.VariationId)
             {
-                _assigned[experiment.Key] = assignment;
+                _assigned[experiment.Key?? ""] = assignment;
                 shouldFireCallbacks = true;
             }
 
             // Also use repository tracking if available (for preventing duplicate callbacks across instances)
             if (_featureRepository != null)
             {
-                if (!_featureRepository.HasIdenticalAssignment(experiment.Key, assignment))
+                if (!_featureRepository.HasIdenticalAssignment(experiment.Key??"", assignment))
                 {
-                    _featureRepository.RecordAssignment(experiment.Key, assignment);
+                    _featureRepository.RecordAssignment(experiment.Key??"", assignment);
                 }
             }
 
@@ -664,7 +664,7 @@ namespace GrowthBook
         {
             // 1. Abort if there aren't enough variations present.
 
-            if (experiment.Variations.IsNull() || experiment.Variations.Count < 2)
+            if (experiment.Variations.IsNull() || experiment?.Variations?.Count < 2)
             {
                 _logger.LogDebug("Aborting experiment, not enough variations are present");
                 return GetExperimentResult(experiment, featureId: featureId);
@@ -694,7 +694,7 @@ namespace GrowthBook
 
             if (!Url.IsNullOrWhitespace())
             {
-                var overrideValue = ExperimentUtilities.GetQueryStringOverride(experiment.Key, Url, experiment.Variations.Count);
+                var overrideValue = ExperimentUtilities.GetQueryStringOverride(experiment?.Key, Url, experiment?.Variations?.Count);
 
                 if (overrideValue != null)
                 {
@@ -705,7 +705,7 @@ namespace GrowthBook
 
             // 4. Use the forced variation value instead if one is specified for this experiment.
 
-            if (ForcedVariations.TryGetValue(experiment.Key, out var variation))
+            if (ForcedVariations!= null && ForcedVariations.TryGetValue(experiment?.Key??"", out var variation))
             {
                 _logger.LogDebug("Found a forced variation value, creating experiment result from it");
                 return GetExperimentResult(experiment, variation, featureId: featureId);
@@ -713,7 +713,7 @@ namespace GrowthBook
 
             // 5. Abort if the experiment isn't currently active.
 
-            if (!experiment.Active)
+            if (experiment != null && !experiment.Active)
             {
                 _logger.LogDebug("Aborting experiment, experiment is not currently active");
                 return GetExperimentResult(experiment, featureId: featureId);
@@ -721,21 +721,21 @@ namespace GrowthBook
 
             // 6. Abort if we're unable to generate a hash identifying this run.
 
-            (var hashAttribute, var hashValue) = Attributes.GetHashAttributeAndValue(experiment.HashAttribute);
+            (var hashAttribute, var hashValue) = Attributes.GetHashAttributeAndValue(experiment?.HashAttribute);
 
             if (hashValue.IsNullOrWhitespace())
             {
                 // Check if a fallback attribute for sticky bucketing exists and use it if possible.
 
-                var hasFallback = !experiment.FallbackAttribute.IsNullOrWhitespace();
+                var hasFallback = !experiment?.FallbackAttribute.IsNullOrWhitespace() ?? false;
 
                 if (hasFallback)
                 {
-                    (hashAttribute, hashValue) = Attributes.GetHashAttributeAndValue(experiment.FallbackAttribute);
+                    (hashAttribute, hashValue) = Attributes.GetHashAttributeAndValue(experiment?.FallbackAttribute);
                 }
                 else
                 {
-                    _logger.LogDebug("Aborting experiment, unable to locate a value for the experiment hash attribute \'{ExperimentHashAttribute}\'", experiment.HashAttribute);
+                    _logger.LogDebug("Aborting experiment, unable to locate a value for the experiment hash attribute \'{ExperimentHashAttribute}\'", experiment?.HashAttribute);
                     return GetExperimentResult(experiment, featureId: featureId);
                 }
             }
@@ -746,7 +746,7 @@ namespace GrowthBook
             var foundStickyBucket = false;
             var stickyBucketVersionIsBlocked = false;
 
-            if (_stickyBucketService != null && !experiment.DisableStickyBucketing)
+            if (_stickyBucketService != null && experiment!= null && !experiment.DisableStickyBucketing)
             {
                 var bucketVersion = experiment.BucketVersion;
                 var minBucketVersion = experiment.MinBucketVersion;
@@ -770,7 +770,7 @@ namespace GrowthBook
             {
                 // 7. Abort if this run is ineligible to be included in the experiment.
 
-                if (experiment.Filters?.Any() == true)
+                if (experiment?.Filters?.Any() == true)
                 {
                     if (IsFilteredOut(experiment.Filters))
                     {
@@ -778,7 +778,7 @@ namespace GrowthBook
                         return GetExperimentResult(experiment, featureId: featureId);
                     }
                 }
-                else if (experiment.Namespace != null && !ExperimentUtilities.InNamespace(hashValue, experiment.Namespace))
+                else if (experiment?.Namespace != null && !ExperimentUtilities.InNamespace(hashValue, experiment.Namespace))
                 {
                     _logger.LogDebug("Aborting experiment, not within the specified namespace \'{ExperimentNamespace}\'", experiment.Namespace);
                     return GetExperimentResult(experiment, featureId: featureId);
@@ -850,7 +850,7 @@ namespace GrowthBook
 
             // 11. Use the forced value for the experiment if one is specified.
 
-            if (experiment.Force != null)
+            if (experiment?.Force != null)
             {
                 _logger.LogDebug("Found a forced value, creating experiment result from it");
                 return GetExperimentResult(experiment, experiment.Force.Value, featureId: featureId);
@@ -866,12 +866,12 @@ namespace GrowthBook
 
             // 13. Run the experiment and track the result if we haven't seen this one before.
 
-            _logger.LogInformation("Participation in experiment with key \'{ExperimentKey}\' is allowed, running the experiment", experiment.Key);
+            _logger.LogInformation("Participation in experiment with key \'{ExperimentKey}\' is allowed, running the experiment", experiment?.Key);
             var result = GetExperimentResult(experiment, assignedBucket, true, featureId, hash, foundStickyBucket);
 
             // 13.5 Store the value for later if sticky bucketing is enabled.
 
-            if (_stickyBucketService != null && !experiment.DisableStickyBucketing)
+            if (_stickyBucketService != null && experiment!=null && !experiment.DisableStickyBucketing)
             {
                 var experimentKey = ExperimentUtilities.GetStickyBucketExperimentKey(experiment.Key, experiment.BucketVersion);
 
@@ -917,6 +917,11 @@ namespace GrowthBook
                 }
 
                 var bucket = HashUtilities.Hash(filter.Seed?? string.Empty, hashValue, filter.HashVersion);
+                if (!bucket.HasValue)
+                {
+                    _logger.LogDebug("Bucket value is null, marking as filtered out");
+                    return true;
+                }
 
                 var isInAnyRange = filter.Ranges != null && filter.Ranges.Any(x => ExperimentUtilities.InRange(bucket.Value, x));
 
@@ -1023,14 +1028,14 @@ namespace GrowthBook
         /// </summary>
         /// <param name="experiment">The experiment that was assigned.</param>
         /// <param name="result">The result of the assignment.</param>
-        private void TryToTrack(Experiment experiment, ExperimentResult result)
+        private void TryToTrack(Experiment? experiment, ExperimentResult result)
         {
             if (_trackingCallback == null)
             {
                 return;
             }
 
-            string key = result.HashAttribute + result.HashValue + experiment.Key + result.VariationId;
+            string key = result.HashAttribute + result.HashValue + experiment?.Key + result.VariationId;
 
             // Use atomic operations to prevent race conditions in concurrent scenarios
             bool shouldTrack = false;

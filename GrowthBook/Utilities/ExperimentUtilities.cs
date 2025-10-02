@@ -21,9 +21,9 @@ namespace GrowthBook.Utilities
         /// <param name="url">The url to search.</param>
         /// <param name="numVariations">The number of variations in the experiment.</param>
         /// <returns>The overridden variation id, or null if not found.</returns>
-        public static int? GetQueryStringOverride(string id, string url, int numVariations)
+        public static int? GetQueryStringOverride(string? id, string? url, int? numVariations)
         {
-            if (url.IsNullOrWhitespace())
+            if (url == null || url.IsNullOrWhitespace())
             {
                 return null;
             }
@@ -306,7 +306,7 @@ namespace GrowthBook.Utilities
             return (document, isChanged);
         }
 
-        public static StickyBucketVariation GetStickyBucketVariation(Experiment experiment, int bucketVersion, int minBucketVersion, IList<VariationMeta> meta, JObject attributes, IDictionary<string, StickyAssignmentsDocument> document)
+        public static StickyBucketVariation GetStickyBucketVariation(Experiment experiment, int bucketVersion, int minBucketVersion, IList<VariationMeta> meta, JObject? attributes, IDictionary<string, StickyAssignmentsDocument> document)
         {
             var id = GetStickyBucketExperimentKey(experiment.Key, experiment.BucketVersion);
             var assignments = GetStickyBucketAssignments(attributes, document, experiment.HashAttribute, experiment.FallbackAttribute);
@@ -334,7 +334,7 @@ namespace GrowthBook.Utilities
             return new StickyBucketVariation(variationIndex, isVersionBlocked: false);
         }
 
-        private static IDictionary<string, string?> GetStickyBucketAssignments(JObject attributes, IDictionary<string, StickyAssignmentsDocument> stickyAssignmentDocs, string hashAttribute, string? fallbackAttribute)
+        private static IDictionary<string, string?> GetStickyBucketAssignments(JObject? attributes, IDictionary<string, StickyAssignmentsDocument> stickyAssignmentDocs, string hashAttribute, string? fallbackAttribute)
         {
             var mergedAssignments = new Dictionary<string, string?>();
 
