@@ -1,7 +1,8 @@
 using System.Collections.Generic;
-using System.Linq;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
+
 
 namespace GrowthBook.Utilities
 {
@@ -37,14 +38,8 @@ namespace GrowthBook.Utilities
                 forcedVariations = forcedVariations.Count > 0 ? forcedVariations : null,
                 url = !string.IsNullOrEmpty(context.Url) ? context.Url : null
             };
-
-            // Serialize cache context
-            var cacheContextJson = JsonConvert.SerializeObject(cacheContext,
-                new JsonSerializerSettings
-                {
-                    NullValueHandling = NullValueHandling.Ignore,
-                    Formatting = Formatting.None
-                });
+            var typeInfo = GrowthBookJsonContext.Default.GetTypeInfo(typeof(object));
+            var cacheContextJson = JsonSerializer.Serialize(cacheContext, typeInfo!);
 
             return $"{baseKey}||{cacheContextJson}";
         }
@@ -57,8 +52,8 @@ namespace GrowthBook.Utilities
         /// <param name="cacheKeyAttributes">Attributes to monitor for changes</param>
         /// <returns>True if remote evaluation should be triggered</returns>
         public static bool ShouldTriggerRemoteEvaluation(
-            JObject? oldAttributes,
-            JObject? newAttributes,
+            JsonObject? oldAttributes,
+            JsonObject? newAttributes,
             string[]? cacheKeyAttributes)
         {
             if (oldAttributes == null && newAttributes == null)
@@ -70,7 +65,7 @@ namespace GrowthBook.Utilities
             // If no cache key attributes specified, monitor all attributes
             if (cacheKeyAttributes == null || cacheKeyAttributes.Length == 0)
             {
-                return !JToken.DeepEquals(oldAttributes, newAttributes);
+                return !JsonNode.DeepEquals(oldAttributes, newAttributes);
             }
 
             // Check only specified cache key attributes for changes
@@ -79,7 +74,7 @@ namespace GrowthBook.Utilities
                 var oldValue = oldAttributes[attributeKey];
                 var newValue = newAttributes[attributeKey];
 
-                if (!JToken.DeepEquals(oldValue, newValue))
+                if (!JsonNode.DeepEquals(oldValue, newValue))
                 {
                     return true;
                 }
@@ -122,22 +117,26 @@ namespace GrowthBook.Utilities
         /// <param name="allAttributes">All available attributes</param>
         /// <param name="cacheKeyAttributes">Attributes to include in cache key</param>
         /// <returns>Filtered attributes object</returns>
-        private static JObject GetRelevantAttributes(JObject? allAttributes, string[]? cacheKeyAttributes)
+        private static JsonObject GetRelevantAttributes(JsonObject? allAttributes, string[]? cacheKeyAttributes)
         {
             if (allAttributes == null)
-                return new JObject();
+                return new JsonObject();
 
             // If no cache key attributes specified, use all attributes
             if (cacheKeyAttributes == null || cacheKeyAttributes.Length == 0)
-                return (allAttributes.DeepClone() as JObject)!;
+                return (allAttributes.DeepClone() as JsonObject)!;
 
             // Filter to only include specified cache key attributes
-            var relevantAttributes = new JObject();
+            var relevantAttributes = new JsonObject();
             foreach (var attributeKey in cacheKeyAttributes)
             {
-                if (allAttributes.TryGetValue(attributeKey, out var value))
+                if (allAttributes.ContainsKey(attributeKey))
                 {
-                    relevantAttributes[attributeKey] = value.DeepClone();
+                    var value = allAttributes[attributeKey];
+                    if (value != null)
+                    {
+                        relevantAttributes[attributeKey] = value.DeepClone();
+                    }
                 }
             }
 

@@ -1,14 +1,13 @@
 using System;
 using GrowthBook.Converters;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Serialization;
+using System.Text.Json.Serialization;
 
 namespace GrowthBook
 {
     /// <summary>
     /// Represents a range of the numberline between 0 and 1.
     /// </summary>
-    [JsonConverter(typeof(BucketRangeTupleConverter))]
+    [JsonConverter(typeof(BucketRangeConverter))]
     public class BucketRange
     {
         public BucketRange(double start, double end)

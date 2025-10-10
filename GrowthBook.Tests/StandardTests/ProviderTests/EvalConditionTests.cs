@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using System.Xml.Linq;
 using FluentAssertions;
@@ -20,9 +22,9 @@ public class EvalConditionTests : UnitTest
         [TestPropertyIndex(0)]
         public string TestName { get; set; }
         [TestPropertyIndex(1)]
-        public JObject Condition { get; set; }
+        public JsonObject Condition { get; set; }
         [TestPropertyIndex(2)]
-        public JObject Attributes { get; set; }
+        public JsonObject Attributes { get; set; }
         [TestPropertyIndex(3)]
         public bool ExpectedValue { get; set; }
         [TestPropertyIndex(4, isOptional: true)]
@@ -34,7 +36,12 @@ public class EvalConditionTests : UnitTest
     public void EvalCondition(EvalConditionTestCase testCase)
     {
         var logger = new NullLogger<ConditionEvaluationProvider>();
-        var actualResult = new ConditionEvaluationProvider(logger).EvalCondition(testCase.Attributes, testCase.Condition, JObject.FromObject(testCase.Groups));
+        var groupsJsonObject = JsonSerializer.SerializeToNode(testCase.Groups).AsObject();
+        if (groupsJsonObject == null)
+        {
+            throw new InvalidOperationException("Failed to convert Groups dictionary to JsonObject.");
+        }
+        var actualResult = new ConditionEvaluationProvider(logger).EvalCondition(testCase.Attributes, testCase.Condition, groupsJsonObject);
 
         actualResult.Should().Be(testCase.ExpectedValue, "because the condition should evaluate correctly");
     }

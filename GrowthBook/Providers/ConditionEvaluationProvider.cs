@@ -2,10 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using GrowthBook.Extensions;
 using Microsoft.Extensions.Logging;
-using Newtonsoft.Json.Linq;
 
 namespace GrowthBook.Providers
 {
@@ -28,42 +28,38 @@ namespace GrowthBook.Providers
         public ConditionEvaluationProvider(ILogger<ConditionEvaluationProvider> logger) => _logger = logger;
 
         /// <inheritdoc/>
-        public bool EvalCondition(JToken? attributes, JObject? condition, JObject? savedGroups = default)
+        public bool EvalCondition(JsonNode? attributes, JsonNode? condition, JsonObject? savedGroups = default)
         {
             _logger.LogInformation("Beginning to evaluate attributes based on the provided JSON condition");
             _logger.LogDebug("Attribute evaluation is based on the JSON condition \'{Condition}\'", condition);
-            if (condition == null) return false;
+            if (condition is not JsonObject objCondition)
+                return false;
 
-            foreach (var innerCondition in condition.Properties())
+            foreach (var innerCondition in objCondition)
             {
-                switch (innerCondition.Name)
+                string name = innerCondition.Key;
+                JsonNode? value = innerCondition.Value;
+                switch (innerCondition.Key)
                 {
                     case "$or":
-                        if (!EvalOr(attributes, innerCondition.AsArray(), savedGroups))
-                        {
+                        if (value is JsonArray orArray && !EvalOr(attributes, orArray, savedGroups))
                             return false;
-                        }
                         break;
                     case "$nor":
-                        if (EvalOr(attributes, innerCondition.AsArray(), savedGroups))
-                        {
+                        if (value is JsonArray norArray && EvalOr(attributes, norArray, savedGroups))
                             return false;
-                        }
                         break;
                     case "$and":
-                        if (!EvalAnd(attributes, innerCondition.AsArray(), savedGroups))
-                        {
+                        if (value is JsonArray andArray && !EvalAnd(attributes, andArray, savedGroups))
                             return false;
-                        }
                         break;
                     case "$not":
-                        if (EvalCondition(attributes, innerCondition.AsObject(), savedGroups))
-                        {
+                        if (value is JsonObject notObj && EvalCondition(attributes, notObj, savedGroups))
                             return false;
-                        }
                         break;
+
                     default:
-                        if (!EvalConditionValue(innerCondition.Value, GetPath(attributes, innerCondition.Name), savedGroups))
+                        if (!EvalConditionValue(innerCondition.Value, GetPath(attributes, innerCondition.Key), savedGroups))
                         {
                             return false;
                         }
@@ -80,7 +76,7 @@ namespace GrowthBook.Providers
         /// <param name="attributes">The attributes to compare against.</param>
         /// <param name="condition">The condition to evaluate.</param>
         /// <returns>True if the attributes satisfy any of the conditions.</returns>
-        private bool EvalOr(JToken? attributes, JArray conditions, JObject? savedGroups)
+        private bool EvalOr(JsonNode? attributes, JsonArray conditions, JsonObject? savedGroups)
         {
             if (conditions.Count == 0)
             {
@@ -90,9 +86,9 @@ namespace GrowthBook.Providers
 
             _logger.LogDebug("Evaluating all conditions within an 'or' context");
 
-            foreach (JObject condition in conditions)
+            foreach (JsonNode? condition in conditions)
             {
-                if (EvalCondition(attributes, condition, savedGroups))
+                if (EvalCondition(attributes, condition?.AsObject(), savedGroups))
                 {
                     return true;
                 }
@@ -107,13 +103,13 @@ namespace GrowthBook.Providers
         /// <param name="attributes">The attributes to compare against.</param>
         /// <param name="condition">The condition to evaluate.</param>
         /// <returns>True if the attributes satisfy all of the conditions.</returns>
-        private bool EvalAnd(JToken? attributes, JArray conditions, JObject? savedGroups)
+        private bool EvalAnd(JsonNode? attributes, JsonArray conditions, JsonObject? savedGroups)
         {
             _logger.LogDebug("Evaluating all conditions within an 'and' context");
 
-            foreach (JObject condition in conditions)
+            foreach (JsonNode? condition in conditions)
             {
-                if (!EvalCondition(attributes, condition, savedGroups))
+                if (!EvalCondition(attributes, condition?.AsObject(), savedGroups))
                 {
                     return false;
                 }
@@ -128,21 +124,20 @@ namespace GrowthBook.Providers
         /// <param name="conditionValue">The condition value to check.</param>
         /// <param name="attributeValue">The attribute value to check.</param>
         /// <returns>True if the condition value matches the attribute value.</returns>
-        private bool EvalConditionValue(JToken conditionValue, JToken? attributeValue, JObject? savedGroups)
+        private bool EvalConditionValue(JsonNode? conditionValue, JsonNode? attributeValue, JsonObject? savedGroups)
         {
             _logger.LogDebug("Evaluating condition value \'{ConditionValue}\'", conditionValue);
 
-            if (conditionValue.Type == JTokenType.Object)
+            if (conditionValue is JsonObject conditionObj)
             {
-                JObject conditionObj = (JObject)conditionValue;
 
                 if (IsOperatorObject(conditionObj))
                 {
                     _logger.LogDebug("Evaluating all condition properties against the operator condition");
 
-                    foreach (JProperty property in conditionObj.Properties())
+                    foreach (var property in conditionObj)
                     {
-                        if (!EvalOperatorCondition(property.Name, attributeValue, property.Value, savedGroups))
+                        if (!EvalOperatorCondition(property.Key, attributeValue, property.Value, savedGroups))
                         {
                             return false;
                         }
@@ -152,7 +147,7 @@ namespace GrowthBook.Providers
                 }
             }
 
-            return JToken.DeepEquals(conditionValue ?? JValue.CreateNull(), attributeValue ?? JValue.CreateNull());
+            return JsonNode.DeepEquals(conditionValue, attributeValue);
         }
 
         /// <summary>
@@ -161,16 +156,18 @@ namespace GrowthBook.Providers
         /// <param name="condition">The condition to check.</param>
         /// <param name="attributeValue">The attribute value to check.</param>
         /// <returns>True if attributeValue is an array and at least one of the array items matches the condition.</returns>
-        private bool ElemMatch(JObject condition, JToken? attributeValue, JObject? savedGroups)
+        private bool ElemMatch(JsonObject condition, JsonNode? attributeValue, JsonObject? savedGroups)
         {
-            if (attributeValue?.Type != JTokenType.Array)
+            if (attributeValue is not JsonArray attributeArray)
             {
-                _logger.LogDebug("Unable to match array elements with a non-array type of '{AttributeValueType}'", attributeValue?.Type);
+                _logger.LogDebug("Unable to match array elements with a non-array type of '{AttributeValueType}'", attributeValue?.GetType());
                 return false;
             }
 
-            foreach (JToken elem in (JArray)attributeValue)
+            foreach (JsonNode? elem in attributeArray)
             {
+                if (elem is null) continue;
+
                 if (IsOperatorObject(condition) && EvalConditionValue(condition, elem, savedGroups))
                 {
                     return true;
@@ -192,17 +189,17 @@ namespace GrowthBook.Providers
         /// <param name="attributeValue">The attribute value to check.</param>
         /// <param name="conditionValue">The condition value to check.</param>
         /// <returns></returns>
-        private bool EvalOperatorCondition(string op, JToken? attributeValue, JToken conditionValue, JObject? savedGroups)
+        private bool EvalOperatorCondition(string op, JsonNode? attributeValue, JsonNode? conditionValue, JsonObject? savedGroups)
         {
             _logger.LogDebug("Evaluating operator condition \'{Op}\'", op);
 
             if (op == "$eq")
             {
-                return conditionValue.Equals(attributeValue);
+                return JsonNodeEquals(attributeValue, conditionValue);
             }
             if (op == "$ne")
             {
-                return !conditionValue.Equals(attributeValue);
+                return !JsonNodeEquals(attributeValue, conditionValue);
             }
 
             // Handle comparison operators with a cleaner approach
@@ -245,7 +242,7 @@ namespace GrowthBook.Providers
             }
             if (op == "$in")
             {
-                if (conditionValue.Type != JTokenType.Array)
+                if (conditionValue is not JsonArray arr)
                 {
                     return false;
                 }
@@ -253,7 +250,7 @@ namespace GrowthBook.Providers
             }
             if (op == "$nin")
             {
-                if (conditionValue.Type != JTokenType.Array)
+                if (conditionValue is not JsonArray arr)
                 {
                     return false;
                 }
@@ -261,24 +258,13 @@ namespace GrowthBook.Providers
             }
             if (op == "$all")
             {
-                if (conditionValue.Type != JTokenType.Array)
-                {
+                if (conditionValue is not JsonArray condList || attributeValue is not JsonArray attrList)
                     return false;
-                }
-                if (attributeValue?.Type != JTokenType.Array)
-                {
-                    return false;
-                }
 
-                var conditionList = (JArray)conditionValue;
-                var attributeList = (JArray)attributeValue;
-
-                foreach (JToken condition in conditionList)
+                foreach (var cond in condList)
                 {
-                    if (!attributeList.Any(x => EvalConditionValue(condition, x, savedGroups)))
-                    {
+                    if (!attrList.Any(x => EvalConditionValue(cond, x, savedGroups)))
                         return false;
-                    }
                 }
 
                 return true;
@@ -286,31 +272,24 @@ namespace GrowthBook.Providers
 
             if (op == "$elemMatch")
             {
-                return ElemMatch((JObject)conditionValue, attributeValue, savedGroups);
+                if (conditionValue is JsonObject condObj)
+                    return ElemMatch(condObj, attributeValue, savedGroups);
+                return false;
             }
             if (op == "$size")
             {
-                if (attributeValue?.Type != JTokenType.Array)
-                {
-                    return false;
-                }
+                if (attributeValue is not JsonArray arr) return false;
 
-                return EvalConditionValue(conditionValue, ((JArray)attributeValue).Count, savedGroups);
+                return EvalConditionValue(conditionValue, arr.Count, savedGroups);
             }
             if (op == "$exists")
             {
-                var value = conditionValue.ToObject<bool>();
-
-                if (!value)
-                {
-                    return attributeValue == null || attributeValue.Type == JTokenType.Null;
-                }
-
-                return attributeValue != null && attributeValue.Type != JTokenType.Null;
+                var value = conditionValue?.GetValue<bool>() ?? false;
+                return value ? attributeValue != null : attributeValue == null;
             }
             if (op == "$type")
             {
-                return GetType(attributeValue) == conditionValue.ToString();
+                return GetType(attributeValue) == conditionValue?.ToString();
             }
             if (op == "$not")
             {
@@ -344,7 +323,7 @@ namespace GrowthBook.Providers
             {
                 if (attributeValue != null && conditionValue != null)
                 {
-                    var array = savedGroups?[conditionValue.ToString()]?.AsArray() ?? new JArray();
+                    var array = savedGroups?[conditionValue.ToString()] as JsonArray ?? new JsonArray();
 
                     return IsIn(array, attributeValue, savedGroups);
                 }
@@ -353,7 +332,7 @@ namespace GrowthBook.Providers
             {
                 if (attributeValue != null && conditionValue != null)
                 {
-                    var array = savedGroups?[conditionValue.ToString()]?.AsArray() ?? new JArray();
+                    var array = savedGroups?[conditionValue.ToString()] as JsonArray ?? new JsonArray();
 
                     return !IsIn(array, attributeValue, savedGroups);
                 }
@@ -370,7 +349,7 @@ namespace GrowthBook.Providers
             // Split version into parts (both core version numbers and pre-release tags)
             // "v1.2.3-rc.1+build123" -> ["1","2","3","rc","1"]
 
-            var trimmedVersion = Regex.Replace(input?? string.Empty, @"(^v|\+.*$)", string.Empty);
+            var trimmedVersion = Regex.Replace(input ?? string.Empty, @"(^v|\+.*$)", string.Empty);
             var versionParts = Regex.Split(trimmedVersion, "[-.]").ToList();
 
             // If it's SemVer without a pre-release, add `~` to the end
@@ -395,13 +374,13 @@ namespace GrowthBook.Providers
         /// </summary>
         /// <param name="obj">The object to check.</param>
         /// <returns>True if every key in the object starts with $.</returns>
-        private bool IsOperatorObject(JObject obj)
+        private bool IsOperatorObject(JsonObject obj)
         {
             _logger.LogDebug("Checking whether the object is an operator object");
 
-            foreach (JProperty property in obj.Properties())
+            foreach (var property in obj)
             {
-                if (!property.Name.StartsWith("$"))
+                if (!property.Key.StartsWith("$"))
                 {
                     return false;
                 }
@@ -410,22 +389,21 @@ namespace GrowthBook.Providers
             return true;
         }
 
-        private bool IsIn(JToken conditionValue, JToken? actualValue, JObject? savedGroups)
+        private bool IsIn(JsonNode conditionValue, JsonNode? actualValue, JsonObject? savedGroups)
         {
-            if (actualValue?.Type == JTokenType.Array)
+            if (actualValue is JsonArray actualArray)
             {
                 _logger.LogDebug("Evaluating whether the specified value is in an array");
 
-                var conditionValues = new HashSet<JToken>(conditionValue);
-                var actualValues = new HashSet<JToken>(actualValue);
+                        if (conditionValue is not JsonArray conditionArray) return false;
 
-                conditionValues.IntersectWith(actualValues);
 
-                return conditionValues.Any();
+                return actualArray.Any(actualItem =>
+                conditionArray.Any(conditionItem => JsonNode.DeepEquals(actualItem, conditionItem)));
             }
-            else if (conditionValue is JArray array)
+            else if (conditionValue is JsonArray conditionArray)
             {
-                return array.Any(x => x.Equals(actualValue));
+                return conditionArray.Any(x => x?.Equals(actualValue) == true);
             }
             else
             {
@@ -445,50 +423,68 @@ namespace GrowthBook.Providers
             }
         }
 
-        private static bool CompareVersions(JToken? left, JToken right, Func<int, bool> meetsComparison)
+        private static bool CompareVersions(JsonNode? left, JsonNode? right, Func<int, bool> meetsComparison)
         {
             var leftValue = PaddedVersionString(left?.ToString());
-            var rightValue = PaddedVersionString(right.ToString());
+            var rightValue = PaddedVersionString(right?.ToString());
 
             var comparisonResult = string.CompareOrdinal(leftValue, rightValue);
 
             return meetsComparison(comparisonResult);
         }
 
-        private static JToken? GetPath(JToken? attributes, string key) => attributes?.SelectToken(key);
+        private static JsonNode? GetPath(JsonNode? attributes, string key)
+        {
+            if (attributes == null || string.IsNullOrEmpty(key))
+                return null;
 
+            var parts = key.Split('.');
+            JsonNode? current = attributes;
+
+            foreach (var part in parts)
+            {
+                if (current is JsonObject obj && obj.TryGetPropertyValue(part, out var next))
+                {
+                    current = next;
+                }
+                else
+                {
+                    return null;
+                }
+            }
+
+            return current;
+        }
         /// <summary>
         /// Gets a string value representing the data type of an attribute value.
         /// </summary>
         /// <param name="attributeValue">The attribute value to check.</param>
         /// <returns>String value representing the data type of an attribute value.</returns>
-        private static string GetType(JToken? attributeValue)
+        private static string GetType(JsonNode? attributeValue)
         {
             if (attributeValue == null)
-            {
                 return "null";
-            }
 
-            switch (attributeValue.Type)
+            return attributeValue switch
             {
-                case JTokenType.Null:
-                    return "null";
-                case JTokenType.Undefined:
-                    return "undefined";
-                case JTokenType.Integer:
-                case JTokenType.Float:
-                    return "number";
-                case JTokenType.Array:
-                    return "array";
-                case JTokenType.Boolean:
-                    return "boolean";
-                case JTokenType.String:
-                    return "string";
-                case JTokenType.Object:
-                    return "object";
-                default:
-                    return "unknown";
-            }
+                JsonValue _ => GetJsonValueType((JsonValue)attributeValue),
+                JsonArray => "array",
+                JsonObject => "object",
+                _ => "unknown"
+            };
+        }
+
+        private static string GetJsonValueType(JsonValue value)
+        {
+            var raw = value.GetValue<object>();
+            return raw switch
+            {
+                null => "null",
+                int or long or float or double or decimal => "number",
+                bool => "boolean",
+                string => "string",
+                _ => "unknown"
+            };
         }
 
         /// <summary>
@@ -499,10 +495,10 @@ namespace GrowthBook.Providers
         /// <param name="conditionValue">The condition value to compare against.</param>
         /// <param name="meetsComparison">Function that determines if the comparison result meets the criteria.</param>
         /// <returns>True if the comparison is satisfied, false if attribute is null or comparison fails.</returns>
-        private bool EvaluateComparison(JToken? attributeValue, JToken conditionValue, Func<int, bool> meetsComparison)
+        private bool EvaluateComparison(JsonNode? attributeValue, JsonNode? conditionValue, Func<int, bool> meetsComparison)
         {
             // Null/missing attributes should never satisfy comparison operators
-            if (attributeValue.IsNull())
+            if (attributeValue == null)
             {
                 return false;
             }
@@ -523,8 +519,8 @@ namespace GrowthBook.Providers
 
             // Fall back to string comparison
             var attrString = attributeValue?.ToString();
-            var condString = conditionValue.ToString();
-            
+            var condString = conditionValue?.ToString();
+
             var stringComparisonResult = string.Compare(attrString, condString, StringComparison.Ordinal);
             return meetsComparison(stringComparisonResult);
         }
@@ -532,13 +528,13 @@ namespace GrowthBook.Providers
         /// <summary>
         /// Attempts to parse both values as DateTime objects for proper date comparison.
         /// </summary>
-        private static bool TryParseDateTimes(JToken? attributeValue, JToken conditionValue, out DateTime attrDate, out DateTime condDate)
+        private static bool TryParseDateTimes(JsonNode? attributeValue, JsonNode? conditionValue, out DateTime attrDate, out DateTime condDate)
         {
             attrDate = default;
             condDate = default;
 
             var attrString = attributeValue?.ToString();
-            var condString = conditionValue.ToString();
+            var condString = conditionValue?.ToString();
 
             // Try parsing both values as DateTime
             var attrParsed = DateTime.TryParse(attrString, null, DateTimeStyles.RoundtripKind, out attrDate);
@@ -550,31 +546,49 @@ namespace GrowthBook.Providers
         /// <summary>
         /// Attempts to parse both values as numeric values for proper numeric comparison.
         /// </summary>
-        private static bool TryParseNumbers(JToken? attributeValue, JToken conditionValue, out double attrNumber, out double condNumber)
+        private static bool TryParseNumbers(JsonNode? attributeValue, JsonNode? conditionValue, out double attrNumber, out double condNumber)
         {
             attrNumber = default;
             condNumber = default;
 
-            // First try to get numeric values from JToken types directly
-            if (attributeValue?.Type == JTokenType.Integer || attributeValue?.Type == JTokenType.Float)
+            // Парсимо attributeValue
+            if (attributeValue is JsonValue attrValue)
             {
-                attrNumber = attributeValue.Value<double>();
+                if (!attrValue.TryGetValue<double>(out attrNumber))
+                {
+                    // якщо не вдалося, пробуємо через рядок
+                    if (!double.TryParse(attributeValue.ToString(), out attrNumber))
+                        return false;
+                }
             }
             else if (!double.TryParse(attributeValue?.ToString(), out attrNumber))
             {
                 return false;
             }
 
-            if (conditionValue.Type == JTokenType.Integer || conditionValue.Type == JTokenType.Float)
+            // Парсимо conditionValue
+            if (conditionValue is JsonValue condValue)
             {
-                condNumber = conditionValue.Value<double>();
+                if (!condValue.TryGetValue<double>(out condNumber))
+                {
+                    if (!double.TryParse(conditionValue.ToString(), out condNumber))
+                        return false;
+                }
             }
-            else if (!double.TryParse(conditionValue.ToString(), out condNumber))
+            else if (!double.TryParse(conditionValue?.ToString(), out condNumber))
             {
                 return false;
             }
 
             return true;
+        }
+
+
+        private static bool JsonNodeEquals(JsonNode? a, JsonNode? b)
+        {
+            if (a == null || b == null) return false;
+
+            return a.ToJsonString() == b.ToJsonString(); // просте порівняння
         }
     }
 }

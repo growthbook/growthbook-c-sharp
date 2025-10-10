@@ -1,7 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging;
-using Newtonsoft.Json.Linq;
 
 namespace GrowthBook
 {
@@ -33,25 +34,33 @@ namespace GrowthBook
         public GrowthBook CreateForUser(IDictionary<string, object> userAttributes, Action<Experiment?, ExperimentResult?>? trackingCallback = null)
         {
             if (_disposed) throw new ObjectDisposedException(nameof(GrowthBookFactory));
-            
+
             var context = _baseContext.Clone();
-            context.Attributes ??= new JObject();
-            
+            context.Attributes ??= new JsonObject();
+
             if (userAttributes != null)
             {
                 foreach (var kvp in userAttributes)
                 {
-                    context.Attributes[kvp.Key] = JToken.FromObject(kvp.Value);
+                    JsonNode? node = JsonSerializer.SerializeToNode(
+                kvp.Value,
+                GrowthBookJsonContext.Default.Object // Use the generated JsonTypeInfo for object
+            );
+
+                    if (node != null)
+                    {
+                        context.Attributes[kvp.Key] = node;
+                    }
                 }
             }
-            
+
             if (_sharedRepository != null)
             {
                 context.FeatureRepository = _sharedRepository;
             }
-            
+
             context.TrackingCallback = trackingCallback;
-            
+
             return new GrowthBook(context);
         }
 
@@ -64,26 +73,27 @@ namespace GrowthBook
         public GrowthBook CreateForUser(object userAttributes, Action<Experiment?, ExperimentResult?>? trackingCallback = null)
         {
             if (_disposed) throw new ObjectDisposedException(nameof(GrowthBookFactory));
-            
+
             var context = _baseContext.Clone();
-            context.Attributes ??= new JObject();
-            
+            context.Attributes ??= new JsonObject();
+
             if (userAttributes != null)
             {
-                var additionalJObject = JObject.FromObject(userAttributes);
-                foreach (var property in additionalJObject.Properties())
+                var additionalObject = Context.ToJsonObject(userAttributes);
+
+                foreach (var property in additionalObject)
                 {
-                    context.Attributes[property.Name] = property.Value;
+                    context.Attributes[property.Key] = property.Value?.DeepClone();
                 }
             }
-            
+
             if (_sharedRepository != null)
             {
                 context.FeatureRepository = _sharedRepository;
             }
-            
+
             context.TrackingCallback = trackingCallback;
-            
+
             return new GrowthBook(context);
         }
 

@@ -1,15 +1,14 @@
 using System;
 using System.Collections.Generic;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
-using Newtonsoft.Json.Serialization;
+using System.Text.Json.Nodes;
+using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 
 namespace GrowthBook
 {
     /// <summary>
     /// Overrides the defaultValue of a Feature.
     /// </summary>
-    [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
     public class FeatureRule
     {
         /// <summary>
@@ -20,7 +19,7 @@ namespace GrowthBook
         /// <summary>
         /// Optional targeting condition.
         /// </summary>
-        public JObject? Condition { get; set; }
+        public JsonObject? Condition { get; set; }
 
         /// <summary>
         /// Each item defines a prerequisite where a condition must evaluate against a parent feature's value (identified by id). If gate is true, then this is a blocking feature-level prerequisite; otherwise it applies to the current rule only.
@@ -35,12 +34,12 @@ namespace GrowthBook
         /// <summary>
         /// Immediately force a specific value (ignore every other option besides condition and coverage).
         /// </summary>
-        public JToken? Force { get; set; }
+        public JsonNode? Force { get; set; }
 
         /// <summary>
         /// Run an experiment (A/B test) and randomly choose between these variations.
         /// </summary>
-        public JArray? Variations { get; set; }
+        public JsonArray? Variations { get; set; }
 
         /// <summary>
         /// The globally unique tracking key for the experiment (default to the feature key).
@@ -132,13 +131,16 @@ namespace GrowthBook
         /// </summary>
         /// <typeparam name="T"></typeparam>
         /// <returns>The variations cast as the specified type.</returns>
-        public T GetVariations<T>()
+        public T? GetVariations<T>()
         {
             if (Variations == null)
-            {
-                throw new InvalidOperationException("Variations is null.");
-            }
-            return Variations.ToObject<T>()!;
+                return default;
+
+            var typeInfo = GrowthBookJsonContext.Default.GetTypeInfo(typeof(T));
+            if (typeInfo == null)
+                return default;
+
+            return (T?)Variations.Deserialize((JsonTypeInfo<T>)typeInfo);
         }
     }
 }

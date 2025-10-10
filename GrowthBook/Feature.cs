@@ -1,21 +1,20 @@
-using System;
+
 using System.Collections.Generic;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
-using Newtonsoft.Json.Serialization;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.Json.Serialization.Metadata;
 
 namespace GrowthBook
 {
     /// <summary>
     /// Represents an object consisting of a default value plus rules that can override the default.
     /// </summary>
-    [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
     public class Feature
     {
         /// <summary>
         /// The default value (should use null if not specified)
         /// </summary>
-        public JToken? DefaultValue { get; set; }
+        public JsonNode? DefaultValue { get; set; }
 
         /// <summary>
         /// Array of FeatureRule objects that determine when and how the defaultValue gets overridden.
@@ -27,9 +26,16 @@ namespace GrowthBook
         /// </summary>
         /// <typeparam name="T"></typeparam>
         /// <returns>The default value of the feature cast to the specified type.</returns>
-        public T GetDefaultValue<T>()
+        public T? GetDefaultValue<T>()
         {
-            return DefaultValue != null ? DefaultValue.ToObject<T>()! : default!;
+            if (DefaultValue == null)
+                return default;
+
+            var typeInfo = GrowthBookJsonContext.Default.GetTypeInfo(typeof(T));
+            if (typeInfo == null)
+                return default;
+
+            return (T?)DefaultValue.Deserialize((JsonTypeInfo<T>)typeInfo);
         }
     }
 }

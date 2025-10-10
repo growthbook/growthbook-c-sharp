@@ -7,7 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using GrowthBook.Exceptions;
 using Microsoft.Extensions.Logging;
-using Newtonsoft.Json;
+using System.Text.Json;
 
 namespace GrowthBook.Api
 {
@@ -53,7 +53,9 @@ namespace GrowthBook.Api
             var url = GetRemoteEvaluationUrl(apiHost, clientKey);
 
             _logger.LogInformation("Starting remote evaluation request to {Url}", url);
-            _logger.LogDebug("Remote evaluation request payload: {Payload}", JsonConvert.SerializeObject(request));
+            var jsonPayload = JsonSerializer.Serialize(request, GrowthBookJsonContext.Default.RemoteEvaluationRequest);
+
+            _logger.LogDebug("Remote evaluation request payload: {Payload}", jsonPayload);
 
             try
             {
@@ -78,9 +80,6 @@ namespace GrowthBook.Api
                         }
 
                         // Set content type
-                        var jsonPayload = JsonConvert.SerializeObject(request);
-                        httpRequest.Content = new StringContent(jsonPayload, Encoding.UTF8, "application/json");
-
                         _logger.LogDebug("Sending POST request to remote evaluation endpoint");
 
                         // Make the request
@@ -93,7 +92,7 @@ namespace GrowthBook.Api
 
                             if (response.IsSuccessStatusCode)
                             {
-                                var apiResponse = JsonConvert.DeserializeObject<RemoteEvaluationResponse>(responseContent);
+                                var apiResponse = JsonSerializer.Deserialize(responseContent, GrowthBookJsonContext.Default.RemoteEvaluationResponse);
                                 var featuresResponse = apiResponse?.Features;
 
                                 _logger.LogInformation("Remote evaluation successful, received {Count} features",

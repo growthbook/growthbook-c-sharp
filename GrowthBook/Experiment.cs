@@ -1,16 +1,15 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
-using Newtonsoft.Json.Serialization;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.Json.Serialization.Metadata;
 
 namespace GrowthBook
 {
     /// <summary>
     /// Represents a single experiment with multiple variations.
     /// </summary>
-    [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
     public class Experiment
     {
         /// <summary>
@@ -21,7 +20,7 @@ namespace GrowthBook
         /// <summary>
         /// The different variations to choose between.
         /// </summary>
-        public JArray? Variations { get; set; }
+        public JsonArray? Variations { get; set; }
 
         /// <summary>
         /// How to weight traffic between variations. Must add to 1.
@@ -46,7 +45,7 @@ namespace GrowthBook
         /// <summary>
         /// Optional targeting condition.
         /// </summary>
-        public JObject? Condition { get; set; }
+        public JsonObject? Condition { get; set; }
 
         /// <summary>
         /// Each item defines a prerequisite where a condition must evaluate against a parent feature's value (identified by id). If gate is true, then this is a blocking feature-level prerequisite; otherwise it applies to the current rule only.
@@ -135,7 +134,14 @@ namespace GrowthBook
         /// <returns>The variations cast as the specified type.</returns>
         public T? GetVariations<T>()
         {
-            return Variations != null ? Variations.ToObject<T>() : default;
+            if (Variations == null)
+                return default;
+
+            var typeInfo = GrowthBookJsonContext.Default.GetTypeInfo(typeof(T));
+            if (typeInfo == null)
+                return default;
+
+            return (T?)Variations.Deserialize((JsonTypeInfo<T>)typeInfo);
         }
 
         public override bool Equals(object? obj)
@@ -143,13 +149,13 @@ namespace GrowthBook
             if (obj is Experiment objExp)
             {
                 return Active == objExp.Active
-                    && JToken.DeepEquals(Condition, objExp.Condition)
+                    && JsonNode.DeepEquals(Condition, objExp.Condition)
                     && Coverage == objExp.Coverage
                     && Force == objExp.Force
                     && HashAttribute == objExp.HashAttribute
                     && Key == objExp.Key
                     && object.Equals(Namespace, objExp.Namespace)
-                    && JToken.DeepEquals(Variations, objExp.Variations)
+                    && JsonNode.DeepEquals(Variations, objExp.Variations)
                     && ((Weights == null && objExp.Weights == null) || (Weights == null || objExp.Weights == null ? false : Weights.SequenceEqual(objExp.Weights)));
             }
             return false;

@@ -1,8 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Net;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Serialization;
+using System.Text.Json.Serialization;
 
 namespace GrowthBook
 {
@@ -10,21 +9,18 @@ namespace GrowthBook
     /// Represents the response from a remote evaluation API call.
     /// Contains the evaluated features specific to the user's attributes.
     /// </summary>
-    [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
     public class RemoteEvaluationResponse
     {
         /// <summary>
         /// Dictionary of feature definitions that have been evaluated and filtered
         /// for the specific user. Only contains features that are relevant to the user.
         /// </summary>
-        [JsonProperty("features")]
         public IDictionary<string, Feature> Features { get; set; } = new Dictionary<string, Feature>();
 
         /// <summary>
         /// Timestamp indicating when the features were last updated.
         /// Used for cache invalidation and freshness checks.
         /// </summary>
-        [JsonProperty("dateUpdated")]
         public DateTimeOffset? DateUpdated { get; set; }
 
         /// <summary>

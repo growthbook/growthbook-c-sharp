@@ -1,12 +1,11 @@
 using System;
 using GrowthBook.Extensions;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
-using Newtonsoft.Json.Serialization;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.Json.Serialization.Metadata;
 
 namespace GrowthBook
 {
-    [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
     public class FeatureResult
     {
         /// <summary>
@@ -25,7 +24,7 @@ namespace GrowthBook
         /// <summary>
         /// The assigned value of the feature.
         /// </summary>
-        public JToken? Value { get; set; }
+        public JsonNode? Value { get; set; }
 
         /// <summary>
         /// The assigned value cast to a boolean.
@@ -34,7 +33,7 @@ namespace GrowthBook
         {
             get
             {
-                if (Value == null || Value.Type == JTokenType.Null)
+                if (Value is null || (Value is JsonValue jv && jv.GetValueKind() == JsonValueKind.Null))
                 {
                     return false;
                 }
@@ -69,9 +68,16 @@ namespace GrowthBook
         /// </summary>
         /// <typeparam name="T"></typeparam>
         /// <returns>The value of the feature cast to the specified type.</returns>
-        public T GetValue<T>()
+        public T? GetValue<T>()
         {
-            return Value != null ? Value.ToObject<T>()! : default!;
+            if (Value == null)
+                return default;
+
+            var typeInfo = GrowthBookJsonContext.Default.GetTypeInfo(typeof(T));
+            if (typeInfo == null)
+                return default;
+
+            return (T?)Value.Deserialize((JsonTypeInfo<T>)typeInfo);
         }
 
         public override bool Equals(object? obj)
@@ -83,7 +89,7 @@ namespace GrowthBook
                     && Off == objResult.Off
                     && On == objResult.On
                     && Source == objResult.Source
-                    && JToken.DeepEquals(Value ?? JValue.CreateNull(), objResult.Value ?? JValue.CreateNull());
+                    && JsonNode.DeepEquals(Value, objResult.Value);
             }
             return false;
         }

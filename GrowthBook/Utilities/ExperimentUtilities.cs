@@ -3,12 +3,13 @@ using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Linq;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using System.Web;
 using GrowthBook.Extensions;
 using GrowthBook.Services;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
 
 namespace GrowthBook.Utilities
 {
@@ -250,7 +251,7 @@ namespace GrowthBook.Utilities
             var actualQueryParameters = HttpUtility.ParseQueryString(actual.Query);
             var expectedQueryParameters = HttpUtility.ParseQueryString(expectedUri.Query);
 
-            for(var i = 0; i < expectedQueryParameters.Count; i++)
+            for (var i = 0; i < expectedQueryParameters.Count; i++)
             {
                 comparisons.Add((actualQueryParameters[i] ?? string.Empty, expectedQueryParameters[i] ?? string.Empty, false));
             }
@@ -300,20 +301,26 @@ namespace GrowthBook.Utilities
 
             newAssignments.MergeWith(new[] { assignments });
 
-            var isChanged = JsonConvert.SerializeObject(existingDocument) != JsonConvert.SerializeObject(newAssignments);
             var document = new StickyAssignmentsDocument(attributeName, attributeValue, newAssignments);
+
+            var options = new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull };
+            var existingAssignmentsJson = JsonSerializer.Serialize(existingDocument?.Assignments, GrowthBookJsonContext.Default.DictionaryStringString);
+            var newAssignmentsJson = JsonSerializer.Serialize(document.Assignments, GrowthBookJsonContext.Default.DictionaryStringString);
+
+
+            var isChanged = existingAssignmentsJson != newAssignmentsJson;
 
             return (document, isChanged);
         }
 
-        public static StickyBucketVariation GetStickyBucketVariation(Experiment experiment, int bucketVersion, int minBucketVersion, IList<VariationMeta> meta, JObject? attributes, IDictionary<string, StickyAssignmentsDocument> document)
+        public static StickyBucketVariation GetStickyBucketVariation(Experiment experiment, int bucketVersion, int minBucketVersion, IList<VariationMeta> meta, JsonObject? attributes, IDictionary<string, StickyAssignmentsDocument> document)
         {
             var id = GetStickyBucketExperimentKey(experiment.Key, experiment.BucketVersion);
             var assignments = GetStickyBucketAssignments(attributes, document, experiment.HashAttribute, experiment.FallbackAttribute);
 
             if (experiment.MinBucketVersion > 0)
             {
-                for(var i = 0; i <= experiment.MinBucketVersion; i++)
+                for (var i = 0; i <= experiment.MinBucketVersion; i++)
                 {
                     var blockedKey = GetStickyBucketExperimentKey(experiment.Key, i);
 
@@ -330,11 +337,11 @@ namespace GrowthBook.Utilities
             }
 
             var variationIndex = FindVariationIndex(meta, variationKey);
-                        
+
             return new StickyBucketVariation(variationIndex, isVersionBlocked: false);
         }
 
-        private static IDictionary<string, string?> GetStickyBucketAssignments(JObject? attributes, IDictionary<string, StickyAssignmentsDocument> stickyAssignmentDocs, string hashAttribute, string? fallbackAttribute)
+        private static IDictionary<string, string?> GetStickyBucketAssignments(JsonObject? attributes, IDictionary<string, StickyAssignmentsDocument> stickyAssignmentDocs, string hashAttribute, string? fallbackAttribute)
         {
             var mergedAssignments = new Dictionary<string, string?>();
 
@@ -368,7 +375,7 @@ namespace GrowthBook.Utilities
 
         private static int FindVariationIndex(IList<VariationMeta> meta, string? key)
         {
-            for(var i = 0; i < meta.Count; i++)
+            for (var i = 0; i < meta.Count; i++)
             {
                 if (meta[i].Key == key)
                 {

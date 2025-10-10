@@ -5,15 +5,12 @@ using System.Net.Http;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using Newtonsoft.Json.Linq;
-using Newtonsoft.Json;
 using GrowthBook.Extensions;
-using GrowthBook.Providers;
-using System.Linq;
-using System.IO;
 using Microsoft.Extensions.Logging;
 using GrowthBook.Api.Extensions;
 using GrowthBook.Api.SSE;
+using System.Text.Json;
+using System.Linq;
 
 namespace GrowthBook.Api
 {
@@ -112,22 +109,22 @@ namespace GrowthBook.Api
             try
             {
                 _sseClient?.Dispose();
-                
-                var sseLogger = _logger as ILogger<SSEClient> ?? 
+
+                var sseLogger = _logger as ILogger<SSEClient> ??
                     new Microsoft.Extensions.Logging.Abstractions.NullLogger<SSEClient>();
-                
+
                 _sseClient = new SSEClient(sseLogger, _httpClientFactory, _serverSentEventsApiEndpoint, null, ConfiguredClients.ServerSentEventsApiClient);
-                
+
                 // Add general event listener for all events (handles data field)
                 _sseClient.AddEventListener(null, async (sseEvent) =>
                 {
                     if (sseEvent.HasData)
                     {
                         _logger.LogDebug("Received SSE event: {Data}", sseEvent.Data?.Substring(0, Math.Min(sseEvent.Data?.Length ?? 0, 100)));
-                        
+
                         var features = GetFeaturesFrom(sseEvent.Data ?? "");
                         await _cache.RefreshWith(features, _refreshWorkerCancellation.Token);
-                        
+
                         _logger.LogInformation("Cache has been refreshed with server sent event features");
                     }
                 });
@@ -165,7 +162,7 @@ namespace GrowthBook.Api
 
         private IDictionary<string, Feature>? GetFeaturesFrom(string json)
         {
-            var featuresResponse = JsonConvert.DeserializeObject<FeaturesResponse>(json);
+            var featuresResponse = JsonSerializer.Deserialize(json, GrowthBookJsonContext.Default.FeaturesResponse);
 
             if (featuresResponse == null)
             {
@@ -189,9 +186,12 @@ namespace GrowthBook.Api
                 _logger.LogWarning("Decrypted features JSON is null or empty.");
                 return null;
             }
-            var jsonObject = JObject.Parse(decryptedFeaturesJson);
+            var features = JsonSerializer.Deserialize(
+        decryptedFeaturesJson,
+        GrowthBookJsonContext.Default.DictionaryStringFeature
+    );
 
-            return jsonObject.ToObject<Dictionary<string, Feature>>();
+            return features;
         }
 
         public void Dispose()

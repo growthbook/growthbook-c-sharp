@@ -1,7 +1,6 @@
 using System.Collections.Generic;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
-using Newtonsoft.Json.Serialization;
+using System.Text.Json.Nodes; 
+using System.Text.Json.Serialization; 
 
 namespace GrowthBook
 {
@@ -9,20 +8,17 @@ namespace GrowthBook
     /// Represents a request payload for remote evaluation API calls.
     /// This model matches the expected format for POST /api/eval/:clientKey endpoint.
     /// </summary>
-    [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
     public class RemoteEvaluationRequest
     {
         /// <summary>
         /// User attributes used for feature evaluation and experiment assignment.
         /// </summary>
-        [JsonProperty("attributes")]
-        public JObject Attributes { get; set; } = new JObject();
+        public JsonObject Attributes { get; set; } = new JsonObject();
 
         /// <summary>
         /// Map of experiment keys to forced variation indices.
         /// Used for QA testing and debugging.
         /// </summary>
-        [JsonProperty("forcedVariations")]
         public IDictionary<string, int> ForcedVariations { get; set; } = new Dictionary<string, int>();
 
         /// <summary>
@@ -30,14 +26,12 @@ namespace GrowthBook
         /// Used for testing and overriding feature values.
         /// Format: [["featureKey", value], ["anotherKey", value2]]
         /// </summary>
-        [JsonProperty("forcedFeatures")]
         public List<List<object>> ForcedFeatures { get; set; } = new List<List<object>>();
 
         /// <summary>
         /// The current URL for URL-based targeting rules.
         /// Optional parameter used for experiments with URL conditions.
         /// </summary>
-        [JsonProperty("url")]
         public string? Url { get; set; }
 
         /// <summary>
@@ -72,7 +66,7 @@ namespace GrowthBook
 
             return new RemoteEvaluationRequest
             {
-                Attributes = context.Attributes?.DeepClone() as JObject ?? new JObject(),
+                Attributes = context.Attributes?.DeepClone() as JsonObject ?? new JsonObject(),
                 ForcedVariations = new Dictionary<string, int>(context.ForcedVariations ?? new Dictionary<string, int>()),
                 ForcedFeatures = forcedFeaturesList,
                 Url = context.Url ?? ""

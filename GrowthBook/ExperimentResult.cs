@@ -1,14 +1,13 @@
 using System;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
-using Newtonsoft.Json.Serialization;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.Json.Serialization.Metadata;
 
 namespace GrowthBook
 {
     /// <summary>
     /// The result of running an experiment given a specific context.
     /// </summary>
-    [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
     public class ExperimentResult
     {
         /// <summary>
@@ -24,7 +23,7 @@ namespace GrowthBook
         /// <summary>
         /// The array value of the assigned variation.
         /// </summary>
-        public JToken? Value { get; set; } = JValue.CreateNull();
+        public JsonNode? Value { get; set; } = JsonValue.Create((string?)null);
 
         /// <summary>
         /// If a hash was used to assign a variation.
@@ -76,20 +75,27 @@ namespace GrowthBook
         /// </summary>
         /// <typeparam name="T"></typeparam>
         /// <returns>The value of the assigned variation cast to the specified type.</returns>
-        public T GetValue<T>()
+        public T? GetValue<T>()
         {
-            return Value != null ? Value.ToObject<T>()! : default!;
+            if (Value == null)
+                return default;
+
+            var typeInfo = GrowthBookJsonContext.Default.GetTypeInfo(typeof(T));
+            if (typeInfo == null)
+                return default;
+
+            return (T?)Value.Deserialize((JsonTypeInfo<T>)typeInfo);
         }
 
         public override bool Equals(object? obj)
         {
-            if (obj is ExperimentResult objResult) 
+            if (obj is ExperimentResult objResult)
             {
                 return InExperiment == objResult.InExperiment
                     && HashAttribute == objResult.HashAttribute
                     && HashUsed == objResult.HashUsed
                     && HashValue == objResult.HashValue
-                    && JToken.DeepEquals(Value ?? JValue.CreateNull(), objResult.Value ?? JValue.CreateNull())
+                    && JsonNode.DeepEquals(Value, objResult.Value)
                     && VariationId == objResult.VariationId;
             }
             return false;

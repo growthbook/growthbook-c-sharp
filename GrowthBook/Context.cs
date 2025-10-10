@@ -3,16 +3,15 @@ using System.Collections.Generic;
 using System.Linq;
 using GrowthBook.Services;
 using Microsoft.Extensions.Logging;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
-using Newtonsoft.Json.Serialization;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Runtime.InteropServices.JavaScript;
 
 namespace GrowthBook
 {
     /// <summary>
     /// Represents a parameter object passed into the GrowthBook constructor.
     /// </summary>
-    [JsonObject(NamingStrategyType = typeof(CamelCaseNamingStrategy))]
     public class Context
     {
         /// <summary>
@@ -21,7 +20,7 @@ namespace GrowthBook
         /// <param name="attributes">User attributes as IDictionary</param>
         public Context(IDictionary<string, object>? attributes = null)
         {
-            Attributes = attributes != null ? JObject.FromObject(attributes) : new JObject();
+            Attributes = attributes != null ? ToJsonObject(attributes) : new JsonObject();
         }
 
         /// <summary>
@@ -30,7 +29,7 @@ namespace GrowthBook
         /// <param name="attributes">User attributes as anonymous object</param>
         public Context(object attributes)
         {
-            Attributes = attributes != null ? JObject.FromObject(attributes) : new JObject();
+            Attributes = attributes != null ? ToJsonObject(attributes) : new JsonObject();
         }
 
         /// <summary>
@@ -38,7 +37,7 @@ namespace GrowthBook
         /// </summary>
         public Context()
         {
-            Attributes = new JObject();
+            Attributes = new JsonObject();
         }
         /// <summary>
         /// Switch to globally disable all experiments. Default true.
@@ -63,7 +62,7 @@ namespace GrowthBook
         /// <summary>
         /// Map of user attributes that are used to assign variations.
         /// </summary>
-        public JObject? Attributes { get; set; } = new JObject();
+        public JsonObject? Attributes { get; set; } = new JsonObject();
 
         /// <summary>
         /// The URL of the current page.
@@ -75,7 +74,7 @@ namespace GrowthBook
         /// </summary>
         public IDictionary<string, Feature> Features { get; set; } = new Dictionary<string, Feature>();
 
-                /// <summary>
+        /// <summary>
         /// Feature definitions (usually pulled from an API or cache).
         /// </summary>
         public IDictionary<string, Feature> ForcedFeatures { get; set; } = new Dictionary<string, Feature>();
@@ -110,7 +109,7 @@ namespace GrowthBook
         /// <summary>
         /// Gets groups that have been saved, if any.
         /// </summary>
-        public JObject? SavedGroups { get; set; }
+        public JsonObject? SavedGroups { get; set; }
 
         /// <summary>
         /// If true, random assignment is disabled and only explicitly forced variations are used.
@@ -160,7 +159,7 @@ namespace GrowthBook
         /// <param name="attributes">User attributes as IDictionary</param>
         public void SetAttributes(IDictionary<string, object> attributes)
         {
-            Attributes = attributes != null ? JObject.FromObject(attributes) : new JObject();
+            Attributes = attributes != null ? ToJsonObject(attributes) : new JsonObject();
         }
 
         /// <summary>
@@ -169,7 +168,7 @@ namespace GrowthBook
         /// <param name="attributes">User attributes as anonymous object</param>
         public void SetAttributes(object attributes)
         {
-            Attributes = attributes != null ? JObject.FromObject(attributes) : new JObject();
+            Attributes = attributes != null ? ToJsonObject(attributes) : new JsonObject();
         }
 
         /// <summary>
@@ -184,7 +183,7 @@ namespace GrowthBook
                 ApiHost = this.ApiHost,
                 ClientKey = this.ClientKey,
                 DecryptionKey = this.DecryptionKey,
-                Attributes = this.Attributes?.DeepClone() as JObject ?? new JObject(),
+                Attributes = this.Attributes?.DeepClone() as JsonObject ?? new JsonObject(),
                 Url = this.Url,
                 Features = new Dictionary<string, Feature>(this.Features ?? new Dictionary<string, Feature>()),
                 Experiments = this.Experiments?.ToList(),
@@ -192,7 +191,7 @@ namespace GrowthBook
                 StickyBucketAssignmentDocs = new Dictionary<string, StickyAssignmentsDocument>(this.StickyBucketAssignmentDocs ?? new Dictionary<string, StickyAssignmentsDocument>()),
                 EncryptedFeatures = this.EncryptedFeatures,
                 ForcedVariations = new Dictionary<string, int>(this.ForcedVariations ?? new Dictionary<string, int>()),
-                SavedGroups = this.SavedGroups?.DeepClone() as JObject,
+                SavedGroups = this.SavedGroups?.DeepClone() as JsonObject,
                 QaMode = this.QaMode,
                 TrackingCallback = this.TrackingCallback,
                 FeatureRepository = this.FeatureRepository,
@@ -204,5 +203,13 @@ namespace GrowthBook
             };
             return cloned;
         }
+        internal static JsonObject ToJsonObject(object obj)
+        {
+            var dictionaryTypeInfo = GrowthBookJsonContext.Default.IDictionaryStringObject;
+            var jsonString = JsonSerializer.Serialize(obj, dictionaryTypeInfo);
+            var node = JsonNode.Parse(jsonString);
+            return node as JsonObject ?? new JsonObject();
+        }
     }
 }
+

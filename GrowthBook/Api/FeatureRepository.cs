@@ -8,8 +8,7 @@ using System.Threading.Tasks;
 using GrowthBook.Extensions;
 using GrowthBook.Providers;
 using Microsoft.Extensions.Logging;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
+
 
 namespace GrowthBook.Api
 {

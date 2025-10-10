@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.Json;
 using FluentAssertions;
 using GrowthBook.Extensions;
 using Newtonsoft.Json.Linq;
@@ -21,7 +22,7 @@ namespace GrowthBook.Tests.Api
 
             // Assert
             context.Attributes["userId"].ToString().Should().Be("user123");
-            context.Attributes["age"].ToObject<int>().Should().Be(25);
+            context.Attributes["age"].Deserialize<int>().Should().Be(25);
         }
 
         [Fact]
@@ -71,7 +72,7 @@ namespace GrowthBook.Tests.Api
             // Assert
             growthBook.Attributes["userId"].ToString().Should().Be("user123"); // Preserved
             growthBook.Attributes["role"].ToString().Should().Be("admin"); // Added
-            growthBook.Attributes["age"].ToObject<int>().Should().Be(30); // Overwritten
+            growthBook.Attributes["age"].Deserialize<int>().Should().Be(30); // Overwritten
         }
 
         [Fact]

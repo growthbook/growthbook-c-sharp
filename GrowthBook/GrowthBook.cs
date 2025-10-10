@@ -1,11 +1,5 @@
 using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.Linq;
-using System.Net.Http;
-using System.Security;
-using System.Threading;
-using System.Threading.Tasks;
 using GrowthBook.Api;
 using GrowthBook.Extensions;
 using GrowthBook.Providers;
@@ -13,8 +7,12 @@ using GrowthBook.Services;
 using GrowthBook.Utilities;
 using GrowthBook.Exceptions;
 using Microsoft.Extensions.Logging;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
+using System.Text.Json.Nodes;
+using System.Text.Json;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace GrowthBook
 {
@@ -36,11 +34,11 @@ namespace GrowthBook
         private readonly IStickyBucketService? _stickyBucketService;
         private readonly IDictionary<string, StickyAssignmentsDocument> _stickyBucketAssignmentDocs;
         private readonly ILogger<GrowthBook> _logger;
-        private readonly JObject? _savedGroups;
+        private readonly JsonObject? _savedGroups;
         private readonly ILoggerFactory _loggerFactory;
         private readonly bool _ownsLoggerFactory;
         private readonly Context _context;
-        private JObject? _previousAttributes;
+        private JsonObject? _previousAttributes;
         private IDictionary<string, int>? _previousForcedVariations;
 
         /// <summary>
@@ -67,7 +65,7 @@ namespace GrowthBook
             _stickyBucketService = context.StickyBucketService;
             _stickyBucketAssignmentDocs = context.StickyBucketAssignmentDocs ?? new Dictionary<string, StickyAssignmentsDocument>();
             _savedGroups = context.SavedGroups;
-            _previousAttributes = context.Attributes?.DeepClone() as JObject;
+            _previousAttributes = context.Attributes?.DeepClone() as JsonObject;
             _previousForcedVariations = context.ForcedVariations?.ToDictionary(k => k.Key, v => v.Value);
 
 
@@ -128,7 +126,7 @@ namespace GrowthBook
         /// <summary>
         /// Arbitrary JSON object containing user and request attributes.
         /// </summary>
-        public JObject? Attributes { get; set; } = new JObject();
+        public JsonObject? Attributes { get; set; } = new JsonObject();
 
         /// <summary>
         /// Dictionary of the currently loaded feature objects.
@@ -204,57 +202,73 @@ namespace GrowthBook
         /// Updates user attributes from an IDictionary for singleton usage pattern.
         /// </summary>
         /// <param name="attributes">New user attributes as IDictionary</param>
-        public void UpdateAttributes(IDictionary<string, object> attributes)
+        public void UpdateAttributes(IDictionary<string, object>? attributes)
         {
-            var newAttributes = attributes != null ? JObject.FromObject(attributes) : new JObject();
-
-            if (_context.RemoteEval && ShouldTriggerRemoteEvaluation(newAttributes))
-            {
-                TriggerRemoteEvaluationAsync(newAttributes).ConfigureAwait(false);
-            }
-
-            Attributes = newAttributes;
-            _previousAttributes = newAttributes?.DeepClone() as JObject;
+            JsonObject newAttributes;
 
             if (attributes != null)
             {
-                Attributes = JObject.FromObject(attributes);
+                newAttributes = new JsonObject();
+
+                foreach (var kvp in attributes)
+                {
+                    // Безпечне перетворення будь-якого типу у JsonNode
+                    newAttributes[kvp.Key] = JsonSerializer.SerializeToNode(
+                kvp.Value,
+                GrowthBookJsonContext.Default.Object // Use the generated JsonTypeInfo
+            );
+                }
+
                 _logger?.LogDebug("Updated attributes with {Count} properties", attributes.Count);
             }
             else
             {
-                Attributes = new JObject();
+                newAttributes = new JsonObject();
                 _logger?.LogDebug("Cleared attributes");
             }
+
+            // Якщо потрібно тригернути RemoteEval
+            if (_context.RemoteEval && ShouldTriggerRemoteEvaluation(newAttributes))
+            {
+                _ = TriggerRemoteEvaluationAsync(newAttributes);
+            }
+
+            Attributes = newAttributes;
+            _previousAttributes = (JsonObject?)newAttributes.DeepClone();
         }
 
         /// <summary>
         /// Updates user attributes from an anonymous object for singleton usage pattern.
         /// </summary>
         /// <param name="attributes">New user attributes as anonymous object</param>
-        public void UpdateAttributes(object attributes)
+        public void UpdateAttributes(object? attributes)
         {
-            var newAttributes = attributes != null ? JObject.FromObject(attributes) : new JObject();
-
-            if (_context.RemoteEval && ShouldTriggerRemoteEvaluation(newAttributes))
-            {
-                TriggerRemoteEvaluationAsync(newAttributes).ConfigureAwait(false);
-            }
-
-            Attributes = newAttributes;
-            _previousAttributes = newAttributes?.DeepClone() as JObject;
+            JsonObject newAttributes;
 
             if (attributes != null)
             {
-                Attributes = JObject.FromObject(attributes);
+                var typeInfo = GrowthBookJsonContext.Default.GetTypeInfo(attributes.GetType());
+                var serializationTypeInfo = typeInfo ?? GrowthBookJsonContext.Default.Object;
+                JsonNode? node = JsonSerializer.SerializeToNode(attributes, serializationTypeInfo);
+                newAttributes = node as JsonObject ?? new JsonObject();
+
                 _logger?.LogDebug("Updated attributes from object");
             }
             else
             {
-                Attributes = new JObject();
+                newAttributes = new JsonObject();
                 _logger?.LogDebug("Cleared attributes");
             }
+
+            if (_context.RemoteEval && ShouldTriggerRemoteEvaluation(newAttributes))
+            {
+                _ = TriggerRemoteEvaluationAsync(newAttributes);
+            }
+
+            Attributes = newAttributes;
+            _previousAttributes = (JsonObject?)newAttributes.DeepClone();
         }
+
 
         /// <summary>
         /// Merges additional attributes with existing ones.
@@ -262,17 +276,33 @@ namespace GrowthBook
         /// <param name="additionalAttributes">Additional attributes to merge</param>
         public void MergeAttributes(IDictionary<string, object> additionalAttributes)
         {
-            if (additionalAttributes == null) return;
-            var oldAttributes = Attributes?.DeepClone() as JObject;
+            if (additionalAttributes == null || additionalAttributes.Count == 0) return;
+            var oldAttributes = Attributes?.DeepClone() as JsonObject;
 
             if (Attributes == null)
             {
-                Attributes = new JObject();
+                Attributes = new JsonObject();
             }
-            
+
             foreach (var kvp in additionalAttributes)
             {
-                Attributes[kvp.Key] = JToken.FromObject(kvp.Value);
+                var value = kvp.Value;
+                if (value == null)
+                {
+                    Attributes[kvp.Key] = null;
+                    continue;
+                }
+
+                var typeInfo = GrowthBookJsonContext.Default.GetTypeInfo(value.GetType());
+
+                if (typeInfo != null)
+                {
+                    var node = JsonSerializer.SerializeToNode(value, typeInfo);
+                    if (node != null)
+                    {
+                        Attributes[kvp.Key] = node;
+                    }
+                }
             }
 
             if (_context.RemoteEval && ShouldTriggerRemoteEvaluation(Attributes))
@@ -280,7 +310,7 @@ namespace GrowthBook
                 TriggerRemoteEvaluationAsync(Attributes).ConfigureAwait(false);
             }
 
-            _previousAttributes = Attributes?.DeepClone() as JObject;
+            _previousAttributes = Attributes?.DeepClone() as JsonObject;
 
             _logger?.LogDebug("Merged {Count} additional attributes", additionalAttributes.Count);
         }
@@ -293,16 +323,27 @@ namespace GrowthBook
         {
             if (additionalAttributes == null) return;
 
-            var oldAttributes = Attributes?.DeepClone() as JObject;
+            var oldAttributes = Attributes?.DeepClone() as JsonObject;
             if (Attributes == null)
             {
-                Attributes = new JObject();
+                Attributes = new JsonObject();
             }
 
-            var additionalJObject = JObject.FromObject(additionalAttributes);
-            foreach (var property in additionalJObject.Properties())
+            var typeInfo = GrowthBookJsonContext.Default.GetTypeInfo(additionalAttributes.GetType());
+            if (typeInfo != null)
             {
-                Attributes[property.Name] = property.Value;
+                var node = JsonSerializer.SerializeToNode(additionalAttributes, typeInfo);
+                var additionaObject = node?.AsObject();
+
+
+                if (additionaObject != null)
+                {
+
+                    foreach (var property in additionaObject)
+                    {
+                        Attributes[property.Key] = property.Value;
+                    }
+                }
             }
 
             if (_context.RemoteEval && ShouldTriggerRemoteEvaluation(Attributes))
@@ -310,7 +351,7 @@ namespace GrowthBook
                 TriggerRemoteEvaluationAsync(Attributes).ConfigureAwait(false);
             }
 
-            _previousAttributes = Attributes?.DeepClone() as JObject;
+            _previousAttributes = Attributes?.DeepClone() as JsonObject;
 
             _logger?.LogDebug("Merged additional attributes from object");
         }
@@ -337,8 +378,20 @@ namespace GrowthBook
 
             var result = EvaluateFeature(key);
             var value = result.Value;
+            if (value == null || value.IsNull())
+                return fallback;
 
-            return value == null || value!.IsNull() ? fallback : value.ToObject<T>()!;
+            var jsonString = value.ToJsonString();
+            var typeInfo = GrowthBookJsonContext.Default.GetTypeInfo(typeof(T));
+
+            if (typeInfo == null)
+            {
+                // source generator не згенерував метадані, fallback
+                return fallback;
+            }
+
+            var deserialized = JsonSerializer.Deserialize(jsonString, typeInfo);
+            return deserialized is T t ? t : fallback;
         }
 
         /// <inheritdoc />
@@ -347,7 +400,20 @@ namespace GrowthBook
             var result = await EvalFeatureAsync(key, cancellationToken);
             var value = result.Value;
 
-            return value == null || value.IsNull() ? fallback : value.ToObject<T>()!;
+            if (value == null || value.IsNull())
+                return fallback;
+
+            var jsonString = value.ToJsonString();
+            var typeInfo = GrowthBookJsonContext.Default.GetTypeInfo(typeof(T));
+
+            if (typeInfo == null)
+            {
+                // source generator не згенерував метадані, fallback
+                return fallback;
+            }
+
+            var deserialized = JsonSerializer.Deserialize(jsonString, typeInfo);
+            return deserialized is T t ? t : fallback;
         }
 
         /// <inheritdoc />
@@ -423,9 +489,9 @@ namespace GrowthBook
                                 return GetFeatureResult(default, FeatureResult.SourceId.CyclicPrerequisite);
                             }
 
-                            var evaluationObject = new JObject { ["value"] = parentResult.Value };
+                            var evaluationObject = new JsonObject { ["value"] = parentResult.Value };
 
-                            var isSuccess = _conditionEvaluator.EvalCondition(evaluationObject, parentCondition.Condition ?? new JObject(), _savedGroups);
+                            var isSuccess = _conditionEvaluator.EvalCondition(evaluationObject, parentCondition.Condition ?? new JsonObject(), _savedGroups);
 
                             if (!isSuccess)
                             {
@@ -630,16 +696,16 @@ namespace GrowthBook
                 || prev?.Result?.InExperiment != result.InExperiment
                 || prev.Result.VariationId != result.VariationId)
             {
-                _assigned[experiment.Key?? ""] = assignment;
+                _assigned[experiment.Key ?? ""] = assignment;
                 shouldFireCallbacks = true;
             }
 
             // Also use repository tracking if available (for preventing duplicate callbacks across instances)
             if (_featureRepository != null)
             {
-                if (!_featureRepository.HasIdenticalAssignment(experiment.Key??"", assignment))
+                if (!_featureRepository.HasIdenticalAssignment(experiment.Key ?? "", assignment))
                 {
-                    _featureRepository.RecordAssignment(experiment.Key??"", assignment);
+                    _featureRepository.RecordAssignment(experiment.Key ?? "", assignment);
                 }
             }
 
@@ -705,7 +771,7 @@ namespace GrowthBook
 
             // 4. Use the forced variation value instead if one is specified for this experiment.
 
-            if (ForcedVariations!= null && ForcedVariations.TryGetValue(experiment?.Key??"", out var variation))
+            if (ForcedVariations != null && ForcedVariations.TryGetValue(experiment?.Key ?? "", out var variation))
             {
                 _logger.LogDebug("Found a forced variation value, creating experiment result from it");
                 return GetExperimentResult(experiment, variation, featureId: featureId);
@@ -746,7 +812,7 @@ namespace GrowthBook
             var foundStickyBucket = false;
             var stickyBucketVersionIsBlocked = false;
 
-            if (_stickyBucketService != null && experiment!= null && !experiment.DisableStickyBucketing)
+            if (_stickyBucketService != null && experiment != null && !experiment.DisableStickyBucketing)
             {
                 var bucketVersion = experiment.BucketVersion;
                 var minBucketVersion = experiment.MinBucketVersion;
@@ -808,9 +874,9 @@ namespace GrowthBook
                             return GetExperimentResult(experiment, featureId: featureId);
                         }
 
-                        var evaluationObject = new JObject { ["value"] = parentResult.Value };
+                        var evaluationObject = new JsonObject { ["value"] = parentResult.Value };
 
-                        if (!_conditionEvaluator.EvalCondition(evaluationObject, parentCondition.Condition ?? new JObject(), _savedGroups))
+                        if (!_conditionEvaluator.EvalCondition(evaluationObject, parentCondition.Condition ?? new JsonObject(), _savedGroups))
                         {
                             return GetExperimentResult(experiment, featureId: featureId);
                         }
@@ -871,7 +937,7 @@ namespace GrowthBook
 
             // 13.5 Store the value for later if sticky bucketing is enabled.
 
-            if (_stickyBucketService != null && experiment!=null && !experiment.DisableStickyBucketing)
+            if (_stickyBucketService != null && experiment != null && !experiment.DisableStickyBucketing)
             {
                 var experimentKey = ExperimentUtilities.GetStickyBucketExperimentKey(experiment.Key, experiment.BucketVersion);
 
@@ -893,7 +959,7 @@ namespace GrowthBook
             return result;
         }
 
-        private FeatureResult GetFeatureResult(JToken? value, string source, Experiment? experiment = null, ExperimentResult? experimentResult = null)
+        private FeatureResult GetFeatureResult(JsonNode? value, string source, Experiment? experiment = null, ExperimentResult? experimentResult = null)
         {
             return new FeatureResult
             {
@@ -916,7 +982,7 @@ namespace GrowthBook
                     return true;
                 }
 
-                var bucket = HashUtilities.Hash(filter.Seed?? string.Empty, hashValue, filter.HashVersion);
+                var bucket = HashUtilities.Hash(filter.Seed ?? string.Empty, hashValue, filter.HashVersion);
                 if (!bucket.HasValue)
                 {
                     _logger.LogDebug("Bucket value is null, marking as filtered out");
@@ -996,7 +1062,7 @@ namespace GrowthBook
             var canUseStickyBucketing = _stickyBucketService != null && experiment != null && !experiment.DisableStickyBucketing;
             var fallbackAttribute = canUseStickyBucketing ? experiment?.FallbackAttribute : default;
 
-            (var hashAttribute, var hashValue) = Attributes.GetHashAttributeAndValue(experiment?.HashAttribute , fallbackAttributeKey: fallbackAttribute);
+            (var hashAttribute, var hashValue) = Attributes.GetHashAttributeAndValue(experiment?.HashAttribute, fallbackAttributeKey: fallbackAttribute);
 
             var meta = experiment?.Meta?.Count > 0 ? experiment.Meta[variationIndex] : null;
 
@@ -1063,8 +1129,8 @@ namespace GrowthBook
                 }
             }
         }
-        
-         /// <summary>
+
+        /// <summary>
         /// Validates that remote evaluation configuration is correct.
         /// </summary>
         /// <param name="context">The context to validate</param>
@@ -1093,7 +1159,7 @@ namespace GrowthBook
         /// </summary>
         /// <param name="newAttributes">The new attributes to check</param>
         /// <returns>True if remote evaluation should be triggered</returns>
-        private bool ShouldTriggerRemoteEvaluation(JObject? newAttributes)
+        private bool ShouldTriggerRemoteEvaluation(JsonObject? newAttributes)
         {
             // Check if attributes changed
             var attributesChanged = RemoteEvaluationUtilities.ShouldTriggerRemoteEvaluation(
@@ -1115,7 +1181,7 @@ namespace GrowthBook
         /// Triggers remote evaluation asynchronously when attribute changes are detected.
         /// </summary>
         /// <param name="newAttributes">The new attributes</param>
-        private async Task TriggerRemoteEvaluationAsync(JObject? newAttributes)
+        private async Task TriggerRemoteEvaluationAsync(JsonObject? newAttributes)
         {
             try
             {
