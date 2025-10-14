@@ -42,6 +42,10 @@ namespace GrowthBook
         private readonly Context _context;
         private JObject _previousAttributes;
         private IDictionary<string, int> _previousForcedVariations;
+        private readonly List<Action<Experiment, ExperimentResult>> _subscribers 
+            = new List<Action<Experiment, ExperimentResult>>();
+        private readonly List<Func<Experiment, ExperimentResult, Task>> _asyncSubscribers 
+            = new List<Func<Experiment, ExperimentResult, Task>>();
 
         /// <summary>
         /// Creates a new GrowthBook instance from the passed context.
@@ -319,12 +323,83 @@ namespace GrowthBook
             return EvalFeature(key).Off;
         }
 
+        /// <summary>
+        /// Asynchronously checks whether the specified feature is enabled.
+        /// </summary>
+        /// <param name="key">The feature key.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns><c>true</c> if the feature is on; otherwise, <c>false</c>.</returns>
+        public async Task<bool> IsOnAsync(string key, CancellationToken? cancellationToken = null)
+        {
+            await LoadFeatures(cancellationToken: cancellationToken);
+            var result = EvaluateFeature(key);
+            var value = result.Value;
+            return !value.IsNull() && value.ToObject<bool>();
+        }
+
+        /// <summary>
+        /// Asynchronously checks whether the specified feature is disabled.
+        /// </summary>
+        /// <param name="key">The feature key.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns><c>true</c> if the feature is off; otherwise, <c>false</c>.</returns>
+        public async Task<bool> IsOffAsync(string key, CancellationToken? cancellationToken = null)
+        {
+            var on = await IsOnAsync(key, cancellationToken);
+            return !on;
+        }
+
+        /// <summary>
+        /// Subscribes a synchronous callback to experiment/feature evaluations.
+        /// </summary>
+        public IDisposable Subscribe(Action<Experiment, ExperimentResult> callback)
+        {
+            if (callback == null) throw new ArgumentNullException(nameof(callback));
+            _subscribers.Add(callback);
+            return new Subscription(() => _subscribers.Remove(callback));
+        }
+
+        /// <summary>
+        /// Subscribes an asynchronous callback to experiment/feature evaluations.
+        /// </summary>
+        public IDisposable SubscribeAsync(Func<Experiment, ExperimentResult, Task> callback)
+        {
+            if (callback == null) throw new ArgumentNullException(nameof(callback));
+            _asyncSubscribers.Add(callback);
+            return new Subscription(() => _asyncSubscribers.Remove(callback));
+        }
+
+        private class Subscription : IDisposable
+        {
+            private readonly Action _unsubscribe;
+            private bool _disposed;
+
+            public Subscription(Action unsubscribe)
+            {
+                _unsubscribe = unsubscribe;
+            }
+
+            public void Dispose()
+            {
+                if (!_disposed)
+                {
+                    _unsubscribe();
+                    _disposed = true;
+                }
+            }
+        }
+
+
+
         /// <inheritdoc />
         public T GetFeatureValue<T>(string key, T fallback, bool alwaysLoadFeatures = false)
         {
+            // Keep the sync API, but avoid deadlocks by doing a quick synchronous spin only if already completed.
+            // Prefer callers to use the async APIs.
             if (alwaysLoadFeatures)
             {
-                LoadFeatures().Wait();
+                // Fire-and-wait carefully to avoid deadlocks.
+---                LoadFeatures().GetAwaiter().GetResult();
             }
 
             var result = EvaluateFeature(key);
@@ -360,7 +435,7 @@ namespace GrowthBook
         {
             if (alwaysLoadFeatures)
             {
-                LoadFeatures().Wait();
+                LoadFeatures().GetAwaiter().GetResult();
             }
 
             return EvaluateFeature(featureId);
@@ -475,6 +550,12 @@ namespace GrowthBook
                             }
                         }
 
+                        NotifySubscribers(null, new ExperimentResult
+                        {
+                            InExperiment = false,
+                            Value = rule.Force
+                        });
+
                         _logger.LogDebug("Rule {RuleIndex}: returning forced value for feature '{FeatureId}'", ruleIndex, featureId);
                         return GetFeatureResult(rule.Force, FeatureResult.SourceId.Force);
                     }
@@ -509,6 +590,8 @@ namespace GrowthBook
                     {
                         continue;
                     }
+
+                    NotifySubscribers(experiment, result);
 
                     return GetFeatureResult(result.Value, FeatureResult.SourceId.Experiment, experiment, result);
                 }

@@ -24,6 +24,39 @@ namespace GrowthBook
         /// <returns>True if the feature is off.</returns>
         bool IsOff(string key);
 
+
+        /// <summary>
+        /// Asynchronously checks whether a feature is on (enabled) for the current context.
+        /// </summary>
+        /// <param name="key">The feature key.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A task that resolves to <c>true</c> if the feature is on; otherwise, <c>false</c>.</returns>
+        Task<bool> IsOnAsync(string key, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Asynchronously checks whether a feature is off (disabled) for the current context.
+        /// </summary>
+        /// <param name="key">The feature key.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A task that resolves to <c>true</c> if the feature is off; otherwise, <c>false</c>.</returns>
+        Task<bool> IsOffAsync(string key, CancellationToken cancellationToken = default);
+
+        /// <summary>
+        /// Subscribes a synchronous callback to feature evaluations.
+        /// The callback is invoked every time a feature or experiment is evaluated.
+        /// </summary>
+        /// <param name="callback">The callback to invoke after each evaluation.</param>
+        /// <returns>An <see cref="IDisposable"/> that can be disposed to unsubscribe.</returns>
+        IDisposable Subscribe(Action<Experiment, ExperimentResult> callback);
+
+        /// <summary>
+        /// Subscribes an asynchronous callback to feature evaluations.
+        /// The callback is awaited asynchronously in a fire-and-forget manner without blocking.
+        /// </summary>
+        /// <param name="callback">The asynchronous callback to invoke after each evaluation.</param>
+        /// <returns>An <see cref="IDisposable"/> that can be disposed to unsubscribe.</returns>
+        IDisposable SubscribeAsync(Func<Experiment, ExperimentResult, Task> callback);
+
         /// <summary>
         /// Gets the value of a feature cast to the specified type. This is a blocking operation and should not be used from a UI thread.
         /// </summary>
