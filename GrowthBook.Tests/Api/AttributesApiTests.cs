@@ -15,15 +15,20 @@ namespace GrowthBook.Tests.Api
     public class AttributesApiTests : IDisposable
     {
         [Fact]
-        public void Context_WithAnonymousObject_ShouldSetAttributes()
+        public void Context_WithDictionary_ShouldSetAttributes()
         {
-            // Arrange & Act
-            var context = new Context(new { userId = "user123", age = 25 });
+            var attributes = new Dictionary<string, object>
+            {
+                ["userId"] = "user123",
+                ["age"] = 25
+            };
 
-            // Assert
+            var context = new Context(attributes);
+
             context.Attributes["userId"].ToString().Should().Be("user123");
             context.Attributes["age"].Deserialize<int>().Should().Be(25);
         }
+
 
         [Fact]
         public void Context_SetAttributes_WithIDictionary_ShouldUpdateAttributes()
@@ -48,11 +53,19 @@ namespace GrowthBook.Tests.Api
         public void GrowthBook_UpdateAttributes_ShouldReplaceAttributes()
         {
             // Arrange
-            var context = new Context(new { userId = "original" });
+
+            var context = new Context(new Dictionary<string, object>
+            {
+                ["userId"] = "original",
+            });
             using var growthBook = new GrowthBook(context);
 
             // Act
-            growthBook.UpdateAttributes(new { userId = "updated", role = "admin" });
+            growthBook.UpdateAttributes(new Dictionary<string, object>
+            {
+                ["userId"] = "updated",
+                ["role"] = "admin"
+            });
 
             // Assert
             growthBook.Attributes["userId"].ToString().Should().Be("updated");
@@ -63,12 +76,19 @@ namespace GrowthBook.Tests.Api
         public void GrowthBook_MergeAttributes_ShouldMergeAttributes()
         {
             // Arrange
-            var context = new Context(new { userId = "user123", age = 25 });
+            var context = new Context(new Dictionary<string, object>
+            {
+                ["userId"] = "user123",
+                ["age"] = 25
+            });
             using var growthBook = new GrowthBook(context);
 
             // Act
-            growthBook.MergeAttributes(new { role = "admin", age = 30 });
-
+            growthBook.MergeAttributes(new Dictionary<string, object>
+            {
+                ["role"] = "admin",
+                ["age"] = 30
+            });
             // Assert
             growthBook.Attributes["userId"].ToString().Should().Be("user123"); // Preserved
             growthBook.Attributes["role"].ToString().Should().Be("admin"); // Added
@@ -79,11 +99,21 @@ namespace GrowthBook.Tests.Api
         public void GrowthBookFactory_CreateForUser_ShouldCreateInstanceWithMergedAttributes()
         {
             // Arrange
-            var baseContext = new Context(new { environment = "production" }) { ClientKey = "test-key" };
+            var baseContext = new Context(new Dictionary<string, object>
+            {
+                ["environment"] = "production"
+            })
+            {
+                ClientKey = "test-key"
+            };
             using var factory = new GrowthBookFactory(baseContext);
 
             // Act
-            using var growthBook = factory.CreateForUser(new { userId = "user123", role = "admin" });
+            using var growthBook = factory.CreateForUser(new Dictionary<string, object>
+            {
+                ["userId"] = "user123",
+                ["role"] = "admin"
+            });
 
             // Assert
             growthBook.Attributes["environment"].ToString().Should().Be("production");

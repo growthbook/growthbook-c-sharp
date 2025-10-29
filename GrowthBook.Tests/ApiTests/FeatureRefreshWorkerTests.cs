@@ -7,6 +7,7 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text;
+using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -101,13 +102,6 @@ public class FeatureRefreshWorkerTests : ApiUnitTest<FeatureRefreshWorker>
         }
     }
 
-    private sealed class FeaturesResponse
-    {
-        public int FeatureCount { get; set; }
-        public Dictionary<string, Feature> Features { get; set; }
-        public string EncryptedFeatures { get; set; }
-    }
-
     private readonly TestHttpClientFactory _httpClientFactory;
     private readonly GrowthBookConfigurationOptions _config;
     private readonly FeatureRefreshWorker _worker;
@@ -133,7 +127,13 @@ public class FeatureRefreshWorkerTests : ApiUnitTest<FeatureRefreshWorker>
 
         var features = await _worker.RefreshCacheFromApi();
 
-        features.Should().BeEquivalentTo(_availableFeatures);
+        features.Should().BeEquivalentTo(
+            _availableFeatures,
+            options => options.Using<JsonNode>(ctx =>
+            {
+                ctx.Subject.ToJsonString().Should().Be(ctx.Expectation.ToJsonString());
+            })
+        .WhenTypeIs<JsonNode>());
 
         await _cache.Received(1).RefreshWith(Arg.Any<IDictionary<string, Feature>>(), Arg.Any<CancellationToken?>());
     }

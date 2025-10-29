@@ -4,10 +4,9 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text;
+using System.Text.Json;
 using System.Threading.Tasks;
 using GrowthBook.Tests.Json;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
 using Xunit;
 
 namespace GrowthBook.Tests;
@@ -17,6 +16,14 @@ namespace GrowthBook.Tests;
 /// </summary>
 public abstract class UnitTest
 {
+    private static readonly JsonSerializerOptions DefaultJsonOptions = new JsonSerializerOptions
+    {
+        PropertyNameCaseInsensitive = true,
+        IncludeFields = true,
+        NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString |
+                     System.Text.Json.Serialization.JsonNumberHandling.WriteAsString
+    };
+
     /// <summary>
     /// Represents a named test category within the custom-cases.json tests.
     /// </summary>
@@ -154,98 +161,90 @@ public abstract class UnitTest
         using StreamReader reader = new StreamReader(stream);
 
         var json = reader.ReadToEnd();
-        var jsonObject = JObject.Parse(json);
-        var tests = (JArray)jsonObject.SelectToken(testCategory)!;
+        using var doc = JsonDocument.Parse(json);
 
-        if (tests is null)
+        if (!doc.RootElement.TryGetProperty(testCategory, out var testsElement) || testsElement.ValueKind != JsonValueKind.Array)
         {
             throw new InvalidOperationException($"The resource '{resourceName}' does not contain a test category named '{testCategory}'");
         }
 
-        return tests.Select(x => DeserializeFromJsonArray<T>((JArray)x));
-    }
-
-    private static T DeserializeFromJsonArray<T>(JArray array) where T : new()
-    {
-        return (T)DeserializeFromJsonArray(array, typeof(T))!;
-    }
-
-    private static object? DeserializeFromJsonArray(JArray array, Type instanceType)
-    { 
-        if (array is null)
+        foreach (var element in testsElement.EnumerateArray())
         {
-            return default;
+            yield return DeserializeFromJsonElement<T>(element);
         }
+    }
+
+    private static T DeserializeFromJsonElement<T>(JsonElement element) where T : new()
+    {
+        return (T)DeserializeFromJsonElement(element, typeof(T))!;
+    }
+
+    private static object? DeserializeFromJsonElement(JsonElement element, Type targetType)
+    {
+        if (element.ValueKind == JsonValueKind.Null)
+            return null;
 
         // Transforming a JSON array into a .Net array requires us to copy the elements over,
         // so handle that case up front before we try anything else.
 
-        if (instanceType.IsArray)
+        if (targetType.IsArray && element.ValueKind == JsonValueKind.Array)
         {
-            var arrayElements = Array.CreateInstance(instanceType.GetElementType()!, array.Count);
-
-            for(var i = 0; i < array.Count; i++)
+            var arrayElementType = targetType.GetElementType()!;
+            var array = Array.CreateInstance(arrayElementType, element.GetArrayLength());
+            int i = 0;
+            foreach (var item in element.EnumerateArray())
             {
-                arrayElements.SetValue(array[i].ToObject(instanceType.GetElementType()!), i);
+                array.SetValue(DeserializeFromJsonElement(item, arrayElementType), i++);
             }
-
-            return arrayElements;
+            return array;
         }
 
         // If there isn't a public parameterless constructor available then it's likely that this is a
         // tuple value that depends on its associated JsonConverter to be created correctly. Fall back to
         // the JSON conversion entirely for this type.
 
-        if (instanceType.GetConstructor(Type.EmptyTypes) is null)
+        if (targetType.GetConstructor(Type.EmptyTypes) == null)
         {
-            return array.ToObject(instanceType);
+            return JsonSerializer.Deserialize(element.GetRawText(), targetType, DefaultJsonOptions);
+
         }
 
         // This isn't an array or a tuple so we need to assume it's a common type with properties and proceed accordingly.
 
-        var instance = Activator.CreateInstance(instanceType);
+        var instance = Activator.CreateInstance(targetType);
 
-        foreach(var property in instanceType.GetProperties(BindingFlags.Instance | BindingFlags.Public))
+        foreach (var property in targetType.GetProperties(BindingFlags.Instance | BindingFlags.Public))
         {
             var indexAttribute = property.GetCustomAttribute<TestPropertyIndexAttribute>();
-
-            var testIndex = indexAttribute?.Index;
-            var isOptional = indexAttribute?.IsOptional;
-
-            if (testIndex is null)
-            {
+            if (indexAttribute is null)
                 continue;
-            }
 
-            if (testIndex < 0 || testIndex > array.Count)
+            int index = indexAttribute.Index;
+            bool isOptional = indexAttribute.IsOptional;
+
+            if (element.ValueKind != JsonValueKind.Array || index >= element.GetArrayLength())
             {
-                throw new InvalidOperationException($"Unable to deserialize type '{instanceType}', property '{property.Name}' has an index of '{testIndex}' that is out of range");
+                if (isOptional) continue;
+                throw new InvalidOperationException($"Property '{property.Name}' index {index} out of range for element array.");
             }
 
-            if (testIndex == array.Count && isOptional == true)
+            var propertyElement = element[index];
+
+            if (propertyElement.ValueKind == JsonValueKind.Array)
             {
-                // Some of the JSON tests may omit the last property, in which case
-                // we should just fail gracefully and keep going here.
-
-                continue;
+                var value = DeserializeFromJsonElement(propertyElement, property.PropertyType);
+                property.SetValue(instance, value);
             }
 
-            var jsonInstance = array[testIndex];
-
-            if (jsonInstance!.Type == JTokenType.Array)
-            {
-                var propertyInstance = DeserializeFromJsonArray((JArray)jsonInstance, property.PropertyType);
-
-                property.SetValue(instance, propertyInstance, null);
-            }
             else
             {
-                var propertyInstance = jsonInstance.ToObject(property.PropertyType);
-
-                property.SetValue(instance, propertyInstance, null);
+                var value = JsonSerializer.Deserialize(propertyElement.GetRawText(), property.PropertyType, DefaultJsonOptions);
+                property.SetValue(instance, value);
             }
         }
 
         return instance;
     }
+
+
 }
