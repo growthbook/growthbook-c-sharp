@@ -87,7 +87,7 @@ namespace GrowthBook.Extensions
             };
 
             growthBook.Attributes[key] = node;
-            return growthBook!;
+            return growthBook;
         }
 
         /// <summary>
@@ -128,7 +128,7 @@ namespace GrowthBook.Extensions
                         var typeInfo = GrowthBookJsonContext.Default.GetTypeInfo(typeof(T));
                         if (typeInfo != null)
                         {
-                            return (T?)JsonSerializer.Deserialize(node, (JsonTypeInfo)typeInfo);
+                            return (T?)JsonSerializer.Deserialize(node, typeInfo);
                         }
                     }
                     catch

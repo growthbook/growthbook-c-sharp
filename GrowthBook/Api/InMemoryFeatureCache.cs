@@ -26,6 +26,10 @@ namespace GrowthBook.Api
         private readonly int _cacheExpirationInSeconds;
         private DateTime _nextCacheExpiration;
 
+        /// <summary>
+        /// Initializes a new instance of the <see cref="InMemoryFeatureCache"/> class.
+        /// </summary>
+        /// <param name="cacheExpirationInSeconds">Cache expiration time in seconds.</param>
         public InMemoryFeatureCache(int cacheExpirationInSeconds)
         {
             // The cache should start out in an expired state so that any exterior logic
@@ -35,28 +39,39 @@ namespace GrowthBook.Api
             _nextCacheExpiration = DateTime.UtcNow;
         }
 
+        /// <summary>
+        /// Gets the number of currently cached features.
+        /// </summary>
         public int FeatureCount
         {
             get
             {
-                lock(_cacheLock)
+                lock (_cacheLock)
                 {
                     return _cachedFeatures.Count;
                 }
             }
         }
 
+        /// <summary>
+        /// Indicates whether the cache has expired.
+        /// </summary>
         public bool IsCacheExpired
         {
             get
             {
-                lock(_cacheLock)
+                lock (_cacheLock)
                 {
                     return _nextCacheExpiration <= DateTime.UtcNow;
                 }
             }
         }
 
+        /// <summary>
+        /// Retrieves a copy of the current feature set from cache.
+        /// </summary>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A dictionary containing cached features.</returns>
         public Task<IDictionary<string, Feature>> GetFeatures(CancellationToken? cancellationToken = null)
         {
             lock (_cacheLock)
@@ -65,9 +80,14 @@ namespace GrowthBook.Api
             }
         }
 
+        /// <summary>
+        /// Updates the cache with new features and resets the expiration timer.
+        /// </summary>
+        /// <param name="features">Dictionary of new features to store.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
         public Task RefreshWith(IDictionary<string, Feature>? features, CancellationToken? cancellationToken = null)
         {
-            lock(_cacheLock)
+            lock (_cacheLock)
             {
                 _cachedFeatures = new Dictionary<string, Feature>(features ?? new Dictionary<string, Feature>());
                 _nextCacheExpiration = DateTime.UtcNow.AddSeconds(_cacheExpirationInSeconds);

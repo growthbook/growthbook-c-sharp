@@ -1,6 +1,6 @@
 using System.Text.Json.Nodes;
-using System.Text.Json; // Потрібно для JsonValueKind
-using GrowthBook.Utilities; // Для IsNullOrWhitespace на String
+using System.Text.Json;
+using GrowthBook.Utilities;
 
 namespace GrowthBook.Extensions
 {
@@ -27,7 +27,6 @@ namespace GrowthBook.Extensions
 
             if (node is JsonValue jv && jv.TryGetValue(out string? strValue))
             {
-                // Припускаємо, що розширення IsNullOrWhitespace для string знаходиться в іншому файлі
                 return strValue.IsNullOrWhitespace();
             }
 
@@ -45,11 +44,10 @@ namespace GrowthBook.Extensions
             var attribute = attributeKey ?? "id";
             var attributeNode = json?[attribute];
 
-            var isNullOrMissing = attributeNode.IsNull(); // Використовуємо новий IsNull
+            var isNullOrMissing = attributeNode.IsNull();
 
             if (isNullOrMissing && !string.IsNullOrWhiteSpace(fallbackAttributeKey))
             {
-                // Повертаємо значення fallback
                 return (fallbackAttributeKey, json?[fallbackAttributeKey]?.ToString());
             }
 

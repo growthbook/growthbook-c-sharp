@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
 using GrowthBook.Extensions;
@@ -391,36 +392,66 @@ namespace GrowthBook.Providers
 
         private bool IsIn(JsonNode conditionValue, JsonNode? actualValue, JsonObject? savedGroups)
         {
+            // Case: actual is array
             if (actualValue is JsonArray actualArray)
             {
-                _logger.LogDebug("Evaluating whether the specified value is in an array");
-
-                        if (conditionValue is not JsonArray conditionArray) return false;
-
+                if (conditionValue is not JsonArray conditionArray)
+                    return false;
 
                 return actualArray.Any(actualItem =>
-                conditionArray.Any(conditionItem => JsonNode.DeepEquals(actualItem, conditionItem)));
+                    conditionArray.Any(conditionItem => JsonNode.DeepEquals(actualItem, conditionItem))
+                );
             }
-            else if (conditionValue is JsonArray conditionArray)
-            {
-                return conditionArray.Any(x => x?.Equals(actualValue) == true);
-            }
-            else
-            {
-                _logger.LogDebug("Evaluating whether the specified value is equal to or contained within the actual value");
 
-                if (conditionValue == actualValue)
+            // Case: condition is array
+            if (conditionValue is JsonArray conditionArrayOnly)
+            {
+                return conditionArrayOnly.Any(conditionItem => JsonNodeDeepEqualsStrict(conditionItem, actualValue));
+            }
+
+            if (conditionValue is JsonValue && actualValue is JsonValue)
+            {
+                return JsonNodeDeepEqualsStrict(conditionValue, actualValue);
+            }
+
+            return false;
+        }
+
+        private static bool JsonNodeDeepEqualsStrict(JsonNode? a, JsonNode? b)
+        {
+            if (a == null && b == null) return true;
+            if (a == null || b == null) return false;
+
+            if (a is JsonValue va && b is JsonValue vb)
+            {
+                var rawA = va.GetValue<object>();
+                var rawB = vb.GetValue<object>();
+
+                if (rawA is JsonElement ea && rawB is JsonElement eb)
                 {
-                    return true;
+                    if (ea.ValueKind != eb.ValueKind)
+                        return false;
+
+                    switch (ea.ValueKind)
+                    {
+                        case JsonValueKind.String:
+                            return ea.GetString() == eb.GetString();
+                        case JsonValueKind.Number:
+                            return ea.GetRawText() == eb.GetRawText();
+                        case JsonValueKind.True:
+                        case JsonValueKind.False:
+                            return ea.GetBoolean() == eb.GetBoolean();
+                        case JsonValueKind.Null:
+                            return true;
+                        default:
+                            return false;
+                    }
                 }
 
-                if (conditionValue.IsNullOrWhitespace() || actualValue.IsNullOrWhitespace())
-                {
-                    return false;
-                }
-
-                return conditionValue.ToString().Contains(actualValue?.ToString() ?? string.Empty);
+                return Equals(rawA, rawB);
             }
+
+            return JsonNode.DeepEquals(a, b);
         }
 
         private static bool CompareVersions(JsonNode? left, JsonNode? right, Func<int, bool> meetsComparison)
@@ -460,31 +491,51 @@ namespace GrowthBook.Providers
         /// </summary>
         /// <param name="attributeValue">The attribute value to check.</param>
         /// <returns>String value representing the data type of an attribute value.</returns>
-        private static string GetType(JsonNode? attributeValue)
+        private static string GetType(JsonNode? node)
         {
-            if (attributeValue == null)
+            if (node == null)
                 return "null";
 
-            return attributeValue switch
+            if (node is JsonValue value)
             {
-                JsonValue _ => GetJsonValueType((JsonValue)attributeValue),
-                JsonArray => "array",
-                JsonObject => "object",
-                _ => "unknown"
-            };
-        }
+                object? raw = value.GetValue<object?>();
 
-        private static string GetJsonValueType(JsonValue value)
-        {
-            var raw = value.GetValue<object>();
-            return raw switch
-            {
-                null => "null",
-                int or long or float or double or decimal => "number",
-                bool => "boolean",
-                string => "string",
-                _ => "unknown"
-            };
+                if (raw is JsonElement element)
+                {
+                    switch (element.ValueKind)
+                    {
+                        case JsonValueKind.String:
+                            return "string";
+                        case JsonValueKind.Number:
+                            return "number";
+                        case JsonValueKind.True:
+                        case JsonValueKind.False:
+                            return "boolean";
+                        case JsonValueKind.Array:
+                            return "array";
+                        case JsonValueKind.Object:
+                            return "object";
+                        case JsonValueKind.Null:
+                            return "null";
+                        default:
+                            return "unknown";
+                    }
+                }
+
+                return raw switch
+                {
+                    null => "null",
+                    string => "string",
+                    bool => "boolean",
+                    int or long or float or double or decimal => "number",
+                    _ => "unknown"
+                };
+            }
+
+            if (node is JsonArray) return "array";
+            if (node is JsonObject) return "object";
+
+            return "unknown";
         }
 
         /// <summary>
@@ -551,12 +602,10 @@ namespace GrowthBook.Providers
             attrNumber = default;
             condNumber = default;
 
-            // Парсимо attributeValue
             if (attributeValue is JsonValue attrValue)
             {
                 if (!attrValue.TryGetValue<double>(out attrNumber))
                 {
-                    // якщо не вдалося, пробуємо через рядок
                     if (!double.TryParse(attributeValue.ToString(), out attrNumber))
                         return false;
                 }
@@ -566,7 +615,6 @@ namespace GrowthBook.Providers
                 return false;
             }
 
-            // Парсимо conditionValue
             if (conditionValue is JsonValue condValue)
             {
                 if (!condValue.TryGetValue<double>(out condNumber))
@@ -583,12 +631,11 @@ namespace GrowthBook.Providers
             return true;
         }
 
-
         private static bool JsonNodeEquals(JsonNode? a, JsonNode? b)
         {
             if (a == null || b == null) return false;
 
-            return a.ToJsonString() == b.ToJsonString(); // просте порівняння
+            return a.ToJsonString() == b.ToJsonString();
         }
     }
 }

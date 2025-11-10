@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using FluentAssertions;
 using GrowthBook;
@@ -42,7 +43,8 @@ namespace GrowthBook.Tests
                 ForcedVariations = new Dictionary<string, int> { { "exp1", 1 } }
             };
 
-            var json = Newtonsoft.Json.JsonConvert.SerializeObject(request);
+             var json = JsonSerializer.Serialize(request, GrowthBookJsonContext.Default.RemoteEvaluationRequest);
+
             json.Should().Contain("\"attributes\":");
             json.Should().Contain("\"forcedVariations\":");
         }

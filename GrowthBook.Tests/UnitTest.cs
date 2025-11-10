@@ -5,6 +5,7 @@ using System.Linq;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 using System.Threading.Tasks;
 using GrowthBook.Tests.Json;
 using Xunit;
@@ -21,7 +22,11 @@ public abstract class UnitTest
         PropertyNameCaseInsensitive = true,
         IncludeFields = true,
         NumberHandling = System.Text.Json.Serialization.JsonNumberHandling.AllowReadingFromString |
-                     System.Text.Json.Serialization.JsonNumberHandling.WriteAsString
+                         System.Text.Json.Serialization.JsonNumberHandling.WriteAsString,
+        TypeInfoResolver = JsonTypeInfoResolver.Combine(
+            GrowthBookJsonContext.Default,
+            TestJsonContext.Default
+        )
     };
 
     /// <summary>
@@ -33,7 +38,6 @@ public abstract class UnitTest
         public CustomCaseTestCategoryAttribute(string name)
             : base("custom-cases", name)
         {
-
         }
     }
 
@@ -46,7 +50,6 @@ public abstract class UnitTest
         public StandardCaseTestCategoryAttribute(string name)
             : base("standard-cases", name)
         {
-
         }
     }
 
@@ -103,11 +106,13 @@ public abstract class UnitTest
     /// <exception cref="InvalidOperationException">Thrown when unable to locate the <see cref="GetTestsInCategory{T}"/> method.</exception>
     public static IEnumerable<object[]> GetMappedTestsInCategory(Type categoryType)
     {
-        var getTests = typeof(UnitTest).GetMethod(nameof(GetTestsInCategory), BindingFlags.Static | BindingFlags.NonPublic);
+        var getTests =
+            typeof(UnitTest).GetMethod(nameof(GetTestsInCategory), BindingFlags.Static | BindingFlags.NonPublic);
 
         if (getTests is null)
         {
-            throw new InvalidOperationException($"Attempted to get test retrieval method '{nameof(GetTestsInCategory)}' but could not find a suitable match");
+            throw new InvalidOperationException(
+                $"Attempted to get test retrieval method '{nameof(GetTestsInCategory)}' but could not find a suitable match");
         }
 
         var concreteMethod = getTests.MakeGenericMethod(categoryType);
@@ -123,7 +128,7 @@ public abstract class UnitTest
     }
 
     /// <summary>
-    /// Retrieves all test cases within a single test category. 
+    /// Retrieves all test cases within a single test category.
     /// </summary>
     /// <typeparam name="T">The type of the test case class.</typeparam>
     /// <returns>A sequence of test case instances.</returns>
@@ -155,7 +160,8 @@ public abstract class UnitTest
 
         if (stream == null)
         {
-            throw new InvalidOperationException($"The resource {resourceName} is not available - make sure that it has Build Action set to Embedded Resource");
+            throw new InvalidOperationException(
+                $"The resource {resourceName} is not available - make sure that it has Build Action set to Embedded Resource");
         }
 
         using StreamReader reader = new StreamReader(stream);
@@ -163,9 +169,11 @@ public abstract class UnitTest
         var json = reader.ReadToEnd();
         using var doc = JsonDocument.Parse(json);
 
-        if (!doc.RootElement.TryGetProperty(testCategory, out var testsElement) || testsElement.ValueKind != JsonValueKind.Array)
+        if (!doc.RootElement.TryGetProperty(testCategory, out var testsElement) ||
+            testsElement.ValueKind != JsonValueKind.Array)
         {
-            throw new InvalidOperationException($"The resource '{resourceName}' does not contain a test category named '{testCategory}'");
+            throw new InvalidOperationException(
+                $"The resource '{resourceName}' does not contain a test category named '{testCategory}'");
         }
 
         foreach (var element in testsElement.EnumerateArray())
@@ -196,6 +204,7 @@ public abstract class UnitTest
             {
                 array.SetValue(DeserializeFromJsonElement(item, arrayElementType), i++);
             }
+
             return array;
         }
 
@@ -206,7 +215,6 @@ public abstract class UnitTest
         if (targetType.GetConstructor(Type.EmptyTypes) == null)
         {
             return JsonSerializer.Deserialize(element.GetRawText(), targetType, DefaultJsonOptions);
-
         }
 
         // This isn't an array or a tuple so we need to assume it's a common type with properties and proceed accordingly.
@@ -225,26 +233,28 @@ public abstract class UnitTest
             if (element.ValueKind != JsonValueKind.Array || index >= element.GetArrayLength())
             {
                 if (isOptional) continue;
-                throw new InvalidOperationException($"Property '{property.Name}' index {index} out of range for element array.");
+                throw new InvalidOperationException(
+                    $"Property '{property.Name}' index {index} out of range for element array.");
             }
 
             var propertyElement = element[index];
+            object? value;
 
-            if (propertyElement.ValueKind == JsonValueKind.Array)
+            if (property.PropertyType.GetProperties(BindingFlags.Instance | BindingFlags.Public)
+                    .Any(p => p.GetCustomAttribute<TestPropertyIndexAttribute>() != null)
+                && propertyElement.ValueKind == JsonValueKind.Array)
             {
-                var value = DeserializeFromJsonElement(propertyElement, property.PropertyType);
-                property.SetValue(instance, value);
+                value = DeserializeFromJsonElement(propertyElement, property.PropertyType);
             }
-
             else
             {
-                var value = JsonSerializer.Deserialize(propertyElement.GetRawText(), property.PropertyType, DefaultJsonOptions);
-                property.SetValue(instance, value);
+                value = JsonSerializer.Deserialize(propertyElement.GetRawText(), property.PropertyType,
+                    DefaultJsonOptions);
             }
+
+            property.SetValue(instance, value);
         }
 
         return instance;
     }
-
-
 }

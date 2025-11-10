@@ -56,7 +56,7 @@ public class RunTests : UnitTest
         {
             actualResult.InExperiment.Should().Be(testCase.InExperiment, "because the logic placing an experiment into buckets should be correct");
             actualResult.HashUsed.Should().Be(testCase.HashUsed, "because the logic determining which hash to use should be correct");
-            actualResult.Value.Should().BeEquivalentTo(testCase.ExpectedValue, "because the end result value should reflect the correct experiment decisioning");
+            actualResult.Value.ToString().Should().BeEquivalentTo(testCase.ExpectedValue.ToString(), "because the end result value should reflect the correct experiment decisioning");
 
             trackingCounter++;
         };
@@ -77,7 +77,7 @@ public class RunTests : UnitTest
         {
             actualResult.InExperiment.Should().Be(testCase.InExperiment, "because the logic placing an experiment into buckets should be correct");
             actualResult.HashUsed.Should().Be(testCase.HashUsed, "because the logic determining which hash to use should be correct");
-            actualResult.Value.Should().BeEquivalentTo(testCase.ExpectedValue, "because the end result value should reflect the correct experiment decisioning");
+            actualResult.Value.ToString().Should().BeEquivalentTo(testCase.ExpectedValue.ToString(), "because the end result value should reflect the correct experiment decisioning");
         }
 
         GrowthBook gb = new(testCase.Context);

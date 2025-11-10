@@ -5,7 +5,7 @@
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <PublishTrimmed>true</PublishTrimmed>
-      <EnableAotAnalyzer>true</EnableAotAnalyzer>
+    <EnableAotAnalyzer>true</EnableAotAnalyzer>
 
     <TrimMode>link</TrimMode> 
     <Authors>Ben Whatley,Norhaven</Authors>

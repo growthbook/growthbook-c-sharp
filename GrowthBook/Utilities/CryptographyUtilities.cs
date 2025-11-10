@@ -28,9 +28,6 @@ namespace GrowthBook.Utilities
 
                 // Right now we're using the AES 128 CBC algorithm.
 
-
-                //
-
                 using (var aesProvider = Aes.Create())
                 {
                     if (aesProvider == null)
@@ -47,7 +44,6 @@ namespace GrowthBook.Utilities
                     {
                         var decryptedBytes = decryptor.TransformFinalBlock(cipherBytes, 0, cipherBytes.Length);
 
-                        // Обрізка повторюваних символів наприкінці
                         byte last = 0;
 
                         for (var i = decryptedBytes.Length - 1; i >= 0; i--)

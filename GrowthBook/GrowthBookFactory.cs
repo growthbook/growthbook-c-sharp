@@ -44,7 +44,7 @@ namespace GrowthBook
                 {
                     JsonNode? node = JsonSerializer.SerializeToNode(
                 kvp.Value,
-                GrowthBookJsonContext.Default.Object // Use the generated JsonTypeInfo for object
+                GrowthBookJsonContext.Default.Object
             );
 
                     if (node != null)

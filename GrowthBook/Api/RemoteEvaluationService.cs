@@ -80,6 +80,8 @@ namespace GrowthBook.Api
                         }
 
                         // Set content type
+                        httpRequest.Content = new StringContent(jsonPayload, Encoding.UTF8, "application/json");
+
                         _logger.LogDebug("Sending POST request to remote evaluation endpoint");
 
                         // Make the request

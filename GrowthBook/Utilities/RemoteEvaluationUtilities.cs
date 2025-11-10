@@ -6,6 +6,13 @@ using System.Text.Json.Serialization;
 
 namespace GrowthBook.Utilities
 {
+
+    internal class CacheKeyData
+    {
+        public JsonObject? Attributes { get; set; }
+        public IDictionary<string, int>? ForcedVariations { get; set; }
+        public string? Url { get; set; }
+    }
     /// <summary>
     /// Utility class for remote evaluation operations including cache key generation.
     /// </summary>
@@ -20,6 +27,9 @@ namespace GrowthBook.Utilities
         public static string? GenerateCacheKey(Context context)
         {
             if (context == null || !context.RemoteEval)
+                return null;
+
+            if (!IsValidForRemoteEvaluation(context))
                 return null;
 
             // Base key components
@@ -38,10 +48,16 @@ namespace GrowthBook.Utilities
                 forcedVariations = forcedVariations.Count > 0 ? forcedVariations : null,
                 url = !string.IsNullOrEmpty(context.Url) ? context.Url : null
             };
-            var typeInfo = GrowthBookJsonContext.Default.GetTypeInfo(typeof(object));
-            var cacheContextJson = JsonSerializer.Serialize(cacheContext, typeInfo!);
+            var data = new CacheKeyData
+            {
+                Attributes = relevantAttributes,
+                ForcedVariations = context.ForcedVariations,
+                Url = context.Url
+            };
+            var json = JsonSerializer.Serialize(data, GrowthBookJsonContext.Default.CacheKeyData);
 
-            return $"{baseKey}||{cacheContextJson}";
+
+            return $"{baseKey}||{json}";
         }
 
         /// <summary>

@@ -43,6 +43,6 @@ public class EvalConditionTests : UnitTest
         }
         var actualResult = new ConditionEvaluationProvider(logger).EvalCondition(testCase.Attributes, testCase.Condition, groupsJsonObject);
 
-        actualResult.Should().Be(testCase.ExpectedValue, "because the condition should evaluate correctly");
+        actualResult.Should().Be(testCase.ExpectedValue, "because the condition should evaluate correctly " + testCase.TestName);
     }
 }

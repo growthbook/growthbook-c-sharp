@@ -212,7 +212,6 @@ namespace GrowthBook
 
                 foreach (var kvp in attributes)
                 {
-                    // Безпечне перетворення будь-якого типу у JsonNode
                     newAttributes[kvp.Key] = JsonSerializer.SerializeToNode(
                 kvp.Value,
                 GrowthBookJsonContext.Default.Object // Use the generated JsonTypeInfo
@@ -227,7 +226,6 @@ namespace GrowthBook
                 _logger?.LogDebug("Cleared attributes");
             }
 
-            // Якщо потрібно тригернути RemoteEval
             if (_context.RemoteEval && ShouldTriggerRemoteEvaluation(newAttributes))
             {
                 _ = TriggerRemoteEvaluationAsync(newAttributes);
@@ -386,7 +384,6 @@ namespace GrowthBook
 
             if (typeInfo == null)
             {
-                // source generator не згенерував метадані, fallback
                 return fallback;
             }
 
@@ -408,7 +405,6 @@ namespace GrowthBook
 
             if (typeInfo == null)
             {
-                // source generator не згенерував метадані, fallback
                 return fallback;
             }
 
@@ -489,7 +485,10 @@ namespace GrowthBook
                                 return GetFeatureResult(default, FeatureResult.SourceId.CyclicPrerequisite);
                             }
 
-                            var evaluationObject = new JsonObject { ["value"] = parentResult.Value };
+                            var evaluationObject = new JsonObject();
+                            if (parentResult.Value != null)
+                                evaluationObject["value"] = parentResult.Value.DeepClone();
+
 
                             var isSuccess = _conditionEvaluator.EvalCondition(evaluationObject, parentCondition.Condition ?? new JsonObject(), _savedGroups);
 

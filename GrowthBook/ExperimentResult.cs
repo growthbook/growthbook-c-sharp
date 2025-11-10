@@ -1,7 +1,9 @@
 using System;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using System.Text.Json.Serialization.Metadata;
+using GrowthBook.Converters;
 
 namespace GrowthBook
 {
@@ -38,6 +40,7 @@ namespace GrowthBook
         /// <summary>
         /// The value of that attribute.
         /// </summary>
+        [JsonConverter(typeof(FlexibleStringConverter))]
         public string? HashValue { get; set; } = string.Empty;
 
         /// <summary>
