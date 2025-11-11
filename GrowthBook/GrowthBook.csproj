@@ -1,13 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net7.0</TargetFramework>
+    <TargetFramework>net8.0</TargetFramework>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <PublishTrimmed>true</PublishTrimmed>
     <EnableAotAnalyzer>true</EnableAotAnalyzer>
 
-    <TrimMode>link</TrimMode> 
+    <TrimMode>link</TrimMode>
     <Authors>Ben Whatley,Norhaven</Authors>
     <Description>Powerful feature flagging and A/B testing for C# apps using GrowthBook.</Description>
     <Company>GrowthBook</Company>
@@ -27,7 +27,7 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Http" Version="8.0.0" />
     <PackageReference Include="Microsoft.Extensions.Logging" Version="8.0.0" />
-    <PackageReference Include="System.Text.Json" Version="8.0.0" />
+    <PackageReference Include="System.Text.Json" Version="8.0.6" />
   </ItemGroup>
 
   <ItemGroup>
