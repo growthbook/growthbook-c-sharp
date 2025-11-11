@@ -21,6 +21,6 @@ namespace GrowthBook
         /// </summary>
         /// <param name="cancellationToken">Used to monitor whether the retrieval and cache actions should be cancelled.</param>
         /// <returns>A <see cref="Task{Task{IDictionary{string, Feature}}}"/> that represents the retrieval and cache actions.</returns>
-        Task<IDictionary<string, Feature>> RefreshCacheFromApi(CancellationToken? cancellationToken = null);
+        Task<IDictionary<string, Feature>?> RefreshCacheFromApi(CancellationToken? cancellationToken = null);
     }
 }

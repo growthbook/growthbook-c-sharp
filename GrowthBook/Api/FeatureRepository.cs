@@ -8,8 +8,7 @@ using System.Threading.Tasks;
 using GrowthBook.Extensions;
 using GrowthBook.Providers;
 using Microsoft.Extensions.Logging;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
+
 
 namespace GrowthBook.Api
 {
@@ -18,11 +17,11 @@ namespace GrowthBook.Api
         private readonly ILogger<FeatureRepository> _logger;
         private readonly IGrowthBookFeatureCache _cache;
         private readonly IGrowthBookFeatureRefreshWorker _backgroundRefreshWorker;
-        private readonly IRemoteEvaluationService _remoteEvaluationService;
+        private readonly IRemoteEvaluationService? _remoteEvaluationService;
         private readonly ConcurrentDictionary<string, ExperimentAssignment> _assigned;
         private readonly ConcurrentDictionary<string, byte> _tracked;
 
-        public FeatureRepository(ILogger<FeatureRepository> logger, IGrowthBookFeatureCache cache, IGrowthBookFeatureRefreshWorker backgroundRefreshWorker, IRemoteEvaluationService remoteEvaluationService = null)
+        public FeatureRepository(ILogger<FeatureRepository> logger, IGrowthBookFeatureCache cache, IGrowthBookFeatureRefreshWorker backgroundRefreshWorker, IRemoteEvaluationService? remoteEvaluationService = null)
         {
             _logger = logger;
             _cache = cache;
@@ -36,7 +35,7 @@ namespace GrowthBook.Api
         public void Cancel() => _backgroundRefreshWorker.Cancel();
 
         /// <inheritdoc/>
-        public async Task<IDictionary<string, Feature>> GetFeatures(GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null)
+        public async Task<IDictionary<string, Feature>?> GetFeatures(GrowthBookRetrievalOptions? options = null, CancellationToken? cancellationToken = null)
         {
             _logger.LogInformation("Getting features from repository, verifying cache expiration and option to force refresh");
 
@@ -50,12 +49,11 @@ namespace GrowthBook.Api
                 _logger.LogInformation("Cache has expired or option to force refresh was set, refreshing the cache from the API");
                 _logger.LogDebug("Cache expired: \'{CacheIsCacheExpired}\' and option to force refresh: \'{OptionsForceRefresh}\'", _cache.IsCacheExpired, options?.ForceRefresh);
 
-                // Use TaskFactory.StartNew to decouple from the current SynchronizationContext
-                // This prevents threading issues in .NET Framework MVC when the original HttpContext
-                // thread is no longer available after the HTTP request completes
-                var taskFactory = new TaskFactory(cancellationToken ?? CancellationToken.None);
-                var refreshTask = taskFactory.StartNew(async () => await _backgroundRefreshWorker.RefreshCacheFromApi(cancellationToken)).Unwrap();
-
+                // Use Task.Run to execute the refresh worker on a background ThreadPool thread.
+                // This decouples the task from the current SynchronizationContext, preventing potential
+                // deadlocks and ensuring the cache refresh does not block the calling thread.
+                var actualCancellationToken = cancellationToken ?? CancellationToken.None;
+                var refreshTask = Task.Run(() => _backgroundRefreshWorker.RefreshCacheFromApi(cancellationToken), actualCancellationToken);
                 // When there aren't any features in the cache to begin with, we need to just wait until
                 // that has been officially refreshed to proceed (otherwise the caller gets nothing up front
                 // and has no way of determining when to check back). The other way to wait is if they explicitly
@@ -85,13 +83,13 @@ namespace GrowthBook.Api
         /// <inheritdoc/>
         public bool HasIdenticalAssignment(string experimentKey, ExperimentAssignment assignment)
         {
-            if (!_assigned.TryGetValue(experimentKey, out ExperimentAssignment prev))
+            if (!_assigned.TryGetValue(experimentKey, out ExperimentAssignment? prev))
             {
                 return false;
             }
 
-            return prev.Result.InExperiment == assignment.Result.InExperiment
-                && prev.Result.VariationId == assignment.Result.VariationId;
+            return prev?.Result?.InExperiment == assignment?.Result?.InExperiment
+                && prev?.Result?.VariationId == assignment?.Result?.VariationId;
         }
 
         /// <inheritdoc/>
@@ -117,8 +115,17 @@ namespace GrowthBook.Api
         {
             return _tracked.TryAdd(trackingKey, 0);
         }
- /// <inheritdoc/>
-        public async Task<IDictionary<string, Feature>> GetFeaturesWithContext(Context context, GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null)
+
+        /// <summary>
+        /// Retrieves features considering remote evaluation context.
+        /// </summary>
+        /// <param name="context">Context containing client and remote evaluation info.</param>
+        /// <param name="options">Optional retrieval options.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>Dictionary of features or null if unavailable.</returns>
+        /// <exception cref="ArgumentNullException">Thrown if context is null.</exception>
+        /// <exception cref="RemoteEvaluationException">Thrown on remote evaluation failure.</exception>
+        public async Task<IDictionary<string, Feature>?> GetFeaturesWithContext(Context context, GrowthBookRetrievalOptions? options = null, CancellationToken? cancellationToken = null)
         {
             if (context == null)
                 throw new ArgumentNullException(nameof(context));

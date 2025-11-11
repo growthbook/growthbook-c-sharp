@@ -7,7 +7,7 @@ namespace GrowthBook.Exceptions
     /// </summary>
     public class GrowthBookException : Exception
     {
-        public GrowthBookException(string message) : base(message)
+        public GrowthBookException(string? message) : base(message)
         {
         }
 
@@ -58,7 +58,7 @@ namespace GrowthBook.Exceptions
         /// <summary>
         /// Response body from the failed request, if available.
         /// </summary>
-        public string ResponseBody { get; }
+        public string? ResponseBody { get; }
 
         public RemoteEvaluationException(string message) : base(message)
         {

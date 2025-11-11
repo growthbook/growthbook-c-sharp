@@ -1,7 +1,4 @@
-using System;
-using System.Collections.Generic;
-using System.Text;
-using Newtonsoft.Json.Linq;
+using System.Text.Json.Nodes;
 
 namespace GrowthBook.Providers
 {
@@ -16,6 +13,6 @@ namespace GrowthBook.Providers
         /// <param name="attributes">The attributes to compare against.</param>
         /// <param name="condition">The condition to evaluate.</param>
         /// <returns>True if the attributes satisfy the condition.</returns>
-        bool EvalCondition(JToken attributes, JObject condition, JObject savedGroups = default);
+        bool EvalCondition(JsonNode? attributes, JsonNode? condition, JsonObject? savedGroups = default);
     }
 }

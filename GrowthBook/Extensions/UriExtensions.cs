@@ -8,7 +8,7 @@ namespace GrowthBook.Extensions
     {
         public static bool ContainsHashInPath(this Uri uri) => uri.AbsolutePath.Contains("#");
 
-        public static string GetHashContents(this Uri uri)
+        public static string? GetHashContents(this Uri uri)
         {
             if (!uri.ContainsHashInPath())
             {

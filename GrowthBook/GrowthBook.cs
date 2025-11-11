@@ -13,8 +13,8 @@ using GrowthBook.Services;
 using GrowthBook.Utilities;
 using GrowthBook.Exceptions;
 using Microsoft.Extensions.Logging;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
+using System.Text.Json.Nodes;
+using System.Text.Json;
 
 namespace GrowthBook
 {
@@ -28,23 +28,24 @@ namespace GrowthBook
         private readonly bool _qaMode;
         private readonly Dictionary<string, ExperimentAssignment> _assigned;
         private readonly ConcurrentDictionary<string, byte> _tracked;
-        private Action<Experiment, ExperimentResult> _trackingCallback;
-        private readonly List<Action<Experiment, ExperimentResult>> _subscriptions;
+        private Action<Experiment?, ExperimentResult?>? _trackingCallback;
         private bool _disposedValue;
         private readonly IConditionEvaluationProvider _conditionEvaluator;
         private readonly IGrowthBookFeatureRepository _featureRepository;
-        private readonly IStickyBucketService _stickyBucketService;
+        private readonly IStickyBucketService? _stickyBucketService;
         private readonly IDictionary<string, StickyAssignmentsDocument> _stickyBucketAssignmentDocs;
         private readonly ILogger<GrowthBook> _logger;
-        private readonly JObject _savedGroups;
+        private readonly JsonObject? _savedGroups;
         private readonly ILoggerFactory _loggerFactory;
         private readonly bool _ownsLoggerFactory;
         private readonly Context _context;
-        private JObject _previousAttributes;
-        private IDictionary<string, int> _previousForcedVariations;
-        private readonly List<Action<Experiment, ExperimentResult>> _subscribers 
+        private JsonObject? _previousAttributes;
+        private IDictionary<string, int>? _previousForcedVariations;
+
+        private readonly List<Action<Experiment, ExperimentResult>> _subscribers
             = new List<Action<Experiment, ExperimentResult>>();
-        private readonly List<Func<Experiment, ExperimentResult, Task>> _asyncSubscribers 
+
+        private readonly List<Func<Experiment, ExperimentResult, Task>> _asyncSubscribers
             = new List<Func<Experiment, ExperimentResult, Task>>();
 
         /// <summary>
@@ -67,11 +68,11 @@ namespace GrowthBook
             _trackingCallback = context.TrackingCallback;
             _assigned = new Dictionary<string, ExperimentAssignment>();
             _tracked = new ConcurrentDictionary<string, byte>();
-            _subscriptions = new List<Action<Experiment, ExperimentResult>>();
             _stickyBucketService = context.StickyBucketService;
-            _stickyBucketAssignmentDocs = context.StickyBucketAssignmentDocs ?? new Dictionary<string, StickyAssignmentsDocument>();
+            _stickyBucketAssignmentDocs = context.StickyBucketAssignmentDocs ??
+                                          new Dictionary<string, StickyAssignmentsDocument>();
             _savedGroups = context.SavedGroups;
-            _previousAttributes = context.Attributes?.DeepClone() as JObject;
+            _previousAttributes = context.Attributes?.DeepClone() as JsonObject;
             _previousForcedVariations = context.ForcedVariations?.ToDictionary(k => k.Key, v => v.Value);
 
 
@@ -116,23 +117,25 @@ namespace GrowthBook
                 var featureRefreshLogger = _loggerFactory.CreateLogger<FeatureRefreshWorker>();
                 var featureRepositoryLogger = _loggerFactory.CreateLogger<FeatureRepository>();
 
-                var featureRefreshWorker = new FeatureRefreshWorker(featureRefreshLogger, httpClientFactory, config, featureCache);
+                var featureRefreshWorker =
+                    new FeatureRefreshWorker(featureRefreshLogger, httpClientFactory, config, featureCache);
 
-                IRemoteEvaluationService remoteEvaluationService = null;
+                IRemoteEvaluationService? remoteEvaluationService = null;
                 if (context.RemoteEval)
                 {
                     var remoteEvaluationLogger = _loggerFactory.CreateLogger<RemoteEvaluationService>();
                     remoteEvaluationService = new RemoteEvaluationService(remoteEvaluationLogger, httpClientFactory);
                 }
 
-                _featureRepository = new FeatureRepository(featureRepositoryLogger, featureCache, featureRefreshWorker, remoteEvaluationService);
+                _featureRepository = new FeatureRepository(featureRepositoryLogger, featureCache, featureRefreshWorker,
+                    remoteEvaluationService);
             }
         }
 
         /// <summary>
         /// Arbitrary JSON object containing user and request attributes.
         /// </summary>
-        public JObject Attributes { get; set; }
+        public JsonObject? Attributes { get; set; } = new JsonObject();
 
         /// <summary>
         /// Dictionary of the currently loaded feature objects.
@@ -147,12 +150,12 @@ namespace GrowthBook
         /// <summary>
         /// Listing of specific experiments to always assign a specific variation (used for QA).
         /// </summary>
-        public IDictionary<string, int> ForcedVariations { get; set; }
+        public IDictionary<string, int>? ForcedVariations { get; set; }
 
         /// <summary>
         /// The URL of the current page.
         /// </summary>
-        public string Url { get; set; }
+        public string? Url { get; set; }
 
         /// <summary>
         ///  Switch to globally disable all experiments. Default true.
@@ -175,7 +178,8 @@ namespace GrowthBook
                     _trackingCallback = null;
                     _assigned.Clear();
                     _tracked.Clear();
-                    _subscriptions.Clear();
+                    _subscribers.Clear();
+                    _asyncSubscribers.Clear();
                     _featureRepository.Cancel();
 
                     if (_ownsLoggerFactory && _loggerFactory is IDisposable disposableFactory)
@@ -183,6 +187,7 @@ namespace GrowthBook
                         disposableFactory.Dispose();
                     }
                 }
+
                 _disposedValue = true;
             }
         }
@@ -208,57 +213,71 @@ namespace GrowthBook
         /// Updates user attributes from an IDictionary for singleton usage pattern.
         /// </summary>
         /// <param name="attributes">New user attributes as IDictionary</param>
-        public void UpdateAttributes(IDictionary<string, object> attributes)
+        public void UpdateAttributes(IDictionary<string, object>? attributes)
         {
-            var newAttributes = attributes != null ? JObject.FromObject(attributes) : new JObject();
-
-            if (_context.RemoteEval && ShouldTriggerRemoteEvaluation(newAttributes))
-            {
-                TriggerRemoteEvaluationAsync(newAttributes).ConfigureAwait(false);
-            }
-
-            Attributes = newAttributes;
-            _previousAttributes = newAttributes?.DeepClone() as JObject;
+            JsonObject newAttributes;
 
             if (attributes != null)
             {
-                Attributes = JObject.FromObject(attributes);
+                newAttributes = new JsonObject();
+
+                foreach (var kvp in attributes)
+                {
+                    newAttributes[kvp.Key] = JsonSerializer.SerializeToNode(
+                        kvp.Value,
+                        GrowthBookJsonContext.Default.Object // Use the generated JsonTypeInfo
+                    );
+                }
+
                 _logger?.LogDebug("Updated attributes with {Count} properties", attributes.Count);
             }
             else
             {
-                Attributes = new JObject();
+                newAttributes = new JsonObject();
                 _logger?.LogDebug("Cleared attributes");
             }
+
+            if (_context.RemoteEval && ShouldTriggerRemoteEvaluation(newAttributes))
+            {
+                _ = TriggerRemoteEvaluationAsync(newAttributes);
+            }
+
+            Attributes = newAttributes;
+            _previousAttributes = (JsonObject?)newAttributes.DeepClone();
         }
 
         /// <summary>
         /// Updates user attributes from an anonymous object for singleton usage pattern.
         /// </summary>
         /// <param name="attributes">New user attributes as anonymous object</param>
-        public void UpdateAttributes(object attributes)
+        public void UpdateAttributes(object? attributes)
         {
-            var newAttributes = attributes != null ? JObject.FromObject(attributes) : new JObject();
-
-            if (_context.RemoteEval && ShouldTriggerRemoteEvaluation(newAttributes))
-            {
-                TriggerRemoteEvaluationAsync(newAttributes).ConfigureAwait(false);
-            }
-
-            Attributes = newAttributes;
-            _previousAttributes = newAttributes?.DeepClone() as JObject;
+            JsonObject newAttributes;
 
             if (attributes != null)
             {
-                Attributes = JObject.FromObject(attributes);
+                var typeInfo = GrowthBookJsonContext.Default.GetTypeInfo(attributes.GetType());
+                var serializationTypeInfo = typeInfo ?? GrowthBookJsonContext.Default.Object;
+                JsonNode? node = JsonSerializer.SerializeToNode(attributes, serializationTypeInfo);
+                newAttributes = node as JsonObject ?? new JsonObject();
+
                 _logger?.LogDebug("Updated attributes from object");
             }
             else
             {
-                Attributes = new JObject();
+                newAttributes = new JsonObject();
                 _logger?.LogDebug("Cleared attributes");
             }
+
+            if (_context.RemoteEval && ShouldTriggerRemoteEvaluation(newAttributes))
+            {
+                _ = TriggerRemoteEvaluationAsync(newAttributes);
+            }
+
+            Attributes = newAttributes;
+            _previousAttributes = (JsonObject?)newAttributes.DeepClone();
         }
+
 
         /// <summary>
         /// Merges additional attributes with existing ones.
@@ -266,13 +285,33 @@ namespace GrowthBook
         /// <param name="additionalAttributes">Additional attributes to merge</param>
         public void MergeAttributes(IDictionary<string, object> additionalAttributes)
         {
-            if (additionalAttributes == null) return;
-            var oldAttributes = Attributes?.DeepClone() as JObject;
+            if (additionalAttributes == null || additionalAttributes.Count == 0) return;
+            var oldAttributes = Attributes?.DeepClone() as JsonObject;
 
+            if (Attributes == null)
+            {
+                Attributes = new JsonObject();
+            }
 
             foreach (var kvp in additionalAttributes)
             {
-                Attributes[kvp.Key] = JToken.FromObject(kvp.Value);
+                var value = kvp.Value;
+                if (value == null)
+                {
+                    Attributes[kvp.Key] = null;
+                    continue;
+                }
+
+                var typeInfo = GrowthBookJsonContext.Default.GetTypeInfo(value.GetType());
+
+                if (typeInfo != null)
+                {
+                    var node = JsonSerializer.SerializeToNode(value, typeInfo);
+                    if (node != null)
+                    {
+                        Attributes[kvp.Key] = node;
+                    }
+                }
             }
 
             if (_context.RemoteEval && ShouldTriggerRemoteEvaluation(Attributes))
@@ -280,7 +319,7 @@ namespace GrowthBook
                 TriggerRemoteEvaluationAsync(Attributes).ConfigureAwait(false);
             }
 
-            _previousAttributes = Attributes?.DeepClone() as JObject;
+            _previousAttributes = Attributes?.DeepClone() as JsonObject;
 
             _logger?.LogDebug("Merged {Count} additional attributes", additionalAttributes.Count);
         }
@@ -293,12 +332,26 @@ namespace GrowthBook
         {
             if (additionalAttributes == null) return;
 
-            var oldAttributes = Attributes?.DeepClone() as JObject;
-
-            var additionalJObject = JObject.FromObject(additionalAttributes);
-            foreach (var property in additionalJObject.Properties())
+            var oldAttributes = Attributes?.DeepClone() as JsonObject;
+            if (Attributes == null)
             {
-                Attributes[property.Name] = property.Value;
+                Attributes = new JsonObject();
+            }
+
+            var typeInfo = GrowthBookJsonContext.Default.GetTypeInfo(additionalAttributes.GetType());
+            if (typeInfo != null)
+            {
+                var node = JsonSerializer.SerializeToNode(additionalAttributes, typeInfo);
+                var additionaObject = node?.AsObject();
+
+
+                if (additionaObject != null)
+                {
+                    foreach (var property in additionaObject)
+                    {
+                        Attributes[property.Key] = property.Value;
+                    }
+                }
             }
 
             if (_context.RemoteEval && ShouldTriggerRemoteEvaluation(Attributes))
@@ -306,7 +359,7 @@ namespace GrowthBook
                 TriggerRemoteEvaluationAsync(Attributes).ConfigureAwait(false);
             }
 
-            _previousAttributes = Attributes?.DeepClone() as JObject;
+            _previousAttributes = Attributes?.DeepClone() as JsonObject;
 
             _logger?.LogDebug("Merged additional attributes from object");
         }
@@ -334,7 +387,20 @@ namespace GrowthBook
             await LoadFeatures(cancellationToken: cancellationToken);
             var result = EvaluateFeature(key);
             var value = result.Value;
-            return !value.IsNull() && value.ToObject<bool>();
+            if (value.IsNull())
+            {
+                return false;
+            }
+
+            if (value is JsonValue jv)
+            {
+                if (jv.TryGetValue(out bool boolValue))
+                {
+                    return boolValue;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -390,7 +456,6 @@ namespace GrowthBook
         }
 
 
-
         /// <inheritdoc />
         public T GetFeatureValue<T>(string key, T fallback, bool alwaysLoadFeatures = false)
         {
@@ -399,35 +464,52 @@ namespace GrowthBook
             if (alwaysLoadFeatures)
             {
                 // Fire-and-wait carefully to avoid deadlocks.
----                LoadFeatures().GetAwaiter().GetResult();
+                LoadFeatures().GetAwaiter().GetResult();
             }
 
             var result = EvaluateFeature(key);
             var value = result.Value;
+            if (value == null || value.IsNull())
+                return fallback;
 
-            return value.IsNull() ? fallback : value.ToObject<T>();
+            var jsonString = value.ToJsonString();
+            var typeInfo = GrowthBookJsonContext.Default.GetTypeInfo(typeof(T));
+
+            if (typeInfo == null)
+            {
+                return fallback;
+            }
+
+            var deserialized = JsonSerializer.Deserialize(jsonString, typeInfo);
+            return deserialized is T t ? t : fallback;
         }
 
         /// <inheritdoc />
-        public async Task<T> GetFeatureValueAsync<T>(string key, T fallback, CancellationToken? cancellationToken = null)
+        public async Task<T> GetFeatureValueAsync<T>(string key, T fallback,
+            CancellationToken? cancellationToken = null)
         {
             var result = await EvalFeatureAsync(key, cancellationToken);
             var value = result.Value;
 
-            return value.IsNull() ? fallback : value.ToObject<T>();
+            if (value == null || value.IsNull())
+                return fallback;
+
+            var jsonString = value.ToJsonString();
+            var typeInfo = GrowthBookJsonContext.Default.GetTypeInfo(typeof(T));
+
+            if (typeInfo == null)
+            {
+                return fallback;
+            }
+
+            var deserialized = JsonSerializer.Deserialize(jsonString, typeInfo);
+            return deserialized is T t ? t : fallback;
         }
 
         /// <inheritdoc />
         public IDictionary<string, ExperimentAssignment> GetAllResults()
         {
             return _assigned;
-        }
-
-        /// <inheritdoc />
-        public Action Subscribe(Action<Experiment, ExperimentResult> callback)
-        {
-            _subscriptions.Add(callback);
-            return () => _subscriptions.Remove(callback);
         }
 
         /// <inheritdoc />
@@ -448,7 +530,7 @@ namespace GrowthBook
             return EvaluateFeature(featureId);
         }
 
-        private FeatureResult EvaluateFeature(string featureId, ISet<string> evaluatedFeatures = default)
+        private FeatureResult EvaluateFeature(string featureId, ISet<string>? evaluatedFeatures = default)
         {
             try
             {
@@ -461,12 +543,13 @@ namespace GrowthBook
 
                 evaluatedFeatures.Add(featureId);
 
-                if (!Features.TryGetValue(featureId, out Feature feature))
+                if (!Features.TryGetValue(featureId, out Feature? feature))
                 {
                     return GetFeatureResult(null, FeatureResult.SourceId.UnknownFeature);
                 }
 
-                _logger.LogDebug("Evaluating feature '{FeatureId}' with {RuleCount} rules", featureId, feature?.Rules?.Count ?? 0);
+                _logger.LogDebug("Evaluating feature '{FeatureId}' with {RuleCount} rules", featureId,
+                    feature?.Rules?.Count ?? 0);
 
                 var ruleIndex = 0;
 
@@ -481,18 +564,25 @@ namespace GrowthBook
                         {
                             // Use a fresh copy of the evaluated feature ids to avoid
                             // incorrectly flagging repeated prerequisite evaluations as cycles
-                            var parentResult = EvaluateFeature(parentCondition.Id, new HashSet<string>(evaluatedFeatures));
+                            var parentResult = EvaluateFeature(parentCondition.Id,
+                                new HashSet<string>(evaluatedFeatures));
 
                             // Don't continue evaluating if the prerequisite conditions have cycles.
                             if (parentResult.Source == FeatureResult.SourceId.CyclicPrerequisite)
                             {
-                                _logger.LogWarning("Detected cyclic prerequisite while evaluating parent feature '{ParentId}' for feature '{FeatureId}'. Evaluated: {EvaluatedFeatures}", parentCondition.Id, featureId, string.Join(",", evaluatedFeatures));
+                                _logger.LogWarning(
+                                    "Detected cyclic prerequisite while evaluating parent feature '{ParentId}' for feature '{FeatureId}'. Evaluated: {EvaluatedFeatures}",
+                                    parentCondition.Id, featureId, string.Join(",", evaluatedFeatures));
                                 return GetFeatureResult(default, FeatureResult.SourceId.CyclicPrerequisite);
                             }
 
-                            var evaluationObject = new JObject { ["value"] = parentResult.Value };
+                            var evaluationObject = new JsonObject();
+                            if (parentResult.Value != null)
+                                evaluationObject["value"] = parentResult.Value.DeepClone();
 
-                            var isSuccess = _conditionEvaluator.EvalCondition(evaluationObject, parentCondition.Condition ?? new JObject(), _savedGroups);
+
+                            var isSuccess = _conditionEvaluator.EvalCondition(evaluationObject,
+                                parentCondition.Condition ?? new JsonObject(), _savedGroups);
 
                             if (!isSuccess)
                             {
@@ -500,12 +590,16 @@ namespace GrowthBook
 
                                 if (parentCondition.Gate)
                                 {
-                                    _logger.LogDebug("Rule {RuleIndex}: Gated prerequisite '{ParentId}' failed for feature '{FeatureId}', aborting", ruleIndex, parentCondition.Id, featureId);
+                                    _logger.LogDebug(
+                                        "Rule {RuleIndex}: Gated prerequisite '{ParentId}' failed for feature '{FeatureId}', aborting",
+                                        ruleIndex, parentCondition.Id, featureId);
                                     return GetFeatureResult(default, FeatureResult.SourceId.Prerequisite);
                                 }
 
                                 passedPrerequisiteEvaluations = false;
-                                _logger.LogDebug("Rule {RuleIndex}: Prerequisite '{ParentId}' did not pass for feature '{FeatureId}', continuing to next rule", ruleIndex, parentCondition.Id, featureId);
+                                _logger.LogDebug(
+                                    "Rule {RuleIndex}: Prerequisite '{ParentId}' did not pass for feature '{FeatureId}', continuing to next rule",
+                                    ruleIndex, parentCondition.Id, featureId);
                                 break;
                             }
                         }
@@ -521,7 +615,8 @@ namespace GrowthBook
                         continue;
                     }
 
-                    if (!rule.Condition.IsNull() && !_conditionEvaluator.EvalCondition(Attributes, rule.Condition, _savedGroups))
+                    if (!rule.Condition.IsNull() &&
+                        !_conditionEvaluator.EvalCondition(Attributes, rule.Condition, _savedGroups))
                     {
                         _logger.LogDebug("Rule {RuleIndex}: attribute condition did not match, continuing", ruleIndex);
                         continue;
@@ -529,7 +624,8 @@ namespace GrowthBook
 
                     if (!rule.Force.IsNull())
                     {
-                        if (!IsIncludedInRollout(rule.Seed ?? featureId, rule.HashAttribute, rule.Range, rule.Coverage, rule.HashVersion))
+                        if (!IsIncludedInRollout(rule.Seed ?? featureId, rule.HashAttribute, rule.Range, rule.Coverage,
+                                rule.HashVersion))
                         {
                             _logger.LogDebug("Rule {RuleIndex}: excluded by rollout/coverage, continuing", ruleIndex);
                             continue;
@@ -545,18 +641,16 @@ namespace GrowthBook
                                 }
                                 catch (Exception ex)
                                 {
-                                    _logger.LogError(ex, $"Encountered unhandled exception in tracking callback for feature ID '{featureId}'");
+                                    _logger.LogError(ex,
+                                        $"Encountered unhandled exception in tracking callback for feature ID '{featureId}'");
                                 }
                             }
                         }
 
-                        NotifySubscribers(null, new ExperimentResult
-                        {
-                            InExperiment = false,
-                            Value = rule.Force
-                        });
+                        NotifySubscribers(null, new ExperimentResult { InExperiment = false, Value = rule.Force });
 
-                        _logger.LogDebug("Rule {RuleIndex}: returning forced value for feature '{FeatureId}'", ruleIndex, featureId);
+                        _logger.LogDebug("Rule {RuleIndex}: returning forced value for feature '{FeatureId}'",
+                            ruleIndex, featureId);
                         return GetFeatureResult(rule.Force, FeatureResult.SourceId.Force);
                     }
 
@@ -597,13 +691,13 @@ namespace GrowthBook
                 }
 
                 _logger.LogDebug("No rules matched for feature '{FeatureId}', returning default value", featureId);
-                return GetFeatureResult(feature.DefaultValue ?? null, FeatureResult.SourceId.DefaultValue);
+                return GetFeatureResult(feature?.DefaultValue ?? null, FeatureResult.SourceId.DefaultValue);
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, $"Encountered an unhandled exception while executing '{nameof(EvalFeature)}'");
 
-                if (!Features.TryGetValue(featureId, out Feature feature))
+                if (!Features.TryGetValue(featureId, out Feature? feature))
                 {
                     return GetFeatureResult(null, FeatureResult.SourceId.UnknownFeature);
                 }
@@ -613,7 +707,7 @@ namespace GrowthBook
         }
 
         /// <inheritdoc />
-        public ExperimentResult Run(Experiment experiment)
+        public ExperimentResult? Run(Experiment experiment)
         {
             try
             {
@@ -632,7 +726,8 @@ namespace GrowthBook
         }
 
         /// <inheritdoc />
-        public async Task LoadFeatures(GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null)
+        public async Task LoadFeatures(GrowthBookRetrievalOptions? options = null,
+            CancellationToken? cancellationToken = null)
         {
             var result = await LoadFeaturesWithResult(options, cancellationToken);
 
@@ -645,18 +740,20 @@ namespace GrowthBook
         }
 
         /// <inheritdoc />
-        public async Task<FeatureLoadResult> LoadFeaturesWithResult(GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null)
+        public async Task<FeatureLoadResult> LoadFeaturesWithResult(GrowthBookRetrievalOptions? options = null,
+            CancellationToken? cancellationToken = null)
         {
             try
             {
                 _logger.LogInformation("Loading features from the repository");
-                IDictionary<string, Feature> features;
+                IDictionary<string, Feature>? features;
 
                 // Use remote evaluation if enabled and configured
                 if (_context.RemoteEval && RemoteEvaluationUtilities.IsValidForRemoteEvaluation(_context))
                 {
                     var currentContext = CreateCurrentContext();
-                    features = await _featureRepository.GetFeaturesWithContext(currentContext, options, cancellationToken);
+                    features = await _featureRepository.GetFeaturesWithContext(currentContext, options,
+                        cancellationToken);
                 }
                 else
                 {
@@ -701,45 +798,35 @@ namespace GrowthBook
             bool shouldFireCallbacks = false;
 
             // Always record the assignment locally for GetAllResults()
-            if (!_assigned.TryGetValue(experiment.Key, out ExperimentAssignment prev)
-                || prev.Result.InExperiment != result.InExperiment
+            if (!_assigned.TryGetValue(experiment.Key ?? "", out ExperimentAssignment? prev)
+                || prev?.Result?.InExperiment != result.InExperiment
                 || prev.Result.VariationId != result.VariationId)
             {
-                _assigned[experiment.Key] = assignment;
+                _assigned[experiment.Key ?? ""] = assignment;
                 shouldFireCallbacks = true;
             }
 
             // Also use repository tracking if available (for preventing duplicate callbacks across instances)
             if (_featureRepository != null)
             {
-                if (!_featureRepository.HasIdenticalAssignment(experiment.Key, assignment))
+                if (!_featureRepository.HasIdenticalAssignment(experiment.Key ?? "", assignment))
                 {
-                    _featureRepository.RecordAssignment(experiment.Key, assignment);
+                    _featureRepository.RecordAssignment(experiment.Key ?? "", assignment);
                 }
             }
 
             // Fire subscription callbacks if needed
             if (shouldFireCallbacks)
             {
-                foreach (Action<Experiment, ExperimentResult> callback in _subscriptions)
-                {
-                    try
-                    {
-                        callback?.Invoke(experiment, result);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, $"Encountered exception during subscription callback for experiment with key '{experiment.Key}'");
-                    }
-                }
+                NotifySubscribers(experiment, result);
             }
         }
 
-        private ExperimentResult RunExperiment(Experiment experiment, string featureId)
+        private ExperimentResult RunExperiment(Experiment experiment, string? featureId)
         {
             // 1. Abort if there aren't enough variations present.
 
-            if (experiment.Variations.IsNull() || experiment.Variations.Count < 2)
+            if (experiment.Variations.IsNull() || experiment?.Variations?.Count < 2)
             {
                 _logger.LogDebug("Aborting experiment, not enough variations are present");
                 return GetExperimentResult(experiment, featureId: featureId);
@@ -769,7 +856,8 @@ namespace GrowthBook
 
             if (!Url.IsNullOrWhitespace())
             {
-                var overrideValue = ExperimentUtilities.GetQueryStringOverride(experiment.Key, Url, experiment.Variations.Count);
+                var overrideValue =
+                    ExperimentUtilities.GetQueryStringOverride(experiment?.Key, Url, experiment?.Variations?.Count);
 
                 if (overrideValue != null)
                 {
@@ -780,7 +868,7 @@ namespace GrowthBook
 
             // 4. Use the forced variation value instead if one is specified for this experiment.
 
-            if (ForcedVariations.TryGetValue(experiment.Key, out var variation))
+            if (ForcedVariations != null && ForcedVariations.TryGetValue(experiment?.Key ?? "", out var variation))
             {
                 _logger.LogDebug("Found a forced variation value, creating experiment result from it");
                 return GetExperimentResult(experiment, variation, featureId: featureId);
@@ -788,7 +876,7 @@ namespace GrowthBook
 
             // 5. Abort if the experiment isn't currently active.
 
-            if (!experiment.Active)
+            if (experiment != null && !experiment.Active)
             {
                 _logger.LogDebug("Aborting experiment, experiment is not currently active");
                 return GetExperimentResult(experiment, featureId: featureId);
@@ -796,21 +884,23 @@ namespace GrowthBook
 
             // 6. Abort if we're unable to generate a hash identifying this run.
 
-            (var hashAttribute, var hashValue) = Attributes.GetHashAttributeAndValue(experiment.HashAttribute);
+            (var hashAttribute, var hashValue) = Attributes.GetHashAttributeAndValue(experiment?.HashAttribute);
 
             if (hashValue.IsNullOrWhitespace())
             {
                 // Check if a fallback attribute for sticky bucketing exists and use it if possible.
 
-                var hasFallback = !experiment.FallbackAttribute.IsNullOrWhitespace();
+                var hasFallback = !experiment?.FallbackAttribute.IsNullOrWhitespace() ?? false;
 
                 if (hasFallback)
                 {
-                    (hashAttribute, hashValue) = Attributes.GetHashAttributeAndValue(experiment.FallbackAttribute);
+                    (hashAttribute, hashValue) = Attributes.GetHashAttributeAndValue(experiment?.FallbackAttribute);
                 }
                 else
                 {
-                    _logger.LogDebug("Aborting experiment, unable to locate a value for the experiment hash attribute \'{ExperimentHashAttribute}\'", experiment.HashAttribute);
+                    _logger.LogDebug(
+                        "Aborting experiment, unable to locate a value for the experiment hash attribute \'{ExperimentHashAttribute}\'",
+                        experiment?.HashAttribute);
                     return GetExperimentResult(experiment, featureId: featureId);
                 }
             }
@@ -821,7 +911,7 @@ namespace GrowthBook
             var foundStickyBucket = false;
             var stickyBucketVersionIsBlocked = false;
 
-            if (_stickyBucketService != null && !experiment.DisableStickyBucketing)
+            if (_stickyBucketService != null && experiment != null && !experiment.DisableStickyBucketing)
             {
                 var bucketVersion = experiment.BucketVersion;
                 var minBucketVersion = experiment.MinBucketVersion;
@@ -845,7 +935,7 @@ namespace GrowthBook
             {
                 // 7. Abort if this run is ineligible to be included in the experiment.
 
-                if (experiment.Filters?.Any() == true)
+                if (experiment?.Filters?.Any() == true)
                 {
                     if (IsFilteredOut(experiment.Filters))
                     {
@@ -853,15 +943,18 @@ namespace GrowthBook
                         return GetExperimentResult(experiment, featureId: featureId);
                     }
                 }
-                else if (experiment.Namespace != null && !ExperimentUtilities.InNamespace(hashValue, experiment.Namespace))
+                else if (experiment?.Namespace != null &&
+                         !ExperimentUtilities.InNamespace(hashValue, experiment.Namespace))
                 {
-                    _logger.LogDebug("Aborting experiment, not within the specified namespace \'{ExperimentNamespace}\'", experiment.Namespace);
+                    _logger.LogDebug(
+                        "Aborting experiment, not within the specified namespace \'{ExperimentNamespace}\'",
+                        experiment.Namespace);
                     return GetExperimentResult(experiment, featureId: featureId);
                 }
 
                 // 8. Abort if the conditions for the experiment prohibit this.
 
-                if (!experiment.Condition.IsNull())
+                if (experiment != null && experiment.Condition != null && !experiment.Condition.IsNull())
                 {
                     if (!_conditionEvaluator.EvalCondition(Attributes, experiment.Condition, _savedGroups))
                     {
@@ -870,7 +963,7 @@ namespace GrowthBook
                     }
                 }
 
-                if (experiment.ParentConditions != null)
+                if (experiment?.ParentConditions != null)
                 {
                     foreach (var parentCondition in experiment.ParentConditions)
                     {
@@ -883,9 +976,10 @@ namespace GrowthBook
                             return GetExperimentResult(experiment, featureId: featureId);
                         }
 
-                        var evaluationObject = new JObject { ["value"] = parentResult.Value };
+                        var evaluationObject = new JsonObject { ["value"] = parentResult.Value };
 
-                        if (!_conditionEvaluator.EvalCondition(evaluationObject, parentCondition.Condition ?? new JObject(), _savedGroups))
+                        if (!_conditionEvaluator.EvalCondition(evaluationObject,
+                                parentCondition.Condition ?? new JsonObject(), _savedGroups))
                         {
                             return GetExperimentResult(experiment, featureId: featureId);
                         }
@@ -895,7 +989,8 @@ namespace GrowthBook
 
             // 9. Attempt to assign this run to an experiment variation.
 
-            var hash = HashUtilities.Hash(experiment.Seed ?? experiment.Key, hashValue, experiment.HashVersion);
+            var hash = HashUtilities.Hash(experiment?.Seed ?? experiment?.Key ?? "", hashValue,
+                experiment?.HashVersion);
 
             if (hash is null)
             {
@@ -904,7 +999,10 @@ namespace GrowthBook
 
             if (!foundStickyBucket)
             {
-                var ranges = experiment.Ranges?.Count > 0 ? experiment.Ranges : ExperimentUtilities.GetBucketRanges(experiment.Variations?.Count ?? 0, experiment.Coverage ?? 1, experiment.Weights ?? new List<double>());
+                var ranges = experiment?.Ranges?.Count > 0
+                    ? experiment.Ranges
+                    : ExperimentUtilities.GetBucketRanges(experiment?.Variations?.Count ?? 0, experiment?.Coverage ?? 1,
+                        experiment?.Weights ?? new List<double>());
                 assignedBucket = ExperimentUtilities.ChooseVariation(hash.Value, ranges.ToList());
 
                 // 10. Abort if a variation could not be assigned.
@@ -925,7 +1023,7 @@ namespace GrowthBook
 
             // 11. Use the forced value for the experiment if one is specified.
 
-            if (experiment.Force != null)
+            if (experiment?.Force != null)
             {
                 _logger.LogDebug("Found a forced value, creating experiment result from it");
                 return GetExperimentResult(experiment, experiment.Force.Value, featureId: featureId);
@@ -941,21 +1039,23 @@ namespace GrowthBook
 
             // 13. Run the experiment and track the result if we haven't seen this one before.
 
-            _logger.LogInformation("Participation in experiment with key \'{ExperimentKey}\' is allowed, running the experiment", experiment.Key);
+            _logger.LogInformation(
+                "Participation in experiment with key \'{ExperimentKey}\' is allowed, running the experiment",
+                experiment?.Key);
             var result = GetExperimentResult(experiment, assignedBucket, true, featureId, hash, foundStickyBucket);
 
             // 13.5 Store the value for later if sticky bucketing is enabled.
 
-            if (_stickyBucketService != null && !experiment.DisableStickyBucketing)
+            if (_stickyBucketService != null && experiment != null && !experiment.DisableStickyBucketing)
             {
-                var experimentKey = ExperimentUtilities.GetStickyBucketExperimentKey(experiment.Key, experiment.BucketVersion);
+                var experimentKey =
+                    ExperimentUtilities.GetStickyBucketExperimentKey(experiment.Key, experiment.BucketVersion);
 
-                var assignments = new Dictionary<string, string>
-                {
-                    [experimentKey] = result.Key
-                };
+                var assignments = new Dictionary<string, string?> { [experimentKey] = result.Key };
 
-                (var document, var isChanged) = ExperimentUtilities.GenerateStickyBucketAssignment(_stickyBucketService, hashAttribute, hashValue, assignments);
+                (var document, var isChanged) =
+                    ExperimentUtilities.GenerateStickyBucketAssignment(_stickyBucketService, hashAttribute, hashValue,
+                        assignments);
 
                 if (isChanged)
                 {
@@ -968,14 +1068,12 @@ namespace GrowthBook
             return result;
         }
 
-        private FeatureResult GetFeatureResult(JToken value, string source, Experiment experiment = null, ExperimentResult experimentResult = null)
+        private FeatureResult GetFeatureResult(JsonNode? value, string source, Experiment? experiment = null,
+            ExperimentResult? experimentResult = null)
         {
             return new FeatureResult
             {
-                Value = value,
-                Source = source,
-                Experiment = experiment,
-                ExperimentResult = experimentResult
+                Value = value, Source = source, Experiment = experiment, ExperimentResult = experimentResult
             };
         }
 
@@ -987,13 +1085,21 @@ namespace GrowthBook
 
                 if (hashValue.IsNullOrWhitespace())
                 {
-                    _logger.LogDebug("Attributes are missing a filter\'s hash attribute of \'{FilterAttribute}\', marking as filtered out", filter.Attribute);
+                    _logger.LogDebug(
+                        "Attributes are missing a filter\'s hash attribute of \'{FilterAttribute}\', marking as filtered out",
+                        filter.Attribute);
                     return true;
                 }
 
-                var bucket = HashUtilities.Hash(filter.Seed, hashValue, filter.HashVersion);
+                var bucket = HashUtilities.Hash(filter.Seed ?? string.Empty, hashValue, filter.HashVersion);
+                if (!bucket.HasValue)
+                {
+                    _logger.LogDebug("Bucket value is null, marking as filtered out");
+                    return true;
+                }
 
-                var isInAnyRange = filter.Ranges.Any(x => ExperimentUtilities.InRange(bucket.Value, x));
+                var isInAnyRange = filter.Ranges != null &&
+                                   filter.Ranges.Any(x => ExperimentUtilities.InRange(bucket.Value, x));
 
                 if (!isInAnyRange)
                 {
@@ -1005,7 +1111,8 @@ namespace GrowthBook
             return false;
         }
 
-        private bool IsIncludedInRollout(string seed, string hashAttribute = null, BucketRange range = null, double? coverage = null, int? hashVersion = null)
+        private bool IsIncludedInRollout(string seed, string? hashAttribute = null, BucketRange? range = null,
+            double? coverage = null, int? hashVersion = null)
         {
             if (coverage == null && range == null)
             {
@@ -1023,7 +1130,9 @@ namespace GrowthBook
 
             if (hashValue is null)
             {
-                _logger.LogDebug("Attributes do not have a value for hash attribute \'{HashAttribute}\', marking as excluded from rollout", hashAttribute);
+                _logger.LogDebug(
+                    "Attributes do not have a value for hash attribute \'{HashAttribute}\', marking as excluded from rollout",
+                    hashAttribute);
                 return false;
             }
 
@@ -1031,6 +1140,11 @@ namespace GrowthBook
 
             if (range != null)
             {
+                if (!bucket.HasValue)
+                {
+                    return false;
+                }
+
                 return ExperimentUtilities.InRange(bucket.Value, range);
             }
 
@@ -1049,22 +1163,26 @@ namespace GrowthBook
         /// <param name="variationIndex">The variation id, if specified.</param>
         /// <param name="hashUsed">Whether or not a hash was used in assignment.</param>
         /// <returns>The experiment result.</returns>
-        private ExperimentResult GetExperimentResult(Experiment experiment, int variationIndex = -1, bool hashUsed = false, string featureId = null, double? bucketHash = null, bool wasStickyBucketUsed = false)
+        private ExperimentResult GetExperimentResult(Experiment? experiment, int variationIndex = -1,
+            bool hashUsed = false, string? featureId = null, double? bucketHash = null,
+            bool wasStickyBucketUsed = false)
         {
             var inExperiment = true;
 
-            if (variationIndex < 0 || variationIndex >= experiment.Variations.Count)
+            if (variationIndex < 0 || variationIndex >= experiment?.Variations?.Count)
             {
                 variationIndex = 0;
                 inExperiment = false;
             }
 
-            var canUseStickyBucketing = _stickyBucketService != null && !experiment.DisableStickyBucketing;
-            var fallbackAttribute = canUseStickyBucketing ? experiment.FallbackAttribute : default;
+            var canUseStickyBucketing =
+                _stickyBucketService != null && experiment != null && !experiment.DisableStickyBucketing;
+            var fallbackAttribute = canUseStickyBucketing ? experiment?.FallbackAttribute : default;
 
-            (var hashAttribute, var hashValue) = Attributes.GetHashAttributeAndValue(experiment.HashAttribute, fallbackAttributeKey: fallbackAttribute);
+            (var hashAttribute, var hashValue) = Attributes.GetHashAttributeAndValue(experiment?.HashAttribute,
+                fallbackAttributeKey: fallbackAttribute);
 
-            var meta = experiment.Meta?.Count > 0 ? experiment.Meta[variationIndex] : null;
+            var meta = experiment?.Meta?.Count > 0 ? experiment.Meta[variationIndex] : null;
 
             var result = new ExperimentResult
             {
@@ -1074,7 +1192,7 @@ namespace GrowthBook
                 HashAttribute = hashAttribute,
                 HashUsed = hashUsed,
                 HashValue = hashValue,
-                Value = experiment.Variations is null ? null : experiment.Variations[variationIndex],
+                Value = experiment?.Variations is null ? null : experiment.Variations[variationIndex],
                 VariationId = variationIndex,
                 Name = meta?.Name,
                 Passthrough = meta?.Passthrough ?? false,
@@ -1094,14 +1212,14 @@ namespace GrowthBook
         /// </summary>
         /// <param name="experiment">The experiment that was assigned.</param>
         /// <param name="result">The result of the assignment.</param>
-        private void TryToTrack(Experiment experiment, ExperimentResult result)
+        private void TryToTrack(Experiment? experiment, ExperimentResult result)
         {
             if (_trackingCallback == null)
             {
                 return;
             }
 
-            string key = result.HashAttribute + result.HashValue + experiment.Key + result.VariationId;
+            string key = result.HashAttribute + result.HashValue + experiment?.Key + result.VariationId;
 
             // Use atomic operations to prevent race conditions in concurrent scenarios
             bool shouldTrack = false;
@@ -1125,12 +1243,14 @@ namespace GrowthBook
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "Encountered unhandled exception during tracking callback for experiment with combined key \'{Key}\'", key);
+                    _logger.LogError(ex,
+                        "Encountered unhandled exception during tracking callback for experiment with combined key \'{Key}\'",
+                        key);
                 }
             }
         }
-        
-         /// <summary>
+
+        /// <summary>
         /// Validates that remote evaluation configuration is correct.
         /// </summary>
         /// <param name="context">The context to validate</param>
@@ -1150,7 +1270,9 @@ namespace GrowthBook
 
             if (!string.IsNullOrWhiteSpace(context.DecryptionKey))
             {
-                throw new ArgumentException("RemoteEval cannot be used with DecryptionKey - features are evaluated server-side", nameof(context));
+                throw new ArgumentException(
+                    "RemoteEval cannot be used with DecryptionKey - features are evaluated server-side",
+                    nameof(context));
             }
         }
 
@@ -1159,7 +1281,7 @@ namespace GrowthBook
         /// </summary>
         /// <param name="newAttributes">The new attributes to check</param>
         /// <returns>True if remote evaluation should be triggered</returns>
-        private bool ShouldTriggerRemoteEvaluation(JObject newAttributes)
+        private bool ShouldTriggerRemoteEvaluation(JsonObject? newAttributes)
         {
             // Check if attributes changed
             var attributesChanged = RemoteEvaluationUtilities.ShouldTriggerRemoteEvaluation(
@@ -1181,7 +1303,7 @@ namespace GrowthBook
         /// Triggers remote evaluation asynchronously when attribute changes are detected.
         /// </summary>
         /// <param name="newAttributes">The new attributes</param>
-        private async Task TriggerRemoteEvaluationAsync(JObject newAttributes)
+        private async Task TriggerRemoteEvaluationAsync(JsonObject? newAttributes)
         {
             try
             {
@@ -1218,6 +1340,41 @@ namespace GrowthBook
                 ForcedVariations = ForcedVariations,
                 Url = Url
             };
+        }
+
+        /// <summary>
+        /// Notifies all synchronous and asynchronous subscribers about a feature or experiment evaluation result.
+        /// </summary>
+        /// <param name="experiment">The experiment that was evaluated (null if feature evaluation).</param>
+        /// <param name="result">The result of the evaluation.</param>
+        private void NotifySubscribers(Experiment? experiment, ExperimentResult result)
+        {
+            foreach (var subscriber in _subscribers)
+            {
+                try
+                {
+                    subscriber(experiment!, result);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Encountered unhandled exception in synchronous subscriber.");
+                }
+            }
+
+            foreach (var asyncSubscriber in _asyncSubscribers)
+            {
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await asyncSubscriber(experiment!, result).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Encountered unhandled exception in asynchronous subscriber.");
+                    }
+                });
+            }
         }
     }
 }

@@ -21,7 +21,7 @@ namespace GrowthBook
         /// <summary>
         /// Error message if the operation failed.
         /// </summary>
-        public string ErrorMessage { get; private set; }
+        public string? ErrorMessage { get; private set; }
 
         /// <summary>
         /// HTTP status code if the failure was due to an HTTP error.
@@ -31,7 +31,7 @@ namespace GrowthBook
         /// <summary>
         /// The original exception that caused the failure, if any.
         /// </summary>
-        public Exception Exception { get; private set; }
+        public Exception? Exception { get; private set; }
 
         private FeatureLoadResult() { }
 
@@ -50,7 +50,7 @@ namespace GrowthBook
         /// <summary>
         /// Creates a failed result.
         /// </summary>
-        public static FeatureLoadResult CreateFailure(string errorMessage, Exception exception = null, int? statusCode = null)
+        public static FeatureLoadResult CreateFailure(string errorMessage, Exception? exception = null, int? statusCode = null)
         {
             return new FeatureLoadResult
             {

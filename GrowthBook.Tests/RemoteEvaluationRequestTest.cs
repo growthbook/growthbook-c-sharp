@@ -1,4 +1,6 @@
 using System.Collections.Generic;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using FluentAssertions;
 using GrowthBook;
 using Newtonsoft.Json.Linq;
@@ -14,7 +16,7 @@ namespace GrowthBook.Tests
             // Test with valid context
             var context = new Context
             {
-                Attributes = JObject.Parse(@"{""userId"": ""123""}"),
+                Attributes = JsonNode.Parse(@"{""userId"": ""123""}")!.AsObject(),
                 ForcedVariations = new Dictionary<string, int> { { "exp1", 1 } },
                 Url = "https://example.com"
             };
@@ -37,11 +39,12 @@ namespace GrowthBook.Tests
         {
             var request = new RemoteEvaluationRequest
             {
-                Attributes = JObject.Parse(@"{""userId"": ""123""}"),
+                Attributes = JsonNode.Parse(@"{""userId"": ""123""}")!.AsObject(),
                 ForcedVariations = new Dictionary<string, int> { { "exp1", 1 } }
             };
 
-            var json = Newtonsoft.Json.JsonConvert.SerializeObject(request);
+             var json = JsonSerializer.Serialize(request, GrowthBookJsonContext.Default.RemoteEvaluationRequest);
+
             json.Should().Contain("\"attributes\":");
             json.Should().Contain("\"forcedVariations\":");
         }

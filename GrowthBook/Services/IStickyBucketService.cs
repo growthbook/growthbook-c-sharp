@@ -6,7 +6,7 @@ namespace GrowthBook.Services
 {
     public interface IStickyBucketService
     {
-        StickyAssignmentsDocument GetAssignments(string attributeName, string attributeValue);
+        StickyAssignmentsDocument? GetAssignments(string? attributeName, string? attributeValue);
         void SaveAssignments(StickyAssignmentsDocument document);
         IDictionary<string, StickyAssignmentsDocument> GetAllAssignments(IEnumerable<string> attributes);
     }

@@ -16,68 +16,64 @@ namespace GrowthBook.Utilities
         /// <param name="decryptionKey">The caller's decryption key.</param>
         /// <returns>The decrypted data. Note that if the key is incorrect, this will return garbage data that will not be usable.</returns>
         /// <exception cref="DecryptionException">Thrown if an exception is encountered during decryption.</exception>
-        public static string Decrypt(string encryptedString, string decryptionKey)
+        public static string? Decrypt(string? encryptedString, string? decryptionKey)
         {
             try
             {
-                var parts = encryptedString.Split('.');
+                var parts = encryptedString?.Split('.');
 
-                var iv = Convert.FromBase64String(parts[0]);
-                var cipherBytes = Convert.FromBase64String(parts[1]);
-                var keyBytes = Convert.FromBase64String(decryptionKey);
+                var iv = Convert.FromBase64String(parts?[0] ?? string.Empty);
+                var cipherBytes = Convert.FromBase64String(parts?[1] ?? string.Empty);
+                var keyBytes = Convert.FromBase64String(decryptionKey ?? "");
 
                 // Right now we're using the AES 128 CBC algorithm.
 
-                var aesProvider = new AesCryptoServiceProvider
+                using (var aesProvider = Aes.Create())
                 {
-                    BlockSize = 128,
-                    KeySize = 256,
-                    Key = keyBytes,
-                    IV = iv,
-                    Padding = PaddingMode.None,
-                    Mode = CipherMode.CBC
-                };
+                    if (aesProvider == null)
+                        throw new InvalidOperationException("Unable to create AES provider.");
 
-                using (var decryptor = aesProvider.CreateDecryptor(keyBytes, iv))
-                {
-                    var decryptedBytes = decryptor.TransformFinalBlock(
-                        cipherBytes, 0, cipherBytes.Length);
+                    aesProvider.BlockSize = 128;
+                    aesProvider.KeySize = 256;
+                    aesProvider.Key = keyBytes;
+                    aesProvider.IV = iv;
+                    aesProvider.Padding = PaddingMode.None;
+                    aesProvider.Mode = CipherMode.CBC;
 
-                    // The .Net decryptor will pad the end of the decrypted plaintext results
-                    // with a repeating garbage character, presumably to meet buffer length.
-                    // We're assuming at this point that any repeating character at the end
-                    // should be stripped off before sending back the remains as the decrypted result.
-
-                    byte last = 0;
-
-                    for(var i = decryptedBytes.Length - 1; i >= 0; i--)
+                    using (var decryptor = aesProvider.CreateDecryptor())
                     {
-                        if (i == decryptedBytes.Length - 1)
+                        var decryptedBytes = decryptor.TransformFinalBlock(cipherBytes, 0, cipherBytes.Length);
+
+                        byte last = 0;
+
+                        for (var i = decryptedBytes.Length - 1; i >= 0; i--)
                         {
-                            last = decryptedBytes[i];
-                            continue;
+                            if (i == decryptedBytes.Length - 1)
+                            {
+                                last = decryptedBytes[i];
+                                continue;
+                            }
+
+                            if (decryptedBytes[i] == last)
+                            {
+                                continue;
+                            }
+
+                            var result = new byte[i + 1];
+                            Array.Copy(decryptedBytes, result, i + 1);
+
+                            return Encoding.UTF8.GetString(result);
                         }
 
-                        if (decryptedBytes[i] == last)
-                        {
-                            continue;
-                        }
-
-                        var result = new byte[i + 1];
-
-                        Array.Copy(decryptedBytes, result, i + 1);
-
-                        return Encoding.UTF8.GetString(result);
+                        return null;
                     }
-
-                    return null;
                 }
             }
-            catch(FormatException ex)
+            catch (FormatException ex)
             {
                 throw new DecryptionException("A value was not in the correct format", ex);
             }
-            catch(Exception ex)
+            catch (Exception ex)
             {
                 throw new DecryptionException("Unhandled exception occurred during decryption", ex);
             }

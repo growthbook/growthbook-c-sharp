@@ -6,8 +6,8 @@ namespace GrowthBook
 {
     public class UrlPattern
     {
-        public string Type { get; set; }
+        public string? Type { get; set; }
         public bool Include {  get; set; }
-        public string Pattern { get; set; }
+        public string? Pattern { get; set; }
     }
 }

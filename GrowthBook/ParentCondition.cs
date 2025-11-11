@@ -1,7 +1,4 @@
-using System;
-using System.Collections.Generic;
-using System.Text;
-using Newtonsoft.Json.Linq;
+using System.Text.Json.Nodes;
 
 namespace GrowthBook
 {
@@ -13,12 +10,12 @@ namespace GrowthBook
         /// <summary>
         /// The feature ID.
         /// </summary>
-        public string Id { get; set; }
+        public required string Id { get; set; }
 
         /// <summary>
         /// The condition to evaluate.
         /// </summary>
-        public JObject Condition { get; set; }
+        public JsonObject? Condition { get; set; }
 
         /// <summary>
         /// Requires that the parent feature must be set to on if true.

@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using Newtonsoft.Json.Linq;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.Json.Serialization.Metadata;
 
 namespace GrowthBook.Extensions
 {
@@ -72,7 +74,19 @@ namespace GrowthBook.Extensions
             if (string.IsNullOrEmpty(key))
                 throw new ArgumentException("Attribute key cannot be null or empty", nameof(key));
 
-            growthBook.Attributes[key] = JToken.FromObject(value);
+            if (growthBook.Attributes == null)
+            {
+                growthBook.Attributes = new JsonObject();
+            }
+
+            JsonNode? node = value switch
+            {
+                null => null,
+                JsonNode jnode => jnode,
+                _ => JsonSerializer.SerializeToNode(value, GrowthBookJsonContext.Default.Object)
+            };
+
+            growthBook.Attributes[key] = node;
             return growthBook;
         }
 
@@ -86,7 +100,7 @@ namespace GrowthBook.Extensions
         {
             if (!string.IsNullOrEmpty(key))
             {
-                growthBook.Attributes.Remove(key);
+                growthBook.Attributes?.Remove(key);
             }
             return growthBook;
         }
@@ -99,20 +113,28 @@ namespace GrowthBook.Extensions
         /// <param name="key">Attribute key</param>
         /// <param name="defaultValue">Default value if attribute doesn't exist</param>
         /// <returns>Attribute value or default</returns>
-        public static T GetAttribute<T>(this GrowthBook growthBook, string key, T defaultValue = default(T))
+        public static T? GetAttribute<T>(this GrowthBook growthBook, string key, T? defaultValue = default(T))
         {
             if (string.IsNullOrEmpty(key) || growthBook.Attributes == null)
                 return defaultValue;
 
-            if (growthBook.Attributes.TryGetValue(key, out JToken token))
+            if (growthBook.Attributes.ContainsKey(key))
             {
-                try
+                var node = growthBook.Attributes[key];
+                if (node != null)
                 {
-                    return token.ToObject<T>();
-                }
-                catch
-                {
-                    return defaultValue;
+                    try
+                    {
+                        var typeInfo = GrowthBookJsonContext.Default.GetTypeInfo(typeof(T));
+                        if (typeInfo != null)
+                        {
+                            return (T?)JsonSerializer.Deserialize(node, typeInfo);
+                        }
+                    }
+                    catch
+                    {
+                        return defaultValue;
+                    }
                 }
             }
 
@@ -127,8 +149,8 @@ namespace GrowthBook.Extensions
         /// <returns>True if attribute exists</returns>
         public static bool HasAttribute(this GrowthBook growthBook, string key)
         {
-            return !string.IsNullOrEmpty(key) && 
-                   growthBook.Attributes != null && 
+            return !string.IsNullOrEmpty(key) &&
+                   growthBook.Attributes != null &&
                    growthBook.Attributes.ContainsKey(key);
         }
 
@@ -140,9 +162,9 @@ namespace GrowthBook.Extensions
         public static IEnumerable<string> GetAttributeKeys(this GrowthBook growthBook)
         {
             if (growthBook.Attributes == null)
-                return new string[0];
+                return Array.Empty<string>();
 
-            return growthBook.Attributes.Properties().Select(p => p.Name);
+            return growthBook.Attributes.Select(kvp => kvp.Key);
         }
     }
 }
