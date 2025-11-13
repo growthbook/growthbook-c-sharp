@@ -129,32 +129,50 @@ namespace GrowthBook.Api
                 
                 _sseClient = new SSEClient(sseLogger, _httpClientFactory, _serverSentEventsApiEndpoint, _config?.StreamingRequestHeaders != null ? new Dictionary<string, string>(_config.StreamingRequestHeaders) : null, ConfiguredClients.ServerSentEventsApiClient);
                 
-                // Add event listener specifically for "features" events (matching Flutter implementation)
+                // Add event listener specifically for "features" events
                 _sseClient.AddEventListener("features", async (sseEvent) =>
                 {
-                    // Check for duplicate events by comparing event ID (matching Flutter: lastKnownId != sseModel.id)
-                    if (!string.IsNullOrEmpty(sseEvent.Id) && _lastKnownEventId == sseEvent.Id)
+                    try
                     {
-                        _logger.LogDebug("Skipping duplicate SSE event with ID: {EventId}", sseEvent.Id);
-                        return;
-                    }
-
-                    if (sseEvent.HasData)
-                    {
-                        _logger.LogDebug("Received SSE features event: {Data}", sseEvent.Data?.Substring(0, Math.Min(sseEvent.Data?.Length ?? 0, 100)));
-                        
-                        var features = GetFeaturesFrom(sseEvent.Data);
-                        await _cache.RefreshWith(features, _refreshWorkerCancellation.Token);
-                        _config?.OnFeaturesRefreshed?.Invoke(true);
-                        
-                        // Update last known event ID to prevent duplicates
-                        if (!string.IsNullOrEmpty(sseEvent.Id))
+                        // Check for duplicate events by comparing event ID
+                        if (!string.IsNullOrEmpty(sseEvent.Id) && _lastKnownEventId == sseEvent.Id)
                         {
-                            _lastKnownEventId = sseEvent.Id;
-                            _config?.OnStreamingEventId?.Invoke(sseEvent.Id);
+                            _logger.LogDebug("Skipping duplicate SSE event with ID: {EventId}", sseEvent.Id);
+                            return;
                         }
-                        
-                        _logger.LogInformation("Cache has been refreshed with server sent event features");
+
+                        if (sseEvent.HasData)
+                        {
+                            _logger.LogDebug("Received SSE features event: {Data}", sseEvent.Data?.Substring(0, Math.Min(sseEvent.Data?.Length ?? 0, 100)));
+                            
+                            try
+                            {
+                                var features = GetFeaturesFrom(sseEvent.Data);
+                                await _cache.RefreshWith(features, _refreshWorkerCancellation.Token);
+                                _config?.OnFeaturesRefreshed?.Invoke(true);
+                                
+                                // Update last known event ID to prevent duplicates
+                                if (!string.IsNullOrEmpty(sseEvent.Id))
+                                {
+                                    _lastKnownEventId = sseEvent.Id;
+                                    _config?.OnStreamingEventId?.Invoke(sseEvent.Id);
+                                }
+                                
+                                _logger.LogInformation("Cache has been refreshed with server sent event features");
+                            }
+                            catch (Exception ex)
+                            {
+                                // Handle JSON parsing/decryption errors
+                                _logger.LogError(ex, "Error parsing SSE features data");
+                                _config?.OnFeaturesRefreshed?.Invoke(false);
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        // Handle any other errors in event processing
+                        _logger.LogError(ex, "Error processing SSE features event");
+                        _config?.OnFeaturesRefreshed?.Invoke(false);
                     }
                 });
 
@@ -166,7 +184,9 @@ namespace GrowthBook.Api
 
                 _sseClient.ConnectionError += (exception) =>
                 {
+                    // Propagate connection errors to callback
                     _logger.LogError(exception, "SSE connection error occurred");
+                    _config?.OnFeaturesRefreshed?.Invoke(false);
                 };
 
                 // Start the connection
@@ -178,7 +198,9 @@ namespace GrowthBook.Api
                     }
                     catch (Exception ex)
                     {
+                        // Handle initial connection errors
                         _logger.LogError(ex, "Failed to start SSE client");
+                        _config?.OnFeaturesRefreshed?.Invoke(false);
                     }
                 });
             }

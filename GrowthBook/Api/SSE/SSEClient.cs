@@ -146,7 +146,7 @@ namespace GrowthBook.Api.SSE
                             await ProcessStreamAsync(reader, cancellationToken);
                         }
                         
-                        // Connection closed normally - check if we should reconnect (matching Flutter shouldReconnect logic)
+                        // Connection closed normally - check if we should reconnect
                         if (ShouldReconnect(_lastStatusCode.Value))
                         {
                             _logger.LogInformation("SSE connection closed with status {StatusCode}, attempting to reconnect...", _lastStatusCode.Value);
@@ -279,7 +279,7 @@ namespace GrowthBook.Api.SSE
         }
 
         /// <summary>
-        /// Determines if SSE connection should be reconnected based on status code (matching Flutter shouldReconnect logic)
+        /// Determines if SSE connection should be reconnected based on status code
         /// </summary>
         /// <param name="statusCode">HTTP status code</param>
         /// <returns>True if status code is 200-299, false otherwise</returns>
