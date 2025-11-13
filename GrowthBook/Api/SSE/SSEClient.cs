@@ -28,6 +28,7 @@ namespace GrowthBook.Api.SSE
         private int _retryTimeMs = 3000; // Default retry time
         private int _maxRetryAttempts = 10;
         private int _currentRetryAttempt = 0;
+        private System.Net.HttpStatusCode? _lastStatusCode; // Track last status code for reconnection logic
 
         public SSEConnectionStatus ConnectionStatus => _connectionStatus;
         public string LastEventId => _lastEventId;
@@ -129,6 +130,8 @@ namespace GrowthBook.Api.SSE
 
                     using (var response = await httpClient.GetAsync(_endpoint, HttpCompletionOption.ResponseHeadersRead, cancellationToken))
                     {
+                        _lastStatusCode = response.StatusCode; // Store status code for reconnection logic
+                        
                         if (!response.IsSuccessStatusCode)
                         {
                             throw new HttpRequestException($"SSE connection failed with status code: {response.StatusCode}");
@@ -141,6 +144,19 @@ namespace GrowthBook.Api.SSE
                         using (var reader = new StreamReader(stream))
                         {
                             await ProcessStreamAsync(reader, cancellationToken);
+                        }
+                        
+                        // Connection closed normally - check if we should reconnect
+                        if (ShouldReconnect(_lastStatusCode.Value))
+                        {
+                            _logger.LogInformation("SSE connection closed with status {StatusCode}, attempting to reconnect...", _lastStatusCode.Value);
+                            // Continue loop to retry connection
+                            continue;
+                        }
+                        else
+                        {
+                            _logger.LogInformation("SSE connection closed with status {StatusCode}, not reconnecting", _lastStatusCode.Value);
+                            break;
                         }
                     }
                 }
@@ -260,6 +276,17 @@ namespace GrowthBook.Api.SSE
             var baseDelay = Math.Min(_retryTimeMs * Math.Pow(2, _currentRetryAttempt), 30000); // Max 30 seconds
             var jitter = new Random().Next(0, 1000); // Add up to 1 second jitter
             return (int)baseDelay + jitter;
+        }
+
+        /// <summary>
+        /// Determines if SSE connection should be reconnected based on status code
+        /// </summary>
+        /// <param name="statusCode">HTTP status code</param>
+        /// <returns>True if status code is 200-299, false otherwise</returns>
+        private bool ShouldReconnect(System.Net.HttpStatusCode statusCode)
+        {
+            var statusCodeInt = (int)statusCode;
+            return statusCodeInt >= 200 && statusCodeInt < 300;
         }
 
         private void SetConnectionStatus(SSEConnectionStatus status)

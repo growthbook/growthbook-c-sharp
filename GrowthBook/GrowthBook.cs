@@ -81,8 +81,25 @@ namespace GrowthBook
                 CacheExpirationInSeconds = 60,
                 ClientKey = context.ClientKey,
                 DecryptionKey = context.DecryptionKey,
-                PreferServerSentEvents = true
+                PreferServerSentEvents = context.BackgroundSync
             };
+
+            // Map optional headers and callbacks
+            if (context.RequestHeaders != null && context.RequestHeaders.Count > 0)
+            {
+                foreach (var kv in context.RequestHeaders)
+                {
+                    config.RequestHeaders[kv.Key] = kv.Value;
+                }
+            }
+            if (context.StreamingRequestHeaders != null && context.StreamingRequestHeaders.Count > 0)
+            {
+                foreach (var kv in context.StreamingRequestHeaders)
+                {
+                    config.StreamingRequestHeaders[kv.Key] = kv.Value;
+                }
+            }
+            config.OnFeaturesRefreshed = context.OnFeaturesRefreshed;
 
             // If they didn't want to include a logger factory, just create a basic one that will
             // create disabled loggers by default so we don't force a particular logging provider
@@ -329,7 +346,7 @@ namespace GrowthBook
         /// <param name="key">The feature key.</param>
         /// <param name="cancellationToken">Optional cancellation token.</param>
         /// <returns><c>true</c> if the feature is on; otherwise, <c>false</c>.</returns>
-        public async Task<bool> IsOnAsync(string key, CancellationToken? cancellationToken = null)
+        public async Task<bool> IsOnAsync(string key, CancellationToken cancellationToken = default)
         {
             await LoadFeatures(cancellationToken: cancellationToken);
             var result = EvaluateFeature(key);
@@ -343,7 +360,7 @@ namespace GrowthBook
         /// <param name="key">The feature key.</param>
         /// <param name="cancellationToken">Optional cancellation token.</param>
         /// <returns><c>true</c> if the feature is off; otherwise, <c>false</c>.</returns>
-        public async Task<bool> IsOffAsync(string key, CancellationToken? cancellationToken = null)
+        public async Task<bool> IsOffAsync(string key, CancellationToken cancellationToken = default)
         {
             var on = await IsOnAsync(key, cancellationToken);
             return !on;
@@ -352,12 +369,7 @@ namespace GrowthBook
         /// <summary>
         /// Subscribes a synchronous callback to experiment/feature evaluations.
         /// </summary>
-        public IDisposable Subscribe(Action<Experiment, ExperimentResult> callback)
-        {
-            if (callback == null) throw new ArgumentNullException(nameof(callback));
-            _subscribers.Add(callback);
-            return new Subscription(() => _subscribers.Remove(callback));
-        }
+        
 
         /// <summary>
         /// Subscribes an asynchronous callback to experiment/feature evaluations.
@@ -391,6 +403,38 @@ namespace GrowthBook
 
 
 
+        private void NotifySubscribers(Experiment experiment, ExperimentResult result)
+        {
+            // Invoke synchronous subscribers
+            foreach (var subscriber in _subscribers.ToList())
+            {
+                try
+                {
+                    subscriber?.Invoke(experiment, result);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Exception in synchronous subscriber callback");
+                }
+            }
+
+            // Invoke asynchronous subscribers in a fire-and-forget manner
+            foreach (var asyncSubscriber in _asyncSubscribers.ToList())
+            {
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await asyncSubscriber(experiment, result).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Exception in asynchronous subscriber callback");
+                    }
+                });
+            }
+        }
+
         /// <inheritdoc />
         public T GetFeatureValue<T>(string key, T fallback, bool alwaysLoadFeatures = false)
         {
@@ -399,7 +443,7 @@ namespace GrowthBook
             if (alwaysLoadFeatures)
             {
                 // Fire-and-wait carefully to avoid deadlocks.
----                LoadFeatures().GetAwaiter().GetResult();
+                LoadFeatures().GetAwaiter().GetResult();
             }
 
             var result = EvaluateFeature(key);

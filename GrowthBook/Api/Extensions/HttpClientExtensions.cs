@@ -25,6 +25,15 @@ namespace GrowthBook.Api.Extensions
 
         public static async Task<(IDictionary<string, Feature> Features, bool IsServerSentEventsEnabled)> GetFeaturesFrom(this HttpClient httpClient, string endpoint, ILogger logger, GrowthBookConfigurationOptions config, CancellationToken cancellationToken)
         {
+            // Apply any configured request headers (e.g., Authorization)
+            if (config?.RequestHeaders != null)
+            {
+                foreach (var header in config.RequestHeaders)
+                {
+                    httpClient.DefaultRequestHeaders.TryAddWithoutValidation(header.Key, header.Value);
+                }
+            }
+
             var response = await httpClient.GetAsync(endpoint, cancellationToken);
 
             if (!response.IsSuccessStatusCode)
