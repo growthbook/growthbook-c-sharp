@@ -5,6 +5,7 @@ using System.Net.Http;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Linq;
 using FluentAssertions;
 using GrowthBook.Api;
 using GrowthBook.Api.SSE;
