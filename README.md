@@ -121,6 +121,57 @@ To load your features from the GrowthBook API use the following example:
 
 ---
 
+### Dependency Injection (ASP.NET Core)
+
+Register GrowthBook in your DI container using the provided extension:
+
+```csharp
+// Program.cs
+using GrowthBook;
+using GrowthBook.Extensions;
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddLogging();
+
+builder.Services.AddGrowthBook(ctx =>
+{
+    ctx.ApiHost = "https://cdn.growthbook.io";
+    ctx.ClientKey = "YOUR_CLIENT_KEY";
+    ctx.Enabled = true;
+    ctx.Attributes = new Newtonsoft.Json.Linq.JObject();
+});
+
+var app = builder.Build();
+```
+
+Inject and use `IGrowthBook` in your endpoints/services:
+
+```csharp
+app.MapGet("/feature", (IGrowthBook gb) =>
+{
+    var isOn = gb.IsOn("my-feature-key");
+    return Results.Ok(new { on = isOn });
+});
+```
+
+If you need per-user attributes, inject `GrowthBookFactory` and create a user-scoped instance:
+
+```csharp
+app.MapGet("/feature/user", (GrowthBookFactory factory) =>
+{
+    using var gb = factory.CreateForUser(new { id = "user-123", country = "US" });
+    var theme = gb.GetFeatureValue("app-theme", fallback: "light");
+    return Results.Ok(new { theme });
+});
+```
+
+Notes:
+- `GrowthBookFactory` is registered as a singleton.
+- `IGrowthBook` is registered as scoped. For per-request customization, prefer using the factory.
+
+---
+
 ## Usage Guide
 
 ---
