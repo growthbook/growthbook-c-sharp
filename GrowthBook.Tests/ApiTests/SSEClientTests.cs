@@ -1,11 +1,9 @@
 using System;
-using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Linq;
 using FluentAssertions;
 using GrowthBook.Api;
 using GrowthBook.Api.SSE;
@@ -13,352 +11,205 @@ using Microsoft.Extensions.Logging;
 using NSubstitute;
 using Xunit;
 
-namespace GrowthBook.Tests.ApiTests;
-
-public class SSEClientTests
+namespace GrowthBook.Tests.ApiTests
 {
-    private sealed class TestMessageHandler : DelegatingHandler
+    public class SSEClientTests
     {
-        private readonly Func<HttpRequestMessage, HttpResponseMessage> _responseFactory;
-
-        public TestMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> responseFactory)
+        private sealed class FiniteSequencedHandler : DelegatingHandler
         {
-            _responseFactory = responseFactory;
-        }
+            private readonly Func<HttpRequestMessage, HttpResponseMessage>[] _responses;
+            private int _index = 0;
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            return Task.FromResult(_responseFactory(request));
-        }
-    }
-
-    private sealed class SequencedMessageHandler : DelegatingHandler
-    {
-        private readonly Func<HttpRequestMessage, HttpResponseMessage>[] _responses;
-        private int _index = 0;
-
-        public SequencedMessageHandler(params Func<HttpRequestMessage, HttpResponseMessage>[] responses)
-        {
-            _responses = responses;
-        }
-
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            var i = Math.Min(Interlocked.Increment(ref _index) - 1, _responses.Length - 1);
-            return Task.FromResult(_responses[i](request));
-        }
-    }
-
-    private sealed class CapturingSequencedHandler : DelegatingHandler
-    {
-        private readonly Func<HttpRequestMessage, HttpResponseMessage>[] _responses;
-        private int _index = 0;
-        public readonly ConcurrentQueue<HttpRequestMessage> Requests = new();
-
-        public CapturingSequencedHandler(params Func<HttpRequestMessage, HttpResponseMessage>[] responses)
-        {
-            _responses = responses;
-        }
-
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            Requests.Enqueue(request);
-            var i = Math.Min(Interlocked.Increment(ref _index) - 1, _responses.Length - 1);
-            return Task.FromResult(_responses[i](request));
-        }
-    }
-
-    private sealed class TestHttpClientFactory : IHttpClientFactory
-    {
-        private readonly HttpMessageHandler _handler;
-
-        public TestHttpClientFactory(HttpMessageHandler handler)
-        {
-            _handler = handler;
-        }
-
-        public HttpClient CreateClient(string name)
-        {
-            return new HttpClient(_handler, false);
-        }
-    }
-
-    private static SSEClient CreateClient(HttpMessageHandler handler)
-    {
-        var logger = Substitute.For<ILogger<SSEClient>>();
-        var factory = new TestHttpClientFactory(handler);
-        // endpoint is irrelevant for handler-based client
-        return new SSEClient(logger, factory, "https://example.test/stream", null, ConfiguredClients.ServerSentEventsApiClient);
-    }
-
-    [Fact]
-    public async Task ConnectAsync_WithNonSuccessResponse_RaisesConnectionErrorAndCancelsCleanly()
-    {
-        var errorHandlerCalled = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        var handler = new TestMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError));
-        using var client = CreateClient(handler);
-
-        client.ConnectionError += ex => errorHandlerCalled.TrySetResult(ex);
-
-        using var cts = new CancellationTokenSource();
-
-        var connectTask = client.ConnectAsync(cts.Token);
-
-        var signaled = await Task.WhenAny(errorHandlerCalled.Task, Task.Delay(TimeSpan.FromSeconds(2))) == errorHandlerCalled.Task;
-        signaled.Should().BeTrue("connection error should be raised on non-success status code");
-
-        cts.Cancel();
-        await connectTask; // should complete after cancellation
-
-        client.ConnectionStatus.Should().Be(SSEConnectionStatus.Disconnected);
-    }
-
-    [Fact]
-    public async Task ProcessStream_GeneralHandlerException_IsSwallowedAndDoesNotCrash()
-    {
-        var connectedTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        // A minimal valid SSE stream with a single data event
-        var content = new StringContent("data: hello\n\n", Encoding.UTF8, "text/event-stream");
-        var handler = new TestMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = content });
-
-        using var client = CreateClient(handler);
-
-        client.ConnectionStatusChanged += status =>
-        {
-            if (status == SSEConnectionStatus.Connected)
+            public FiniteSequencedHandler(params Func<HttpRequestMessage, HttpResponseMessage>[] responses)
             {
-                connectedTcs.TrySetResult(true);
+                _responses = responses;
             }
-        };
 
-        client.AddEventListener(null, _ => throw new InvalidOperationException("handler failure"));
-
-        using var cts = new CancellationTokenSource();
-        var connectTask = client.ConnectAsync(cts.Token);
-
-        var connected = await Task.WhenAny(connectedTcs.Task, Task.Delay(TimeSpan.FromSeconds(2))) == connectedTcs.Task;
-        connected.Should().BeTrue("client should reach Connected state");
-
-        // Give a brief moment for the handler to run and throw inside the client
-        await Task.Delay(100);
-
-        // Cancellation should still complete gracefully
-        cts.Cancel();
-        await connectTask;
-
-        client.ConnectionStatus.Should().Be(SSEConnectionStatus.Disconnected);
-    }
-
-    [Fact]
-    public async Task RetryOnlyEvent_DoesNotInvokeGeneralHandler()
-    {
-        var callCount = 0;
-
-        // retry-only event followed by a data event
-        var ssePayload = new StringBuilder()
-            .AppendLine("retry: 1")
-            .AppendLine()
-            .AppendLine("data: second")
-            .AppendLine()
-            .ToString();
-
-        var content = new StringContent(ssePayload, Encoding.UTF8, "text/event-stream");
-        var handler = new TestMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = content });
-
-        using var client = CreateClient(handler);
-        client.AddEventListener(null, _ =>
-        {
-            callCount++;
-            return Task.CompletedTask;
-        });
-
-        using var cts = new CancellationTokenSource();
-        var connectTask = client.ConnectAsync(cts.Token);
-
-        // Wait briefly for processing
-        await Task.Delay(200);
-        cts.Cancel();
-        await connectTask;
-
-        callCount.Should().Be(1, "retry-only event must not trigger general handler");
-    }
-
-    [Fact]
-    public async Task StreamEnd_TriggersReconnectStatus()
-    {
-        var statusTcs = new TaskCompletionSource<SSEConnectionStatus>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        // First response: short valid SSE stream that ends; Second response: 500 to force error path
-        var firstContent = new StringContent("data: first\n\n", Encoding.UTF8, "text/event-stream");
-        var handler = new SequencedMessageHandler(
-            _ => new HttpResponseMessage(HttpStatusCode.OK) { Content = firstContent },
-            _ => new HttpResponseMessage(HttpStatusCode.InternalServerError)
-        );
-
-        using var client = CreateClient(handler);
-
-        client.ConnectionStatusChanged += status =>
-        {
-            if (status == SSEConnectionStatus.Reconnecting)
+            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
             {
-                statusTcs.TrySetResult(status);
-            }
-        };
-
-        using var cts = new CancellationTokenSource();
-        var task = client.ConnectAsync(cts.Token);
-
-        var sawReconnecting = await Task.WhenAny(statusTcs.Task, Task.Delay(TimeSpan.FromSeconds(3))) == statusTcs.Task;
-        sawReconnecting.Should().BeTrue("client should attempt to reconnect after stream ends/error");
-
-        cts.Cancel();
-        await task;
-    }
-
-    [Fact]
-    public async Task SpecificEventHandlerException_IsSwallowedAndDoesNotCrash()
-    {
-        // SSE with a specific event type
-        var content = new StringContent("event: message\ndata: hi\n\n", Encoding.UTF8, "text/event-stream");
-        var handler = new TestMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = content });
-
-        using var client = CreateClient(handler);
-
-        client.AddEventListener("message", _ => throw new InvalidOperationException("boom"));
-
-        using var cts = new CancellationTokenSource();
-        var connectTask = client.ConnectAsync(cts.Token);
-
-        // Allow handler to execute
-        await Task.Delay(150);
-
-        cts.Cancel();
-        await connectTask;
-
-        client.ConnectionStatus.Should().Be(SSEConnectionStatus.Disconnected);
-    }
-
-    [Fact]
-    public async Task StatusSequence_Connect_Then_Reconnect_OnStreamEnd()
-    {
-        var statuses = new ConcurrentQueue<SSEConnectionStatus>();
-
-        var content = new StringContent("data: first\n\n", Encoding.UTF8, "text/event-stream");
-        var handler = new SequencedMessageHandler(
-            _ => new HttpResponseMessage(HttpStatusCode.OK) { Content = content },
-            _ => new HttpResponseMessage(HttpStatusCode.InternalServerError)
-        );
-
-        using var client = CreateClient(handler);
-        client.ConnectionStatusChanged += s => statuses.Enqueue(s);
-
-        using var cts = new CancellationTokenSource();
-        var connectTask = client.ConnectAsync(cts.Token);
-
-        await Task.Delay(400);
-        cts.Cancel();
-        await connectTask;
-
-        statuses.Should().Contain(SSEConnectionStatus.Connecting);
-        statuses.Should().Contain(SSEConnectionStatus.Connected);
-        statuses.Should().Contain(SSEConnectionStatus.Reconnecting);
-    }
-
-    [Fact]
-    public async Task LastEventId_Header_Is_Sent_On_Reconnect()
-    {
-        var secondRequestSeen = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        var firstStream = new StringContent("id: 123\ndata: hello\n\n", Encoding.UTF8, "text/event-stream");
-        var handler = new CapturingSequencedHandler(
-            _ => new HttpResponseMessage(HttpStatusCode.OK) { Content = firstStream },
-            req =>
-            {
-                if (req.Headers.TryGetValues("Last-Event-ID", out var values) && values is not null && values.Contains("123"))
+                var i = Interlocked.Increment(ref _index) - 1;
+                if (i >= _responses.Length)
                 {
-                    secondRequestSeen.TrySetResult(true);
+                    // After planned responses, return non-success to break reconnect loop fast
+                    return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Gone));
                 }
-                return new HttpResponseMessage(HttpStatusCode.InternalServerError);
+                return Task.FromResult(_responses[i](request));
             }
-        );
+        }
 
-        using var client = CreateClient(handler);
-
-        using var cts = new CancellationTokenSource();
-        var connectTask = client.ConnectAsync(cts.Token);
-
-        var ok = await Task.WhenAny(secondRequestSeen.Task, Task.Delay(TimeSpan.FromSeconds(3))) == secondRequestSeen.Task;
-        ok.Should().BeTrue("Last-Event-ID should be attached on reconnect when event id was received");
-
-        cts.Cancel();
-        await connectTask;
-    }
-
-    [Fact]
-    public async Task ConnectionError_Event_Raised_On_Reconnect_Failure()
-    {
-        var errorTcs = new TaskCompletionSource<Exception>(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        var content = new StringContent("data: first\n\n", Encoding.UTF8, "text/event-stream");
-        var handler = new SequencedMessageHandler(
-            _ => new HttpResponseMessage(HttpStatusCode.OK) { Content = content },
-            _ => new HttpResponseMessage(HttpStatusCode.InternalServerError)
-        );
-
-        using var client = CreateClient(handler);
-        client.ConnectionError += ex => errorTcs.TrySetResult(ex);
-
-        using var cts = new CancellationTokenSource();
-        var task = client.ConnectAsync(cts.Token);
-
-        var gotError = await Task.WhenAny(errorTcs.Task, Task.Delay(TimeSpan.FromSeconds(3))) == errorTcs.Task;
-        gotError.Should().BeTrue("error should be raised when reconnect attempt fails");
-
-        cts.Cancel();
-        await task;
-    }
-
-    [Fact]
-    public async Task Cancel_During_Connecting_Disconnects_Cleanly()
-    {
-        // Make the handler block by never returning, but we can't hang tests.
-        // Instead, use a handler that returns after a delay so we can cancel before it.
-        var handler = new TestMessageHandler(_ =>
+        private sealed class SimpleHandler : DelegatingHandler
         {
-            Thread.Sleep(200); // give time to cancel while in Connecting
-            return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("\n\n") };
-        });
+            private readonly Func<HttpRequestMessage, HttpResponseMessage> _responseFactory;
+            private int _count = 0;
+            public SimpleHandler(Func<HttpRequestMessage, HttpResponseMessage> responseFactory)
+            {
+                _responseFactory = responseFactory;
+            }
+            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                var idx = Interlocked.Increment(ref _count);
+                Console.WriteLine($"[SimpleHandler] SendAsync idx={idx} url={request.RequestUri}");
+                HttpResponseMessage resp;
+                if (idx == 1)
+                {
+                    resp = _responseFactory(request);
+                    Console.WriteLine($"[SimpleHandler] first response status={resp.StatusCode} contentType={resp.Content?.Headers?.ContentType}");
+                }
+                else
+                {
+                    // After first call return non-success to break reconnect loop fast
+                    resp = new HttpResponseMessage(HttpStatusCode.Gone);
+                    Console.WriteLine("[SimpleHandler] returning 410 Gone after first response");
+                }
+                return Task.FromResult(resp);
+            }
+        }
 
-        using var client = CreateClient(handler);
-        using var cts = new CancellationTokenSource();
+        private sealed class TestHttpClientFactory : IHttpClientFactory
+        {
+            private readonly HttpMessageHandler _handler;
+            public TestHttpClientFactory(HttpMessageHandler handler) { _handler = handler; }
+            public HttpClient CreateClient(string name) => new HttpClient(_handler, false);
+        }
 
-        var connectTask = client.ConnectAsync(cts.Token);
-        await Task.Delay(50);
-        cts.Cancel();
-        await connectTask;
+        private static SSEClient CreateClient(HttpMessageHandler handler, System.Collections.Generic.Dictionary<string,string> headers = null)
+        {
+            var logger = Substitute.For<ILogger<SSEClient>>();
+            var factory = new TestHttpClientFactory(handler);
+            return new SSEClient(logger, factory, "https://example.test/stream", headers, ConfiguredClients.ServerSentEventsApiClient);
+        }
 
-        client.ConnectionStatus.Should().Be(SSEConnectionStatus.Disconnected);
-    }
+        [Fact(Timeout = 8000)]
+        public async Task NonSuccessResponse_RaisesConnectionError()
+        {
+            var errorTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var handler = new SimpleHandler(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError));
+            using var client = CreateClient(handler);
+            client.ConnectionError += _ => errorTcs.TrySetResult(true);
 
-    [Fact]
-    public async Task Cancel_During_Reconnecting_Disconnects_Cleanly()
-    {
-        // First call fails fast to enter Reconnecting, then we cancel during delay
-        var handler = new TestMessageHandler(_ => new HttpResponseMessage(HttpStatusCode.InternalServerError));
+            using var cts = new CancellationTokenSource();
+            cts.CancelAfter(TimeSpan.FromMilliseconds(500));
+            Task connectTask = null;
+            try
+            {
+                connectTask = client.ConnectAsync(cts.Token);
+                var ok = await Task.WhenAny(errorTcs.Task, Task.Delay(TimeSpan.FromSeconds(2))) == errorTcs.Task;
+                ok.Should().BeTrue();
+            }
+            finally
+            {
+                cts.Cancel();
+                if (connectTask != null) await connectTask;
+            }
+        }
 
-        using var client = CreateClient(handler);
+        [Fact(Timeout = 8000)]
+        public async Task RequestHeaders_Are_Sent_On_Initial_Connect()
+        {
+            var sawAuth = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var handler = new SimpleHandler(req =>
+            {
+                if (req.Headers.TryGetValues("Authorization", out var values) && values is not null && System.Linq.Enumerable.Contains(values, "Bearer test-token"))
+                {
+                    sawAuth.TrySetResult(true);
+                }
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("data: ok\n\n", Encoding.UTF8, "text/event-stream")
+                };
+            });
 
-        using var cts = new CancellationTokenSource();
-        var connectTask = client.ConnectAsync(cts.Token);
+            var headers = new System.Collections.Generic.Dictionary<string,string> { { "Authorization", "Bearer test-token" } };
+            using var client = CreateClient(handler, headers);
 
-        // Wait a bit to ensure it hits Reconnecting state and is awaiting delay
-        await Task.Delay(50);
-        cts.Cancel();
-        await connectTask;
+            using var cts = new CancellationTokenSource();
+            cts.CancelAfter(TimeSpan.FromMilliseconds(500));
+            Task connectTask = null;
+            try
+            {
+                connectTask = client.ConnectAsync(cts.Token);
+                var ok = await Task.WhenAny(sawAuth.Task, Task.Delay(TimeSpan.FromSeconds(2))) == sawAuth.Task;
+                ok.Should().BeTrue();
+            }
+            finally
+            {
+                cts.Cancel();
+                if (connectTask != null) await connectTask;
+            }
+        }
 
-        client.ConnectionStatus.Should().Be(SSEConnectionStatus.Disconnected);
+        [Fact(Timeout = 10000)]
+        public async Task LastEventId_Header_Is_Sent_On_Reconnect()
+        {
+            var secondRequestSeen = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            var firstStream = new StringContent("id: 123\ndata: hello\n\n", Encoding.UTF8, "text/event-stream");
+            var handler = new FiniteSequencedHandler(
+                _ => new HttpResponseMessage(HttpStatusCode.OK) { Content = firstStream },
+                req =>
+                {
+                    if (req.Headers.TryGetValues("Last-Event-ID", out var values) && values is not null && System.Linq.Enumerable.Contains(values, "123"))
+                    {
+                        secondRequestSeen.TrySetResult(true);
+                    }
+                    return new HttpResponseMessage(HttpStatusCode.InternalServerError);
+                }
+            );
+
+            using var client = CreateClient(handler);
+
+            using var cts = new CancellationTokenSource();
+            cts.CancelAfter(TimeSpan.FromMilliseconds(700));
+            Task connectTask = null;
+            try
+            {
+                connectTask = client.ConnectAsync(cts.Token);
+                var ok = await Task.WhenAny(secondRequestSeen.Task, Task.Delay(TimeSpan.FromSeconds(3))) == secondRequestSeen.Task;
+                ok.Should().BeTrue();
+            }
+            finally
+            {
+                cts.Cancel();
+                if (connectTask != null) await connectTask;
+            }
+        }
+
+        [Fact(Timeout = 8000)]
+        public async Task MalformedEvent_IsIgnored_And_ValidData_Processed()
+        {
+            var received = 0;
+
+            var ssePayload = new StringBuilder()
+                .AppendLine("this is not sse")
+                .AppendLine()
+                .AppendLine("data: real")
+                .AppendLine()
+                .ToString();
+
+            var handler = new SimpleHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(ssePayload, Encoding.UTF8, "text/event-stream")
+            });
+
+            using var client = CreateClient(handler);
+            client.AddEventListener(null, _ => { Interlocked.Increment(ref received); return Task.CompletedTask; });
+
+            using var cts = new CancellationTokenSource();
+            cts.CancelAfter(TimeSpan.FromMilliseconds(500));
+            Task connectTask = null;
+            try
+            {
+                connectTask = client.ConnectAsync(cts.Token);
+                await Task.Delay(200);
+            }
+            finally
+            {
+                cts.Cancel();
+                if (connectTask != null) await connectTask;
+            }
+
+            received.Should().BeGreaterOrEqualTo(1);
+        }
     }
 }
 

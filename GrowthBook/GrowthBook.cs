@@ -81,8 +81,25 @@ namespace GrowthBook
                 CacheExpirationInSeconds = 60,
                 ClientKey = context.ClientKey,
                 DecryptionKey = context.DecryptionKey,
-                PreferServerSentEvents = true
+                PreferServerSentEvents = context.BackgroundSync
             };
+
+            // Map optional headers and callbacks
+            if (context.RequestHeaders != null && context.RequestHeaders.Count > 0)
+            {
+                foreach (var kv in context.RequestHeaders)
+                {
+                    config.RequestHeaders[kv.Key] = kv.Value;
+                }
+            }
+            if (context.StreamingRequestHeaders != null && context.StreamingRequestHeaders.Count > 0)
+            {
+                foreach (var kv in context.StreamingRequestHeaders)
+                {
+                    config.StreamingRequestHeaders[kv.Key] = kv.Value;
+                }
+            }
+            config.OnFeaturesRefreshed = context.OnFeaturesRefreshed;
 
             // If they didn't want to include a logger factory, just create a basic one that will
             // create disabled loggers by default so we don't force a particular logging provider

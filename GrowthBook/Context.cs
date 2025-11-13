@@ -155,6 +155,31 @@ namespace GrowthBook
         public string[] CacheKeyAttributes { get; set; }
 
         /// <summary>
+        /// Enable background streaming updates (SSE). Maps to BackgroundSync in options.
+        /// </summary>
+        public bool BackgroundSync { get; set; } = false;
+
+        /// <summary>
+        /// Optional custom headers for regular feature fetch requests.
+        /// </summary>
+        public IDictionary<string, string> RequestHeaders { get; set; } = new Dictionary<string, string>();
+
+        /// <summary>
+        /// Optional custom headers for streaming (SSE) connection, e.g. Authorization, Last-Event-ID.
+        /// </summary>
+        public IDictionary<string, string> StreamingRequestHeaders { get; set; } = new Dictionary<string, string>();
+
+        /// <summary>
+        /// Callback fired after features are applied (polling and streaming). True on success.
+        /// </summary>
+        public Action<bool> OnFeaturesRefreshed { get; set; }
+
+        /// <summary>
+        /// Callback providing the latest SSE Last-Event-ID so apps can persist it.
+        /// </summary>
+        public Action<string> OnStreamingEventId { get; set; }
+
+        /// <summary>
         /// Sets user attributes from an IDictionary.
         /// </summary>
         /// <param name="attributes">User attributes as IDictionary</param>
@@ -200,7 +225,12 @@ namespace GrowthBook
                 CachePath = this.CachePath,
                 RemoteEval = this.RemoteEval,
                 CacheKeyAttributes = this.CacheKeyAttributes?.ToArray(),
-                ForcedFeatures = this.ForcedFeatures
+                ForcedFeatures = this.ForcedFeatures,
+                BackgroundSync = this.BackgroundSync,
+                RequestHeaders = new Dictionary<string, string>(this.RequestHeaders ?? new Dictionary<string, string>()),
+                StreamingRequestHeaders = new Dictionary<string, string>(this.StreamingRequestHeaders ?? new Dictionary<string, string>()),
+                OnFeaturesRefreshed = this.OnFeaturesRefreshed,
+                OnStreamingEventId = this.OnStreamingEventId
             };
             return cloned;
         }

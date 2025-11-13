@@ -61,30 +61,40 @@ namespace GrowthBook.Api
 
         public async Task<IDictionary<string, Feature>> RefreshCacheFromApi(CancellationToken? cancellationToken = null)
         {
-            _logger.LogInformation("Making an HTTP request to the default Features API endpoint \'{FeaturesApiEndpoint}\'", _featuresApiEndpoint);
+            _logger.LogInformation("Making an HTTP request to the default Features API endpoint '{FeaturesApiEndpoint}'", _featuresApiEndpoint);
 
-            var httpClient = _httpClientFactory.CreateClient(ConfiguredClients.DefaultApiClient);
-
-            var response = await httpClient.GetFeaturesFrom(_featuresApiEndpoint, _logger, _config, cancellationToken ?? _refreshWorkerCancellation.Token);
-
-            if (response.Features is null)
+            try
             {
-                return null;
+                var httpClient = _httpClientFactory.CreateClient(ConfiguredClients.DefaultApiClient);
+
+                var response = await httpClient.GetFeaturesFrom(_featuresApiEndpoint, _logger, _config, cancellationToken ?? _refreshWorkerCancellation.Token);
+
+                if (response.Features is null)
+                {
+                    _config?.OnFeaturesRefreshed?.Invoke(false);
+                    return null;
+                }
+
+                await _cache.RefreshWith(response.Features, cancellationToken);
+                _config?.OnFeaturesRefreshed?.Invoke(true);
+
+                // Now that the cache has been populated at least once, we need to see if we're allowed
+                // to kick off the server sent events listener and make sure we're in the intended mode
+                // of operating going forward.
+
+                if (_config.PreferServerSentEvents)
+                {
+                    _isServerSentEventsEnabled = response.IsServerSentEventsEnabled;
+                    EnsureCorrectRefreshModeIsActive();
+                }
+
+                return response.Features;
             }
-
-            await _cache.RefreshWith(response.Features, cancellationToken);
-
-            // Now that the cache has been populated at least once, we need to see if we're allowed
-            // to kick off the server sent events listener and make sure we're in the intended mode
-            // of operating going forward.
-
-            if (_config.PreferServerSentEvents)
+            catch (Exception)
             {
-                _isServerSentEventsEnabled = response.IsServerSentEventsEnabled;
-                EnsureCorrectRefreshModeIsActive();
+                _config?.OnFeaturesRefreshed?.Invoke(false);
+                throw;
             }
-
-            return response.Features;
         }
 
         private void EnsureCorrectRefreshModeIsActive()
@@ -116,7 +126,7 @@ namespace GrowthBook.Api
                 var sseLogger = _logger as ILogger<SSEClient> ?? 
                     new Microsoft.Extensions.Logging.Abstractions.NullLogger<SSEClient>();
                 
-                _sseClient = new SSEClient(sseLogger, _httpClientFactory, _serverSentEventsApiEndpoint, null, ConfiguredClients.ServerSentEventsApiClient);
+                _sseClient = new SSEClient(sseLogger, _httpClientFactory, _serverSentEventsApiEndpoint, _config?.StreamingRequestHeaders != null ? new Dictionary<string, string>(_config.StreamingRequestHeaders) : null, ConfiguredClients.ServerSentEventsApiClient);
                 
                 // Add general event listener for all events (handles data field)
                 _sseClient.AddEventListener(null, async (sseEvent) =>
@@ -127,6 +137,12 @@ namespace GrowthBook.Api
                         
                         var features = GetFeaturesFrom(sseEvent.Data);
                         await _cache.RefreshWith(features, _refreshWorkerCancellation.Token);
+                        _config?.OnFeaturesRefreshed?.Invoke(true);
+                        
+                        if (!string.IsNullOrEmpty(sseEvent.Id))
+                        {
+                            _config?.OnStreamingEventId?.Invoke(sseEvent.Id);
+                        }
                         
                         _logger.LogInformation("Cache has been refreshed with server sent event features");
                     }
