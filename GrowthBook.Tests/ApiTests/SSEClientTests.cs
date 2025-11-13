@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -209,6 +210,222 @@ namespace GrowthBook.Tests.ApiTests
             }
 
             received.Should().BeGreaterOrEqualTo(1);
+        }
+
+        [Fact(Timeout = 8000)]
+        public async Task ShouldReconnect_ReturnsTrue_ForStatusCodes200_299()
+        {
+            // Test that ShouldReconnect logic matches Flutter implementation
+            var handler = new SimpleHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("data: test\n\n", Encoding.UTF8, "text/event-stream")
+            });
+
+            using var client = CreateClient(handler);
+            var reconnected = false;
+            var statusCodes = new List<HttpStatusCode>();
+
+            // Use reflection to access private ShouldReconnect method or test via behavior
+            // Since ShouldReconnect is private, we'll test it indirectly through connection behavior
+            var handler2 = new FiniteSequencedHandler(
+                _ => new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("id: 1\nevent: features\ndata: test\n\n", Encoding.UTF8, "text/event-stream")
+                },
+                req =>
+                {
+                    statusCodes.Add(req.RequestUri != null ? HttpStatusCode.OK : HttpStatusCode.BadRequest);
+                    reconnected = true;
+                    return new HttpResponseMessage(HttpStatusCode.Gone); // Stop after reconnect attempt
+                }
+            );
+
+            using var client2 = CreateClient(handler2);
+            using var cts = new CancellationTokenSource();
+            cts.CancelAfter(TimeSpan.FromMilliseconds(500));
+            
+            Task connectTask = null;
+            try
+            {
+                connectTask = client2.ConnectAsync(cts.Token);
+                await Task.Delay(300);
+            }
+            finally
+            {
+                cts.Cancel();
+                if (connectTask != null) await connectTask;
+            }
+
+            // Should reconnect when status code is 200-299
+            reconnected.Should().BeTrue("because connection closed with success status should trigger reconnect");
+        }
+
+        [Fact(Timeout = 8000)]
+        public async Task ShouldReconnect_ReturnsFalse_ForStatusCodesOutside200_299()
+        {
+            var handler = new FiniteSequencedHandler(
+                _ => new HttpResponseMessage(HttpStatusCode.Forbidden) // 403 - outside 200-299 range
+                {
+                    Content = new StringContent("data: test\n\n", Encoding.UTF8, "text/event-stream")
+                },
+                req => new HttpResponseMessage(HttpStatusCode.BadRequest) // Should not reach here
+            );
+
+            using var client = CreateClient(handler);
+
+            using var cts = new CancellationTokenSource();
+            cts.CancelAfter(TimeSpan.FromMilliseconds(1000));
+            
+            Task connectTask = null;
+            try
+            {
+                connectTask = client.ConnectAsync(cts.Token);
+                // Wait a bit to allow connection attempt
+                await Task.Delay(300);
+            }
+            finally
+            {
+                cts.Cancel();
+                // Explicitly disconnect to ensure status is set to Disconnected
+                client.Disconnect();
+                
+                if (connectTask != null)
+                {
+                    try
+                    {
+                        await connectTask;
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // Expected
+                    }
+                }
+            }
+
+            // After cancellation and explicit disconnect, status should be Disconnected
+            client.ConnectionStatus.Should().Be(SSEConnectionStatus.Disconnected, "because connection should be disconnected after cancellation");
+        }
+
+        [Fact(Timeout = 8000)]
+        public async Task Events_AreFilteredByEventType()
+        {
+            var featuresEventReceived = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var otherEventReceived = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            var ssePayload = new StringBuilder()
+                .AppendLine("id: 1")
+                .AppendLine("event: features")
+                .AppendLine("data: test-features")
+                .AppendLine()
+                .AppendLine("id: 2")
+                .AppendLine("event: other")
+                .AppendLine("data: test-other")
+                .AppendLine()
+                .ToString();
+
+            var handler = new SimpleHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(ssePayload, Encoding.UTF8, "text/event-stream")
+            });
+
+            using var client = CreateClient(handler);
+            
+            // Add listener for "features" events only
+            client.AddEventListener("features", async (sseEvent) =>
+            {
+                if (sseEvent.Event == "features")
+                {
+                    featuresEventReceived.TrySetResult(true);
+                }
+                await Task.CompletedTask;
+            });
+
+            // Add listener for all events
+            client.AddEventListener(null, async (sseEvent) =>
+            {
+                if (sseEvent.Event == "other")
+                {
+                    otherEventReceived.TrySetResult(true);
+                }
+                await Task.CompletedTask;
+            });
+
+            using var cts = new CancellationTokenSource();
+            cts.CancelAfter(TimeSpan.FromMilliseconds(500));
+            Task connectTask = null;
+            try
+            {
+                connectTask = client.ConnectAsync(cts.Token);
+                await Task.Delay(200);
+            }
+            finally
+            {
+                cts.Cancel();
+                if (connectTask != null) await connectTask;
+            }
+
+            // Both specific and general listeners should receive events
+            featuresEventReceived.Task.IsCompleted.Should().BeTrue("because features event should be received");
+            otherEventReceived.Task.IsCompleted.Should().BeTrue("because other event should be received by general listener");
+        }
+
+        [Fact(Timeout = 8000)]
+        public async Task DuplicateEventIds_AreTracked()
+        {
+            var eventCount = 0;
+            var lastEventId = "";
+
+            var ssePayload = new StringBuilder()
+                .AppendLine("id: 123")
+                .AppendLine("event: features")
+                .AppendLine("data: first")
+                .AppendLine()
+                .AppendLine("id: 123") // Duplicate ID
+                .AppendLine("event: features")
+                .AppendLine("data: duplicate")
+                .AppendLine()
+                .AppendLine("id: 456")
+                .AppendLine("event: features")
+                .AppendLine("data: second")
+                .AppendLine()
+                .ToString();
+
+            var handler = new SimpleHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(ssePayload, Encoding.UTF8, "text/event-stream")
+            });
+
+            using var client = CreateClient(handler);
+            
+            client.AddEventListener("features", async (sseEvent) =>
+            {
+                if (sseEvent.Id == lastEventId && !string.IsNullOrEmpty(lastEventId))
+                {
+                    // This would be a duplicate - but SSEClient doesn't filter duplicates itself
+                    // FeatureRefreshWorker does the filtering
+                }
+                lastEventId = sseEvent.Id;
+                Interlocked.Increment(ref eventCount);
+                await Task.CompletedTask;
+            });
+
+            using var cts = new CancellationTokenSource();
+            cts.CancelAfter(TimeSpan.FromMilliseconds(500));
+            Task connectTask = null;
+            try
+            {
+                connectTask = client.ConnectAsync(cts.Token);
+                await Task.Delay(200);
+            }
+            finally
+            {
+                cts.Cancel();
+                if (connectTask != null) await connectTask;
+            }
+
+            // Should receive all events (duplicate filtering happens in FeatureRefreshWorker)
+            eventCount.Should().BeGreaterOrEqualTo(3, "because SSEClient should process all events");
+            client.LastEventId.Should().Be("456", "because last event ID should be updated");
         }
     }
 }

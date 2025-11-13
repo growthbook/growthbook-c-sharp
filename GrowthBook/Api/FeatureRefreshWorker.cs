@@ -35,6 +35,7 @@ namespace GrowthBook.Api
         private bool _isServerSentEventsEnabled;
         private SSEClient _sseClient;
         private CancellationTokenSource _refreshWorkerCancellation = new CancellationTokenSource();
+        private string _lastKnownEventId; // Track last processed event ID to prevent duplicates
 
         public FeatureRefreshWorker(ILogger<FeatureRefreshWorker> logger, IHttpClientFactory httpClientFactory, GrowthBookConfigurationOptions config, IGrowthBookFeatureCache cache)
         {
@@ -128,19 +129,28 @@ namespace GrowthBook.Api
                 
                 _sseClient = new SSEClient(sseLogger, _httpClientFactory, _serverSentEventsApiEndpoint, _config?.StreamingRequestHeaders != null ? new Dictionary<string, string>(_config.StreamingRequestHeaders) : null, ConfiguredClients.ServerSentEventsApiClient);
                 
-                // Add general event listener for all events (handles data field)
-                _sseClient.AddEventListener(null, async (sseEvent) =>
+                // Add event listener specifically for "features" events (matching Flutter implementation)
+                _sseClient.AddEventListener("features", async (sseEvent) =>
                 {
+                    // Check for duplicate events by comparing event ID (matching Flutter: lastKnownId != sseModel.id)
+                    if (!string.IsNullOrEmpty(sseEvent.Id) && _lastKnownEventId == sseEvent.Id)
+                    {
+                        _logger.LogDebug("Skipping duplicate SSE event with ID: {EventId}", sseEvent.Id);
+                        return;
+                    }
+
                     if (sseEvent.HasData)
                     {
-                        _logger.LogDebug("Received SSE event: {Data}", sseEvent.Data?.Substring(0, Math.Min(sseEvent.Data?.Length ?? 0, 100)));
+                        _logger.LogDebug("Received SSE features event: {Data}", sseEvent.Data?.Substring(0, Math.Min(sseEvent.Data?.Length ?? 0, 100)));
                         
                         var features = GetFeaturesFrom(sseEvent.Data);
                         await _cache.RefreshWith(features, _refreshWorkerCancellation.Token);
                         _config?.OnFeaturesRefreshed?.Invoke(true);
                         
+                        // Update last known event ID to prevent duplicates
                         if (!string.IsNullOrEmpty(sseEvent.Id))
                         {
+                            _lastKnownEventId = sseEvent.Id;
                             _config?.OnStreamingEventId?.Invoke(sseEvent.Id);
                         }
                         
