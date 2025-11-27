@@ -66,7 +66,7 @@ public class FeatureRepositoryTests : ApiUnitTest<FeatureRepository>
             .Returns(_availableFeatures);
         _backgroundWorker
             .RefreshCacheFromApi(Arg.Any<CancellationToken?>())
-            .Returns(_availableFeatures);
+            .Returns(Task.FromResult<IDictionary<string, Feature>>(_availableFeatures));
 
         var options = isForcedRefresh switch
         {
@@ -76,6 +76,8 @@ public class FeatureRepositoryTests : ApiUnitTest<FeatureRepository>
 
         var features = await _featureRepository.GetFeatures(options);
         await Task.Delay(50);
+
+        await Task.Delay(10);
 
         _ = _cache.Received(2).IsCacheExpired;
         _ = _cache.Received(2).FeatureCount;

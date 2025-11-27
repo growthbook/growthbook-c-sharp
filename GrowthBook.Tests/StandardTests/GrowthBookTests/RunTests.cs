@@ -93,15 +93,15 @@ public class RunTests : UnitTest
 
         var subCounterTwo = 0;
 
-        Action unsubscribe = gb.Subscribe((experiment, actualResult) =>
+        IDisposable subscription = gb.Subscribe((experiment, actualResult) =>
         {
             ExperimentResultShouldMeetExpectations(actualResult);
 
             subCounterTwo++;
         });
 
-        unsubscribe();
-
+        subscription.Dispose();
+        
         var subCounterThree = 0;
 
         gb.Subscribe((experiment, actualResult) =>

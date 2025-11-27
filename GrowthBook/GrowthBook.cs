@@ -29,7 +29,6 @@ namespace GrowthBook
         private readonly Dictionary<string, ExperimentAssignment> _assigned;
         private readonly ConcurrentDictionary<string, byte> _tracked;
         private Action<Experiment, ExperimentResult> _trackingCallback;
-        private readonly List<Action<Experiment, ExperimentResult>> _subscriptions;
         private bool _disposedValue;
         private readonly IConditionEvaluationProvider _conditionEvaluator;
         private readonly IGrowthBookFeatureRepository _featureRepository;
@@ -42,9 +41,9 @@ namespace GrowthBook
         private readonly Context _context;
         private JObject _previousAttributes;
         private IDictionary<string, int> _previousForcedVariations;
-        private readonly List<Action<Experiment, ExperimentResult>> _subscribers 
+        private readonly List<Action<Experiment, ExperimentResult>> _subscribers
             = new List<Action<Experiment, ExperimentResult>>();
-        private readonly List<Func<Experiment, ExperimentResult, Task>> _asyncSubscribers 
+        private readonly List<Func<Experiment, ExperimentResult, Task>> _asyncSubscribers
             = new List<Func<Experiment, ExperimentResult, Task>>();
 
         /// <summary>
@@ -67,7 +66,6 @@ namespace GrowthBook
             _trackingCallback = context.TrackingCallback;
             _assigned = new Dictionary<string, ExperimentAssignment>();
             _tracked = new ConcurrentDictionary<string, byte>();
-            _subscriptions = new List<Action<Experiment, ExperimentResult>>();
             _stickyBucketService = context.StickyBucketService;
             _stickyBucketAssignmentDocs = context.StickyBucketAssignmentDocs ?? new Dictionary<string, StickyAssignmentsDocument>();
             _savedGroups = context.SavedGroups;
@@ -110,8 +108,21 @@ namespace GrowthBook
             }
             else
             {
-                var featureCache = new InMemoryFeatureCache(cacheExpirationInSeconds: 60);
                 var httpClientFactory = new HttpClientFactory(requestTimeoutInSeconds: 60);
+
+                // Use file-based cache (similar to Swift CachingManager)
+                var featureCacheLogger = _loggerFactory.CreateLogger<Api.InMemoryFeatureCache>();
+                var featureCache = new Api.InMemoryFeatureCache(logger: featureCacheLogger);
+
+                if (!string.IsNullOrEmpty(context.CachePath))
+                {
+                    featureCache.SetCustomCachePath(context.CachePath);
+                }
+
+                if (!string.IsNullOrEmpty(context.ClientKey))
+                {
+                    featureCache.SetCacheKey(context.ClientKey);
+                }
 
                 var featureRefreshLogger = _loggerFactory.CreateLogger<FeatureRefreshWorker>();
                 var featureRepositoryLogger = _loggerFactory.CreateLogger<FeatureRepository>();
@@ -126,6 +137,8 @@ namespace GrowthBook
                 }
 
                 _featureRepository = new FeatureRepository(featureRepositoryLogger, featureCache, featureRefreshWorker, remoteEvaluationService);
+
+                _logger.LogDebug("GrowthBook initialized with file-based cache");
             }
         }
 
@@ -175,7 +188,8 @@ namespace GrowthBook
                     _trackingCallback = null;
                     _assigned.Clear();
                     _tracked.Clear();
-                    _subscriptions.Clear();
+                    _subscribers.Clear();
+                    _asyncSubscribers.Clear();
                     _featureRepository.Cancel();
 
                     if (_ownsLoggerFactory && _loggerFactory is IDisposable disposableFactory)
@@ -399,7 +413,7 @@ namespace GrowthBook
             if (alwaysLoadFeatures)
             {
                 // Fire-and-wait carefully to avoid deadlocks.
----                LoadFeatures().GetAwaiter().GetResult();
+               LoadFeatures().GetAwaiter().GetResult();
             }
 
             var result = EvaluateFeature(key);
@@ -421,13 +435,6 @@ namespace GrowthBook
         public IDictionary<string, ExperimentAssignment> GetAllResults()
         {
             return _assigned;
-        }
-
-        /// <inheritdoc />
-        public Action Subscribe(Action<Experiment, ExperimentResult> callback)
-        {
-            _subscriptions.Add(callback);
-            return () => _subscriptions.Remove(callback);
         }
 
         /// <inheritdoc />
@@ -721,17 +728,7 @@ namespace GrowthBook
             // Fire subscription callbacks if needed
             if (shouldFireCallbacks)
             {
-                foreach (Action<Experiment, ExperimentResult> callback in _subscriptions)
-                {
-                    try
-                    {
-                        callback?.Invoke(experiment, result);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, $"Encountered exception during subscription callback for experiment with key '{experiment.Key}'");
-                    }
-                }
+                NotifySubscribers(experiment, result);
             }
         }
 
@@ -1129,7 +1126,7 @@ namespace GrowthBook
                 }
             }
         }
-        
+
          /// <summary>
         /// Validates that remote evaluation configuration is correct.
         /// </summary>
@@ -1218,6 +1215,41 @@ namespace GrowthBook
                 ForcedVariations = ForcedVariations,
                 Url = Url
             };
+        }
+
+        /// <summary>
+        /// Notifies all synchronous and asynchronous subscribers about a feature or experiment evaluation result.
+        /// </summary>
+        /// <param name="experiment">The experiment that was evaluated (null if feature evaluation).</param>
+        /// <param name="result">The result of the evaluation.</param>
+        private void NotifySubscribers(Experiment experiment, ExperimentResult result)
+        {
+            foreach (var subscriber in _subscribers)
+            {
+                try
+                {
+                    subscriber(experiment, result);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Encountered unhandled exception in synchronous subscriber.");
+                }
+            }
+
+            foreach (var asyncSubscriber in _asyncSubscribers)
+            {
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await asyncSubscriber(experiment, result).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Encountered unhandled exception in asynchronous subscriber.");
+                    }
+                });
+            }
         }
     }
 }
