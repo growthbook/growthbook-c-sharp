@@ -39,6 +39,13 @@ namespace GrowthBook
         private readonly JObject _savedGroups;
         private readonly ILoggerFactory _loggerFactory;
         private readonly bool _ownsLoggerFactory;
+        private readonly Context _context;
+        private JObject _previousAttributes;
+        private IDictionary<string, int> _previousForcedVariations;
+        private readonly List<Action<Experiment, ExperimentResult>> _subscribers
+            = new List<Action<Experiment, ExperimentResult>>();
+        private readonly List<Func<Experiment, ExperimentResult, Task>> _asyncSubscribers
+            = new List<Func<Experiment, ExperimentResult, Task>>();
 
         /// <summary>
         /// Creates a new GrowthBook instance from the passed context.
@@ -46,6 +53,9 @@ namespace GrowthBook
         /// <param name="context">The GrowthBook Context object.</param>
         public GrowthBook(Context context)
         {
+            ValidateRemoteEvaluationConfiguration(context);
+
+            _context = context;
             Enabled = context.Enabled;
             Attributes = context.Attributes;
             Url = context.Url;
@@ -61,6 +71,9 @@ namespace GrowthBook
             _stickyBucketService = context.StickyBucketService;
             _stickyBucketAssignmentDocs = context.StickyBucketAssignmentDocs ?? new Dictionary<string, StickyAssignmentsDocument>();
             _savedGroups = context.SavedGroups;
+            _previousAttributes = context.Attributes?.DeepClone() as JObject;
+            _previousForcedVariations = context.ForcedVariations?.ToDictionary(k => k.Key, v => v.Value);
+
 
             var config = new GrowthBookConfigurationOptions
             {
@@ -102,23 +115,31 @@ namespace GrowthBook
                 // Use file-based cache (similar to Swift CachingManager)
                 var featureCacheLogger = _loggerFactory.CreateLogger<Api.InMemoryFeatureCache>();
                 var featureCache = new Api.InMemoryFeatureCache(logger: featureCacheLogger);
-                
+
                 if (!string.IsNullOrEmpty(context.CachePath))
                 {
                     featureCache.SetCustomCachePath(context.CachePath);
                 }
-                
+
                 if (!string.IsNullOrEmpty(context.ClientKey))
                 {
                     featureCache.SetCacheKey(context.ClientKey);
                 }
-                
+
                 var featureRefreshLogger = _loggerFactory.CreateLogger<FeatureRefreshWorker>();
                 var featureRepositoryLogger = _loggerFactory.CreateLogger<FeatureRepository>();
+
                 var featureRefreshWorker = new FeatureRefreshWorker(featureRefreshLogger, httpClientFactory, config, featureCache);
-                
-                _featureRepository = new FeatureRepository(featureRepositoryLogger, featureCache, featureRefreshWorker);
-                
+
+                IRemoteEvaluationService remoteEvaluationService = null;
+                if (context.RemoteEval)
+                {
+                    var remoteEvaluationLogger = _loggerFactory.CreateLogger<RemoteEvaluationService>();
+                    remoteEvaluationService = new RemoteEvaluationService(remoteEvaluationLogger, httpClientFactory);
+                }
+
+                _featureRepository = new FeatureRepository(featureRepositoryLogger, featureCache, featureRefreshWorker, remoteEvaluationService);
+
                 _logger.LogDebug("GrowthBook initialized with file-based cache");
             }
         }
@@ -204,6 +225,16 @@ namespace GrowthBook
         /// <param name="attributes">New user attributes as IDictionary</param>
         public void UpdateAttributes(IDictionary<string, object> attributes)
         {
+            var newAttributes = attributes != null ? JObject.FromObject(attributes) : new JObject();
+
+            if (_context.RemoteEval && ShouldTriggerRemoteEvaluation(newAttributes))
+            {
+                TriggerRemoteEvaluationAsync(newAttributes).ConfigureAwait(false);
+            }
+
+            Attributes = newAttributes;
+            _previousAttributes = newAttributes?.DeepClone() as JObject;
+
             if (attributes != null)
             {
                 Attributes = JObject.FromObject(attributes);
@@ -222,6 +253,16 @@ namespace GrowthBook
         /// <param name="attributes">New user attributes as anonymous object</param>
         public void UpdateAttributes(object attributes)
         {
+            var newAttributes = attributes != null ? JObject.FromObject(attributes) : new JObject();
+
+            if (_context.RemoteEval && ShouldTriggerRemoteEvaluation(newAttributes))
+            {
+                TriggerRemoteEvaluationAsync(newAttributes).ConfigureAwait(false);
+            }
+
+            Attributes = newAttributes;
+            _previousAttributes = newAttributes?.DeepClone() as JObject;
+
             if (attributes != null)
             {
                 Attributes = JObject.FromObject(attributes);
@@ -241,12 +282,21 @@ namespace GrowthBook
         public void MergeAttributes(IDictionary<string, object> additionalAttributes)
         {
             if (additionalAttributes == null) return;
+            var oldAttributes = Attributes?.DeepClone() as JObject;
+
 
             foreach (var kvp in additionalAttributes)
             {
                 Attributes[kvp.Key] = JToken.FromObject(kvp.Value);
             }
-            
+
+            if (_context.RemoteEval && ShouldTriggerRemoteEvaluation(Attributes))
+            {
+                TriggerRemoteEvaluationAsync(Attributes).ConfigureAwait(false);
+            }
+
+            _previousAttributes = Attributes?.DeepClone() as JObject;
+
             _logger?.LogDebug("Merged {Count} additional attributes", additionalAttributes.Count);
         }
 
@@ -258,12 +308,21 @@ namespace GrowthBook
         {
             if (additionalAttributes == null) return;
 
+            var oldAttributes = Attributes?.DeepClone() as JObject;
+
             var additionalJObject = JObject.FromObject(additionalAttributes);
             foreach (var property in additionalJObject.Properties())
             {
                 Attributes[property.Name] = property.Value;
             }
-            
+
+            if (_context.RemoteEval && ShouldTriggerRemoteEvaluation(Attributes))
+            {
+                TriggerRemoteEvaluationAsync(Attributes).ConfigureAwait(false);
+            }
+
+            _previousAttributes = Attributes?.DeepClone() as JObject;
+
             _logger?.LogDebug("Merged additional attributes from object");
         }
 
@@ -279,12 +338,83 @@ namespace GrowthBook
             return EvalFeature(key).Off;
         }
 
+        /// <summary>
+        /// Asynchronously checks whether the specified feature is enabled.
+        /// </summary>
+        /// <param name="key">The feature key.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns><c>true</c> if the feature is on; otherwise, <c>false</c>.</returns>
+        public async Task<bool> IsOnAsync(string key, CancellationToken? cancellationToken = null)
+        {
+            await LoadFeatures(cancellationToken: cancellationToken);
+            var result = EvaluateFeature(key);
+            var value = result.Value;
+            return !value.IsNull() && value.ToObject<bool>();
+        }
+
+        /// <summary>
+        /// Asynchronously checks whether the specified feature is disabled.
+        /// </summary>
+        /// <param name="key">The feature key.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns><c>true</c> if the feature is off; otherwise, <c>false</c>.</returns>
+        public async Task<bool> IsOffAsync(string key, CancellationToken? cancellationToken = null)
+        {
+            var on = await IsOnAsync(key, cancellationToken);
+            return !on;
+        }
+
+        /// <summary>
+        /// Subscribes a synchronous callback to experiment/feature evaluations.
+        /// </summary>
+        public IDisposable Subscribe(Action<Experiment, ExperimentResult> callback)
+        {
+            if (callback == null) throw new ArgumentNullException(nameof(callback));
+            _subscribers.Add(callback);
+            return new Subscription(() => _subscribers.Remove(callback));
+        }
+
+        /// <summary>
+        /// Subscribes an asynchronous callback to experiment/feature evaluations.
+        /// </summary>
+        public IDisposable SubscribeAsync(Func<Experiment, ExperimentResult, Task> callback)
+        {
+            if (callback == null) throw new ArgumentNullException(nameof(callback));
+            _asyncSubscribers.Add(callback);
+            return new Subscription(() => _asyncSubscribers.Remove(callback));
+        }
+
+        private class Subscription : IDisposable
+        {
+            private readonly Action _unsubscribe;
+            private bool _disposed;
+
+            public Subscription(Action unsubscribe)
+            {
+                _unsubscribe = unsubscribe;
+            }
+
+            public void Dispose()
+            {
+                if (!_disposed)
+                {
+                    _unsubscribe();
+                    _disposed = true;
+                }
+            }
+        }
+
+
+
         /// <inheritdoc />
         public T GetFeatureValue<T>(string key, T fallback, bool alwaysLoadFeatures = false)
         {
+            // Keep the sync API, but avoid deadlocks by doing a quick synchronous spin only if already completed.
+            // Prefer callers to use the async APIs.
             if (alwaysLoadFeatures)
             {
-                LoadFeatures().Wait();
+                // Fire-and-wait carefully to avoid deadlocks.
+               LoadFeatures().GetAwaiter().GetResult();
             }
 
             var result = EvaluateFeature(key);
@@ -321,7 +451,7 @@ namespace GrowthBook
         {
             if (alwaysLoadFeatures)
             {
-                LoadFeatures().Wait();
+                LoadFeatures().GetAwaiter().GetResult();
             }
 
             return EvaluateFeature(featureId);
@@ -436,6 +566,12 @@ namespace GrowthBook
                             }
                         }
 
+                        NotifySubscribers(null, new ExperimentResult
+                        {
+                            InExperiment = false,
+                            Value = rule.Force
+                        });
+
                         _logger.LogDebug("Rule {RuleIndex}: returning forced value for feature '{FeatureId}'", ruleIndex, featureId);
                         return GetFeatureResult(rule.Force, FeatureResult.SourceId.Force);
                     }
@@ -470,6 +606,8 @@ namespace GrowthBook
                     {
                         continue;
                     }
+
+                    NotifySubscribers(experiment, result);
 
                     return GetFeatureResult(result.Value, FeatureResult.SourceId.Experiment, experiment, result);
                 }
@@ -528,8 +666,18 @@ namespace GrowthBook
             try
             {
                 _logger.LogInformation("Loading features from the repository");
+                IDictionary<string, Feature> features;
 
-                var features = await _featureRepository.GetFeatures(options, cancellationToken);
+                // Use remote evaluation if enabled and configured
+                if (_context.RemoteEval && RemoteEvaluationUtilities.IsValidForRemoteEvaluation(_context))
+                {
+                    var currentContext = CreateCurrentContext();
+                    features = await _featureRepository.GetFeaturesWithContext(currentContext, options, cancellationToken);
+                }
+                else
+                {
+                    features = await _featureRepository.GetFeatures(options, cancellationToken);
+                }
 
                 if (features == null)
                 {
@@ -567,7 +715,7 @@ namespace GrowthBook
         {
             var assignment = new ExperimentAssignment { Experiment = experiment, Result = result };
             bool shouldFireCallbacks = false;
-            
+
             // Always record the assignment locally for GetAllResults()
             if (!_assigned.TryGetValue(experiment.Key, out ExperimentAssignment prev)
                 || prev.Result.InExperiment != result.InExperiment
@@ -576,7 +724,7 @@ namespace GrowthBook
                 _assigned[experiment.Key] = assignment;
                 shouldFireCallbacks = true;
             }
-            
+
             // Also use repository tracking if available (for preventing duplicate callbacks across instances)
             if (_featureRepository != null)
             {
@@ -973,7 +1121,7 @@ namespace GrowthBook
 
             // Use atomic operations to prevent race conditions in concurrent scenarios
             bool shouldTrack = false;
-            
+
             if (_featureRepository != null)
             {
                 // TryMarkAsTracked returns true only if key was successfully added (didn't exist before)
@@ -996,6 +1144,96 @@ namespace GrowthBook
                     _logger.LogError(ex, "Encountered unhandled exception during tracking callback for experiment with combined key \'{Key}\'", key);
                 }
             }
+        }
+
+         /// <summary>
+        /// Validates that remote evaluation configuration is correct.
+        /// </summary>
+        /// <param name="context">The context to validate</param>
+        private static void ValidateRemoteEvaluationConfiguration(Context context)
+        {
+            if (!context.RemoteEval) return;
+
+            if (string.IsNullOrWhiteSpace(context.ClientKey))
+            {
+                throw new ArgumentException("ClientKey is required when RemoteEval is enabled", nameof(context));
+            }
+
+            if (string.IsNullOrWhiteSpace(context.ApiHost))
+            {
+                throw new ArgumentException("ApiHost is required when RemoteEval is enabled", nameof(context));
+            }
+
+            if (!string.IsNullOrWhiteSpace(context.DecryptionKey))
+            {
+                throw new ArgumentException("RemoteEval cannot be used with DecryptionKey - features are evaluated server-side", nameof(context));
+            }
+        }
+
+        /// <summary>
+        /// Determines if remote evaluation should be triggered based on attribute or forced variation changes.
+        /// </summary>
+        /// <param name="newAttributes">The new attributes to check</param>
+        /// <returns>True if remote evaluation should be triggered</returns>
+        private bool ShouldTriggerRemoteEvaluation(JObject newAttributes)
+        {
+            // Check if attributes changed
+            var attributesChanged = RemoteEvaluationUtilities.ShouldTriggerRemoteEvaluation(
+                _previousAttributes,
+                newAttributes,
+                _context.CacheKeyAttributes
+            );
+
+            // Check if forced variations changed
+            var forcedVariationsChanged = RemoteEvaluationUtilities.ShouldTriggerRemoteEvaluationForForcedVariations(
+                _previousForcedVariations,
+                ForcedVariations
+            );
+
+            return attributesChanged || forcedVariationsChanged;
+        }
+
+        /// <summary>
+        /// Triggers remote evaluation asynchronously when attribute changes are detected.
+        /// </summary>
+        /// <param name="newAttributes">The new attributes</param>
+        private async Task TriggerRemoteEvaluationAsync(JObject newAttributes)
+        {
+            try
+            {
+                _logger?.LogDebug("Triggering remote evaluation due to attribute changes");
+
+                var currentContext = CreateCurrentContext();
+                var features = await _featureRepository.GetFeaturesWithContext(currentContext);
+
+                if (features != null)
+                {
+                    Features = features;
+                    _logger?.LogDebug("Remote evaluation completed, updated {Count} features", features.Count);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "Failed to trigger remote evaluation, continuing with cached features");
+            }
+        }
+
+        /// <summary>
+        /// Creates a context object with current state for remote evaluation.
+        /// </summary>
+        /// <returns>A context object with current state</returns>
+        private Context CreateCurrentContext()
+        {
+            return new Context
+            {
+                RemoteEval = _context.RemoteEval,
+                ApiHost = _context.ApiHost,
+                ClientKey = _context.ClientKey,
+                CacheKeyAttributes = _context.CacheKeyAttributes,
+                Attributes = Attributes,
+                ForcedVariations = ForcedVariations,
+                Url = Url
+            };
         }
     }
 }
