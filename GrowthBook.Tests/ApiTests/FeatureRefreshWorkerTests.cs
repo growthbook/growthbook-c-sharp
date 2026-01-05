@@ -242,7 +242,7 @@ public class FeatureRefreshWorkerTests : ApiUnitTest<FeatureRefreshWorker>
         var (features, _, _) = await httpClient.GetFeaturesFrom(endpoint, _logger, _config, CancellationToken.None, etagCache, _cache);
 
         features.Should().BeEquivalentTo(_availableFeatures);
-        etagCache.Get(endpoint).Should().Be(etag);
+        etagCache.Get(endpoint).Should().Be($"\"{etag}\"");
     }
 
     [Fact]
@@ -292,7 +292,7 @@ public class FeatureRefreshWorkerTests : ApiUnitTest<FeatureRefreshWorker>
 
         isNotModified1.Should().BeFalse("because first call should return 200 OK");
         features1.Should().BeEquivalentTo(_availableFeatures);
-        etagCache.Get(endpoint).Should().Be(etag, "because ETag should be stored");
+        etagCache.Get(endpoint).Should().Be($"\"{etag}\"", "because ETag should be stored");
 
         // Second call - should return 304 and refresh expiration
         var (features2, _, isNotModified2) = await httpClient.GetFeaturesFrom(endpoint, _logger, _config, CancellationToken.None, etagCache, _cache);

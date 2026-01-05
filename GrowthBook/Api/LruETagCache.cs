@@ -7,17 +7,22 @@ namespace GrowthBook.Api
 {
     /// <summary>
     /// LRU (Least Recently Used) cache for storing ETags.
-    /// 
+    ///
     /// This cache has a maximum capacity and automatically evicts the least recently
     /// accessed entries when the capacity is exceeded.
     /// </summary>
     public class LruETagCache
     {
         private readonly int _maxSize;
-        private readonly Dictionary<string, string> _cache = new Dictionary<string, string>();
-        private readonly Dictionary<string, long> _accessOrder = new Dictionary<string, long>();
-        private long _accessCounter = 0;
+        private readonly Dictionary<string, LinkedListNode<CacheItem>> _cache;
+        private readonly LinkedList<CacheItem> _lruList;
         private readonly object _lock = new object();
+
+        private class CacheItem
+        {
+            public string Url { get; set; }
+            public string ETag { get; set; }
+        }
 
         /// <summary>
         /// Initializes a new instance of the LruETagCache class.
@@ -26,6 +31,8 @@ namespace GrowthBook.Api
         public LruETagCache(int maxSize = 100)
         {
             _maxSize = Math.Max(1, maxSize);
+            _cache = new Dictionary<string, LinkedListNode<CacheItem>>(maxSize);
+            _lruList = new LinkedList<CacheItem>();
         }
 
         /// <summary>
@@ -42,21 +49,21 @@ namespace GrowthBook.Api
 
             lock (_lock)
             {
-                if (!_cache.ContainsKey(url))
+                if (!_cache.TryGetValue(url, out var node))
                 {
                     return null;
                 }
 
-                // Update access order (move to most recently used)
-                _accessOrder[url] = ++_accessCounter;
+                _lruList.Remove(node);
+                _lruList.AddFirst(node);
 
-                return _cache[url];
+                return node.Value.ETag;
             }
         }
 
         /// <summary>
         /// Store an ETag for a URL.
-        /// 
+        ///
         /// If the ETag is null, the entry will be removed.
         /// If capacity is exceeded, the least recently used entry will be evicted.
         /// </summary>
@@ -77,17 +84,24 @@ namespace GrowthBook.Api
                     return;
                 }
 
-                // Check if this is an update (not a new entry)
-                bool isUpdate = _cache.ContainsKey(url);
-
-                // Update or add the entry
-                _cache[url] = etag;
-                _accessOrder[url] = ++_accessCounter;
-
-                // If not an update and we're over capacity, evict the LRU entry
-                if (!isUpdate && _cache.Count > _maxSize)
+                if (_cache.TryGetValue(url, out var existingNode))
                 {
-                    EvictLru();
+                    existingNode.Value.ETag = etag;
+                    _lruList.Remove(existingNode);
+                    _lruList.AddFirst(existingNode);
+                }
+                else
+                {
+                    if (_cache.Count >= _maxSize)
+                    {
+                        var lruNode = _lruList.Last;
+                        _cache.Remove(lruNode.Value.Url);
+                        _lruList.RemoveLast();
+                    }
+
+                    var newItem = new CacheItem { Url = url, ETag = etag };
+                    var newNode = _lruList.AddFirst(newItem);
+                    _cache[url] = newNode;
                 }
             }
         }
@@ -106,16 +120,15 @@ namespace GrowthBook.Api
 
             lock (_lock)
             {
-                if (!_cache.ContainsKey(url))
+                if (!_cache.TryGetValue(url, out var node))
                 {
                     return null;
                 }
 
-                string value = _cache[url];
                 _cache.Remove(url);
-                _accessOrder.Remove(url);
+                _lruList.Remove(node);
 
-                return value;
+                return node.Value.ETag;
             }
         }
 
@@ -157,27 +170,8 @@ namespace GrowthBook.Api
             lock (_lock)
             {
                 _cache.Clear();
-                _accessOrder.Clear();
-                _accessCounter = 0;
+                _lruList.Clear();
             }
-        }
-
-        /// <summary>
-        /// Evict the least recently used entry from the cache.
-        /// </summary>
-        private void EvictLru()
-        {
-            if (_accessOrder.Count == 0)
-            {
-                return;
-            }
-
-            // Find the URL with the lowest access counter (LRU)
-            var lruEntry = _accessOrder.OrderBy(kvp => kvp.Value).First();
-            string lruUrl = lruEntry.Key;
-
-            _cache.Remove(lruUrl);
-            _accessOrder.Remove(lruUrl);
         }
     }
 }

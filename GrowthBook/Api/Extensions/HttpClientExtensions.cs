@@ -25,10 +25,10 @@ namespace GrowthBook.Api.Extensions
         }
 
         public static async Task<(IDictionary<string, Feature> Features, bool IsServerSentEventsEnabled, bool IsNotModified)> GetFeaturesFrom(
-            this HttpClient httpClient, 
-            string endpoint, 
-            ILogger logger, 
-            GrowthBookConfigurationOptions config, 
+            this HttpClient httpClient,
+            string endpoint,
+            ILogger logger,
+            GrowthBookConfigurationOptions config,
             CancellationToken cancellationToken,
             LruETagCache etagCache = null,
             IGrowthBookFeatureCache featureCache = null)
@@ -44,45 +44,21 @@ namespace GrowthBook.Api.Extensions
             {
                 try
                 {
-                    // Remove quotes if present (ETag should be stored without quotes)
-                    string etagValue = cachedETag.Trim().Trim('"');
-                    
-                    // Validate ETag is not empty after trimming
-                    if (string.IsNullOrEmpty(etagValue))
-                    {
-                        logger.LogWarning("ETag is empty after trimming for endpoint '{Endpoint}', skipping If-None-Match header", endpoint);
-                    }
-                    else
-                    {
-                        // Check if it's a weak ETag (starts with W/)
-                        bool isWeak = etagValue.StartsWith("W/", StringComparison.OrdinalIgnoreCase);
-                        string tagValue = etagValue;
-                        
-                        if (isWeak)
-                        {
-                            // Remove W/ prefix for weak ETags
-                            tagValue = etagValue.Substring(2).TrimStart().Trim('"');
-                        }
-                        
-                        // EntityTagHeaderValue constructor requires valid unquoted string
-                        // If the tag contains special characters or starts with non-alphanumeric,
-                        // we need to ensure it's properly formatted
-                        // Use Parse method which handles quoted strings properly
-                        string etagString = isWeak ? $"W/\"{tagValue}\"" : $"\"{tagValue}\"";
-                        var etagHeader = System.Net.Http.Headers.EntityTagHeaderValue.Parse(etagString);
-                        request.Headers.IfNoneMatch.Add(etagHeader);
-                        logger.LogDebug("Sending conditional request with ETag for endpoint '{Endpoint}' with ETag '{ETag}' (weak: {IsWeak})", endpoint, tagValue, isWeak);
-                    }
+                    // Parse the cached ETag (stored in HTTP header format)
+                    var etagHeader = System.Net.Http.Headers.EntityTagHeaderValue.Parse(cachedETag);
+                    request.Headers.IfNoneMatch.Add(etagHeader);
+                    logger.LogDebug("Sending conditional request for endpoint '{Endpoint}' with ETag '{ETag}'",
+                        endpoint, cachedETag);
                 }
                 catch (FormatException ex)
                 {
                     logger.LogWarning(ex, "Invalid ETag format '{ETag}' for endpoint '{Endpoint}', skipping If-None-Match header", cachedETag, endpoint);
-                    // Continue without If-None-Match header
+                    // Remove invalid ETag from cache
+                    etagCache.Remove(endpoint);
                 }
             }
 
             var response = await httpClient.SendAsync(request, cancellationToken);
-
             var statusCode = (int)response.StatusCode;
 
             // Handle 304 Not Modified - refresh cache TTL with existing data
@@ -106,7 +82,7 @@ namespace GrowthBook.Api.Extensions
             if (!response.IsSuccessStatusCode)
             {
                 var message = $"Failed to load features from API. HTTP {statusCode} ({response.StatusCode}) for endpoint '{endpoint}'";
-                
+
                 if (statusCode == 400)
                 {
                     message += ". This usually indicates an invalid ClientKey.";
@@ -119,7 +95,7 @@ namespace GrowthBook.Api.Extensions
                 {
                     message += ". Access forbidden - check your ClientKey permissions.";
                 }
-                
+
                 logger.LogError(message);
                 throw new FeatureLoadException(message, statusCode);
             }
@@ -137,12 +113,10 @@ namespace GrowthBook.Api.Extensions
             // Extract and store ETag in LRU cache
             if (etagCache != null && response.Headers.ETag != null)
             {
-                string etag = response.Headers.ETag.Tag?.Trim('"');
-                if (!string.IsNullOrEmpty(etag))
-                {
-                    etagCache.Put(endpoint, etag);
-                    logger.LogDebug("Stored ETag in cache for endpoint '{Endpoint}' with ETag '{ETag}'", endpoint, etag);
-                }
+                string etagString = response.Headers.ETag.ToString();
+                etagCache.Put(endpoint, etagString);
+                logger.LogDebug("Stored ETag in cache for endpoint '{Endpoint}': '{ETag}'",
+                    endpoint, etagString);
             }
 
             return (features, isServerSentEventsEnabledFromResponse, false);
