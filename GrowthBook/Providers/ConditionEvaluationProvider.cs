@@ -551,7 +551,7 @@ namespace GrowthBook.Providers
             {
                 attrNumber = attributeValue.Value<double>();
             }
-            else if (!double.TryParse(attributeValue.ToString(), out attrNumber))
+            else if (!double.TryParse(attributeValue.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out attrNumber))
             {
                 return false;
             }
@@ -560,7 +560,7 @@ namespace GrowthBook.Providers
             {
                 condNumber = conditionValue.Value<double>();
             }
-            else if (!double.TryParse(conditionValue.ToString(), out condNumber))
+            else if (!double.TryParse(conditionValue.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out condNumber))
             {
                 return false;
             }

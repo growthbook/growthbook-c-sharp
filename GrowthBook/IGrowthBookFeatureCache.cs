@@ -38,5 +38,14 @@ namespace GrowthBook
         /// <param name="cancellationToken">Used to monitor whether the cache action should be cancelled.</param>
         /// <returns>A <see cref="Task"/> that represents the refresh action.</returns>
         Task RefreshWith(IDictionary<string, Feature> features, CancellationToken? cancellationToken = null);
+
+        /// <summary>
+        /// Refreshes the cache expiration TTL without updating the cached features.
+        /// This is useful when receiving a 304 Not Modified response, indicating that
+        /// the cached data is still valid and the expiration should be extended.
+        /// </summary>
+        /// <param name="cancellationToken">Used to monitor whether the refresh action should be cancelled.</param>
+        /// <returns>A <see cref="Task"/> that represents the refresh action.</returns>
+        Task RefreshExpiration(CancellationToken? cancellationToken = null);
     }
 }

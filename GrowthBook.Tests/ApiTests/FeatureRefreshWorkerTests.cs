@@ -11,6 +11,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using GrowthBook.Api;
+using GrowthBook.Api.Extensions;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using NSubstitute;
@@ -70,6 +71,55 @@ public class FeatureRefreshWorkerTests : ApiUnitTest<FeatureRefreshWorker>
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             return _handler(request, cancellationToken);
+        }
+    }
+
+    public class ETagTestDelegatingHandler : DelegatingHandler
+    {
+        private readonly string _etag;
+        private readonly bool _return304OnSecondCall;
+        private int _callCount = 0;
+        private readonly string _jsonContent;
+
+        public ETagTestDelegatingHandler(string etag, string jsonContent, bool return304OnSecondCall = false)
+        {
+            _etag = etag;
+            _jsonContent = jsonContent;
+            _return304OnSecondCall = return304OnSecondCall;
+        }
+
+        public bool ReceivedIfNoneMatchHeader { get; private set; }
+        public string ReceivedETagValue { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            // Check if If-None-Match header is present
+            if (request.Headers.IfNoneMatch != null && request.Headers.IfNoneMatch.Count > 0)
+            {
+                ReceivedIfNoneMatchHeader = true;
+                var etagHeader = request.Headers.IfNoneMatch.First();
+                ReceivedETagValue = etagHeader.Tag?.Trim('"');
+            }
+
+            _callCount++;
+
+            // Return 304 on second call if configured
+            if (_return304OnSecondCall && _callCount > 1)
+            {
+                var notModifiedResponse = new HttpResponseMessage(HttpStatusCode.NotModified);
+                notModifiedResponse.Headers.ETag = new System.Net.Http.Headers.EntityTagHeaderValue($"\"{_etag}\"");
+                return Task.FromResult(notModifiedResponse);
+            }
+
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(_jsonContent)
+            };
+
+            // Add ETag header to response
+            response.Headers.ETag = new System.Net.Http.Headers.EntityTagHeaderValue($"\"{_etag}\"");
+
+            return Task.FromResult(response);
         }
     }
 
@@ -170,5 +220,101 @@ public class FeatureRefreshWorkerTests : ApiUnitTest<FeatureRefreshWorker>
         cachedResults.TryDequeue(out var second);
         first.Should().BeEquivalentTo(_httpClientFactory.ResponseContent, "because those are the features returned from the initial API call");
         second.Should().BeEquivalentTo(_httpClientFactory.StreamResponseContent, "because those are the features returned from the server sent events API call");
+    }
+
+    [Fact]
+    public async Task ETagIsStoredWhenResponseContainsETagHeader()
+    {
+        _config.PreferServerSentEvents = false;
+        var etag = "test-etag-123";
+        var json = JsonConvert.SerializeObject(new FeaturesResponse { Features = _availableFeatures });
+        var handler = new ETagTestDelegatingHandler(etag, json);
+        var httpClient = new HttpClient(handler);
+        httpClient.DefaultRequestHeaders.Accept.ParseAdd("application/json");
+
+        var etagCache = new LruETagCache();
+        var endpoint = "https://cdn.growthbook.io/api/features/test-key";
+
+        _cache
+            .RefreshWith(Arg.Any<IDictionary<string, Feature>>(), Arg.Any<CancellationToken?>())
+            .Returns(Task.CompletedTask);
+
+        var (features, _, _) = await httpClient.GetFeaturesFrom(endpoint, _logger, _config, CancellationToken.None, etagCache, _cache);
+
+        features.Should().BeEquivalentTo(_availableFeatures);
+        etagCache.Get(endpoint).Should().Be($"\"{etag}\"");
+    }
+
+    [Fact]
+    public async Task IfNoneMatchHeaderIsSentWhenETagIsCached()
+    {
+        _config.PreferServerSentEvents = false;
+        var etag = "test-etag-456";
+        var json = JsonConvert.SerializeObject(new FeaturesResponse { Features = _availableFeatures });
+        var handler = new ETagTestDelegatingHandler(etag, json);
+        var httpClient = new HttpClient(handler);
+        httpClient.DefaultRequestHeaders.Accept.ParseAdd("application/json");
+
+        var etagCache = new LruETagCache();
+        var endpoint = "https://cdn.growthbook.io/api/features/test-key";
+
+        // First call - store ETag
+        await httpClient.GetFeaturesFrom(endpoint, _logger, _config, CancellationToken.None, etagCache, _cache);
+
+        // Second call - should send If-None-Match header
+        handler.ReceivedIfNoneMatchHeader.Should().BeFalse("because first call doesn't have cached ETag yet");
+        
+        await httpClient.GetFeaturesFrom(endpoint, _logger, _config, CancellationToken.None, etagCache, _cache);
+
+        handler.ReceivedIfNoneMatchHeader.Should().BeTrue("because second call should have cached ETag");
+        handler.ReceivedETagValue.Should().Be(etag);
+    }
+
+    [Fact]
+    public async Task NotModifiedResponseRefreshesCacheExpirationWithoutUpdatingFeatures()
+    {
+        _config.PreferServerSentEvents = false;
+        var etag = "test-etag-789";
+        var json = JsonConvert.SerializeObject(new FeaturesResponse { Features = _availableFeatures });
+        var handler = new ETagTestDelegatingHandler(etag, json, return304OnSecondCall: true);
+        var httpClient = new HttpClient(handler);
+        httpClient.DefaultRequestHeaders.Accept.ParseAdd("application/json");
+
+        var etagCache = new LruETagCache();
+        var endpoint = "https://cdn.growthbook.io/api/features/test-key";
+
+        _cache
+            .GetFeatures(Arg.Any<CancellationToken?>())
+            .Returns(_availableFeatures);
+
+        // First call - store ETag and return features
+        var (features1, _, isNotModified1) = await httpClient.GetFeaturesFrom(endpoint, _logger, _config, CancellationToken.None, etagCache, _cache);
+
+        isNotModified1.Should().BeFalse("because first call should return 200 OK");
+        features1.Should().BeEquivalentTo(_availableFeatures);
+        etagCache.Get(endpoint).Should().Be($"\"{etag}\"", "because ETag should be stored");
+
+        // Second call - should return 304 and refresh expiration
+        var (features2, _, isNotModified2) = await httpClient.GetFeaturesFrom(endpoint, _logger, _config, CancellationToken.None, etagCache, _cache);
+
+        isNotModified2.Should().BeTrue("because server returned 304 Not Modified");
+        features2.Should().BeNull("because 304 response has no body");
+        
+        await _cache.Received(1).RefreshExpiration(Arg.Any<CancellationToken?>());
+    }
+
+    [Fact]
+    public async Task FeatureRefreshWorkerStoresETagOnFirstCall()
+    {
+        _config.PreferServerSentEvents = false;
+
+        _cache
+            .RefreshWith(Arg.Any<IDictionary<string, Feature>>(), Arg.Any<CancellationToken?>())
+            .Returns(Task.CompletedTask);
+
+        var features = await _worker.RefreshCacheFromApi();
+
+        features.Should().BeEquivalentTo(_availableFeatures);
+        await _cache.Received(1).RefreshWith(Arg.Any<IDictionary<string, Feature>>(), Arg.Any<CancellationToken?>());
     }
 }
