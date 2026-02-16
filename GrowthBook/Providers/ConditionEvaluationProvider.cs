@@ -164,7 +164,7 @@ namespace GrowthBook.Providers
         {
             if (attributeValue?.Type != JTokenType.Array)
             {
-                _logger.LogDebug("Unable to match array elements with a non-array type of '{AttributeValueType}'", attributeValue.Type);
+                _logger.LogDebug("Unable to match array elements with a non-array type of '{AttributeValueType}'", attributeValue?.Type);
                 return false;
             }
 
@@ -515,7 +515,7 @@ namespace GrowthBook.Providers
             // Fall back to string comparison
             var attrString = attributeValue.ToString();
             var condString = conditionValue.ToString();
-            
+
             var stringComparisonResult = string.Compare(attrString, condString, StringComparison.Ordinal);
             return meetsComparison(stringComparisonResult);
         }
