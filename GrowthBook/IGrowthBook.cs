@@ -88,14 +88,6 @@ namespace GrowthBook
         IDictionary<string, ExperimentAssignment> GetAllResults();
 
         /// <summary>
-        /// Subscribes to a GrowthBook instance to be alerted every time GrowthBook.run is called.
-        /// This is different from the tracking callback since it also fires when a user is not included in an experiment.
-        /// </summary>
-        /// <param name="callback">The callback to trigger when GrowthBook.run is called.</param>
-        /// <returns>An action callback that can be used to unsubscribe.</returns>
-        Action Subscribe(Action<Experiment, ExperimentResult> callback);
-
-        /// <summary>
         /// Evaluates a feature and returns a feature result.
         /// </summary>
         /// <param name="key">The feature key.</param>
