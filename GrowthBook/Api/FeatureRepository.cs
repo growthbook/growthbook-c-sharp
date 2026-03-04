@@ -53,7 +53,7 @@ namespace GrowthBook.Api
                 // This decouples the task from the current SynchronizationContext, preventing potential
                 // deadlocks and ensuring the cache refresh does not block the calling thread.
                 var actualCancellationToken = cancellationToken ?? CancellationToken.None;
-                var refreshTask = Task.Run(() => _backgroundRefreshWorker.RefreshCacheFromApi(cancellationToken), actualCancellationToken);
+                var refreshTask = Task.Run(() => _backgroundRefreshWorker.RefreshCacheFromApi(actualCancellationToken), actualCancellationToken);
                 // When there aren't any features in the cache to begin with, we need to just wait until
                 // that has been officially refreshed to proceed (otherwise the caller gets nothing up front
                 // and has no way of determining when to check back). The other way to wait is if they explicitly

@@ -31,7 +31,6 @@ namespace GrowthBook
     [JsonSerializable(typeof(Dictionary<string, StickyAssignmentsDocument>))]
     [JsonSerializable(typeof(RemoteEvaluationRequest))]
     [JsonSerializable(typeof(RemoteEvaluationResponse))]
-    [JsonSerializable(typeof(Dictionary<string, Feature>))]
     [JsonSerializable(typeof(Dictionary<string, string?>))]
     [JsonSerializable(typeof(Dictionary<string, string>))]
     [JsonSerializable(typeof(IDictionary<string, string>))]

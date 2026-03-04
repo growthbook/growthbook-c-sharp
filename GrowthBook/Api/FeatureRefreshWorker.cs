@@ -16,12 +16,6 @@ namespace GrowthBook.Api
 {
     public class FeatureRefreshWorker : IGrowthBookFeatureRefreshWorker, IDisposable
     {
-        private sealed class FeaturesResponse
-        {
-            public int FeatureCount => Features?.Count ?? 0;
-            public Dictionary<string, Feature>? Features { get; set; }
-            public string? EncryptedFeatures { get; set; }
-        }
 
         private readonly ILogger<FeatureRefreshWorker> _logger;
         private readonly IHttpClientFactory _httpClientFactory;
