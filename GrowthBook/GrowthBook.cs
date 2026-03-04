@@ -328,7 +328,7 @@ namespace GrowthBook
         /// <param name="key">The feature key.</param>
         /// <param name="cancellationToken">Optional cancellation token.</param>
         /// <returns><c>true</c> if the feature is on; otherwise, <c>false</c>.</returns>
-        public async Task<bool> IsOnAsync(string key, CancellationToken cancellationToken = default)
+        public async Task<bool> IsOnAsync(string key, CancellationToken? cancellationToken = null)
         {
             await LoadFeatures(cancellationToken: cancellationToken);
             var result = EvaluateFeature(key);
@@ -342,7 +342,7 @@ namespace GrowthBook
         /// <param name="key">The feature key.</param>
         /// <param name="cancellationToken">Optional cancellation token.</param>
         /// <returns><c>true</c> if the feature is off; otherwise, <c>false</c>.</returns>
-        public async Task<bool> IsOffAsync(string key, CancellationToken cancellationToken = default)
+        public async Task<bool> IsOffAsync(string key, CancellationToken? cancellationToken = null)
         {
             var on = await IsOnAsync(key, cancellationToken);
             return !on;
@@ -1181,41 +1181,6 @@ namespace GrowthBook
             catch (Exception ex)
             {
                 _logger?.LogWarning(ex, "Failed to trigger remote evaluation, continuing with cached features");
-            }
-        }
-
-        /// <summary>
-        /// Notifies all synchronous and asynchronous subscribers about a feature or experiment evaluation result.
-        /// </summary>
-        /// <param name="experiment">The experiment that was evaluated (null if feature evaluation).</param>
-        /// <param name="result">The result of the evaluation.</param>
-        private void NotifySubscribers(Experiment experiment, ExperimentResult result)
-        {
-            foreach (var subscriber in _subscribers)
-            {
-                try
-                {
-                    subscriber(experiment, result);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Encountered unhandled exception in synchronous subscriber.");
-                }
-            }
-
-            foreach (var asyncSubscriber in _asyncSubscribers)
-            {
-                _ = Task.Run(async () =>
-                {
-                    try
-                    {
-                        await asyncSubscriber(experiment, result).ConfigureAwait(false);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogError(ex, "Encountered unhandled exception in asynchronous subscriber.");
-                    }
-                });
             }
         }
 
