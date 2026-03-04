@@ -41,9 +41,9 @@ namespace GrowthBook
         private readonly Context _context;
         private JObject _previousAttributes;
         private IDictionary<string, int> _previousForcedVariations;
-        private readonly List<Action<Experiment, ExperimentResult>> _subscribers 
+        private readonly List<Action<Experiment, ExperimentResult>> _subscribers
             = new List<Action<Experiment, ExperimentResult>>();
-        private readonly List<Func<Experiment, ExperimentResult, Task>> _asyncSubscribers 
+        private readonly List<Func<Experiment, ExperimentResult, Task>> _asyncSubscribers
             = new List<Func<Experiment, ExperimentResult, Task>>();
 
         /// <summary>
@@ -1111,7 +1111,7 @@ namespace GrowthBook
                 }
             }
         }
-        
+
          /// <summary>
         /// Validates that remote evaluation configuration is correct.
         /// </summary>
@@ -1202,7 +1202,8 @@ namespace GrowthBook
             };
         }
 
-                /// <summary>
+
+        /// <summary>
         /// Notifies all synchronous and asynchronous subscribers about a feature or experiment evaluation result.
         /// </summary>
         /// <param name="experiment">The experiment that was evaluated (null if feature evaluation).</param>
