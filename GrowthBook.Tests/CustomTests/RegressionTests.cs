@@ -2,11 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using FluentAssertions;
 using Microsoft.AspNetCore.Mvc;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
 using Xunit;
 
 namespace GrowthBook.Tests.CustomTests;
@@ -45,7 +45,7 @@ public class RegressionTests : UnitTest
     public void GetFeatureValueShouldReturnForcedValueEvenWhenTracksIsNull()
     {
         const string FeatureName = "test-tracks-default-value";
-        var forcedResult = JToken.FromObject(true);
+        var forcedResult = JsonValue.Create(true);
 
         var feature = new Feature { DefaultValue = false, Rules = new List<FeatureRule> { new() { Force = forcedResult } } };
 
@@ -126,7 +126,7 @@ public class RegressionTests : UnitTest
                 ]
             }";
 
-        var feature = JsonConvert.DeserializeObject<Feature>(featureJson);
+        var feature = JsonSerializer.Deserialize<Feature>(featureJson, GrowthBookJsonContext.Default.Feature);
 
         var staticFeatures = new Dictionary<string, Feature>
         {

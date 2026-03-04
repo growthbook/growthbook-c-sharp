@@ -5,6 +5,7 @@ using System.Text;
 using System.Threading.Tasks;
 using FluentAssertions;
 using Xunit;
+using Xunit.Sdk;
 
 namespace GrowthBook.Tests.StandardTests.GrowthBookTests;
 
@@ -30,6 +31,8 @@ public class FeatureTests : UnitTest
         var gb = new GrowthBook(testCase.Context);
         var actualResult = gb.EvalFeature(testCase.FeatureName);
 
-        actualResult.Should().BeEquivalentTo(testCase.ExpectedResult, "because every expected property value should have a matching actual property value");
+        actualResult.Should().BeEquivalentTo(
+            testCase.ExpectedResult,
+            "because every expected property value should have a matching actual property value " + testCase.TestName);
     }
 }

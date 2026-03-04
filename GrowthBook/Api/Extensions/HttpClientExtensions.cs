@@ -1,29 +1,35 @@
 using System;
 using System.Collections.Generic;
 using System.Net.Http;
-using System.Text;
-using Newtonsoft.Json;
 using System.Threading.Tasks;
 using System.Threading;
 using System.IO;
 using GrowthBook.Extensions;
-using Newtonsoft.Json.Linq;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.Logging;
 using System.Linq;
 using GrowthBook.Exceptions;
 
 namespace GrowthBook.Api.Extensions
 {
+    /// <summary>
+    /// Extension methods for HttpClient to fetch and stream GrowthBook features.
+    /// </summary>
     public static class HttpClientExtensions
     {
-        private sealed class FeaturesResponse
-        {
-            public int FeatureCount => Features?.Count ?? 0;
-            public Dictionary<string, Feature> Features { get; set; }
-            public string EncryptedFeatures { get; set; }
-        }
 
-        public static async Task<(IDictionary<string, Feature> Features, bool IsServerSentEventsEnabled)> GetFeaturesFrom(this HttpClient httpClient, string endpoint, ILogger logger, GrowthBookConfigurationOptions config, CancellationToken cancellationToken)
+        /// <summary>
+        /// Fetch features from the GrowthBook API endpoint.
+        /// </summary>
+        /// <param name="httpClient">HttpClient instance</param>
+        /// <param name="endpoint">API endpoint</param>
+        /// <param name="logger">Logger instance</param>
+        /// <param name="config">GrowthBook configuration</param>
+        /// <param name="cancellationToken">Cancellation token</param>
+        /// <returns>Tuple with features dictionary and SSE enabled flag</returns>
+        /// <exception cref="FeatureLoadException">Thrown on HTTP errors</exception>
+        public static async Task<(IDictionary<string, Feature>? Features, bool IsServerSentEventsEnabled)> GetFeaturesFrom(this HttpClient httpClient, string endpoint, ILogger logger, GrowthBookConfigurationOptions config, CancellationToken cancellationToken)
         {
             var response = await httpClient.GetAsync(endpoint, cancellationToken);
 
@@ -31,7 +37,7 @@ namespace GrowthBook.Api.Extensions
             {
                 var statusCode = (int)response.StatusCode;
                 var message = $"Failed to load features from API. HTTP {statusCode} ({response.StatusCode}) for endpoint '{endpoint}'";
-                
+
                 if (statusCode == 400)
                 {
                     message += ". This usually indicates an invalid ClientKey.";
@@ -44,7 +50,7 @@ namespace GrowthBook.Api.Extensions
                 {
                     message += ". Access forbidden - check your ClientKey permissions.";
                 }
-                
+
                 logger.LogError(message);
                 throw new FeatureLoadException(message, statusCode);
             }
@@ -62,7 +68,16 @@ namespace GrowthBook.Api.Extensions
             return (features, isServerSentEventsEnabled);
         }
 
-        public static async Task UpdateWithFeaturesStreamFrom(this HttpClient httpClient, string endpoint, ILogger logger, GrowthBookConfigurationOptions config, CancellationToken cancellationToken, Func<IDictionary<string, Feature>, Task> onFeaturesRetrieved)
+        /// <summary>
+        /// Stream feature updates from SSE endpoint.
+        /// </summary>
+        /// <param name="httpClient">HttpClient instance</param>
+        /// <param name="endpoint">API endpoint</param>
+        /// <param name="logger">Logger instance</param>
+        /// <param name="config">GrowthBook configuration</param>
+        /// <param name="cancellationToken">Cancellation token</param>
+        /// <param name="onFeaturesRetrieved">Callback for processed features</param>
+        public static async Task UpdateWithFeaturesStreamFrom(this HttpClient httpClient, string endpoint, ILogger logger, GrowthBookConfigurationOptions config, CancellationToken cancellationToken, Func<IDictionary<string, Feature>?, Task> onFeaturesRetrieved)
         {
             var stream = await httpClient.GetStreamAsync(endpoint);
 
@@ -102,14 +117,22 @@ namespace GrowthBook.Api.Extensions
             }
         }
 
-        private static IDictionary<string, Feature> ParseFeaturesFrom(string json, ILogger logger, GrowthBookConfigurationOptions config)
+        /// <summary>
+        /// Parse features JSON, including decryption if necessary.
+        /// </summary>
+        /// <param name="json">Raw JSON string</param>
+        /// <param name="logger">Logger instance</param>
+        /// <param name="config">GrowthBook configuration</param>
+        /// <returns>Dictionary of features or null</returns>
+        private static IDictionary<string, Feature>? ParseFeaturesFrom(string json, ILogger logger, GrowthBookConfigurationOptions config)
         {
-            var featuresResponse = JsonConvert.DeserializeObject<FeaturesResponse>(json);
+            var featuresResponseTypeInfo = GrowthBookJsonContext.Default.FeaturesResponse;
+            var featuresResponse = JsonSerializer.Deserialize(json, featuresResponseTypeInfo);
 
-            if (featuresResponse.EncryptedFeatures.IsNullOrWhitespace())
+            if (featuresResponse == null || featuresResponse.EncryptedFeatures.IsNullOrWhitespace())
             {
-                logger.LogInformation($"API response JSON contained no encrypted features, returning '{featuresResponse.FeatureCount}' unencrypted features");
-                return featuresResponse.Features;
+                logger.LogInformation($"API response JSON contained no encrypted features, returning '{featuresResponse?.FeatureCount}' unencrypted features");
+                return featuresResponse?.Features;
             }
 
             logger.LogInformation("API response JSON contained encrypted features, decrypting them now");
@@ -119,9 +142,14 @@ namespace GrowthBook.Api.Extensions
 
             logger.LogDebug($"Completed attempt to decrypt features which resulted in plaintext value of '{decryptedFeaturesJson}'");
 
-            var jsonObject = JObject.Parse(decryptedFeaturesJson);
-
-            return jsonObject.ToObject<Dictionary<string, Feature>>();
+            if (string.IsNullOrWhiteSpace(decryptedFeaturesJson))
+            {
+                logger.LogWarning("Decrypted features JSON is null or empty");
+                return null;
+            }
+            var jsonNode = JsonNode.Parse(decryptedFeaturesJson);
+            var dictionaryTypeInfo = GrowthBookJsonContext.Default.DictionaryStringFeature;
+            return jsonNode?.Deserialize(dictionaryTypeInfo);
         }
     }
 }

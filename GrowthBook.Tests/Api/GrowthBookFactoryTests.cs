@@ -22,11 +22,19 @@ namespace GrowthBook.Tests.Api
         public void GrowthBookFactory_CreateForUser_ShouldMergeAttributes()
         {
             // Arrange
-            var baseContext = new Context(new { environment = "production" }) { ClientKey = "test-key" };
+            var baseContext = new Context(new Dictionary<string, object>
+            {
+                ["environment"] = "production"
+            })
+            { ClientKey = "test-key" };
             using var factory = new GrowthBookFactory(baseContext);
 
             // Act
-            using var growthBook = factory.CreateForUser(new { userId = "user123", role = "admin" });
+            using var growthBook = factory.CreateForUser(new Dictionary<string, object>
+            {
+                ["userId"] = "user123",
+                ["role"] = "admin"
+            });
 
             // Assert
             growthBook.Attributes["environment"].ToString().Should().Be("production");
@@ -38,7 +46,11 @@ namespace GrowthBook.Tests.Api
         public void GrowthBookFactory_CreateForUser_WithNullAttributes_ShouldUseBaseContextOnly()
         {
             // Arrange
-            var baseContext = new Context(new { environment = "test" }) { ClientKey = "test-key" };
+            var baseContext = new Context(new Dictionary<string, object>
+            {
+                ["environment"] = "test"
+            })
+            { ClientKey = "test-key" };
             using var factory = new GrowthBookFactory(baseContext);
 
             // Act

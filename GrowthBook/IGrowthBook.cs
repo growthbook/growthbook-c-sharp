@@ -24,14 +24,13 @@ namespace GrowthBook
         /// <returns>True if the feature is off.</returns>
         bool IsOff(string key);
 
-
         /// <summary>
         /// Asynchronously checks whether a feature is on (enabled) for the current context.
         /// </summary>
         /// <param name="key">The feature key.</param>
         /// <param name="cancellationToken">Optional cancellation token.</param>
         /// <returns>A task that resolves to <c>true</c> if the feature is on; otherwise, <c>false</c>.</returns>
-        Task<bool> IsOnAsync(string key, CancellationToken cancellationToken = default);
+        Task<bool> IsOnAsync(string key, CancellationToken? cancellationToken = null);
 
         /// <summary>
         /// Asynchronously checks whether a feature is off (disabled) for the current context.
@@ -39,7 +38,7 @@ namespace GrowthBook
         /// <param name="key">The feature key.</param>
         /// <param name="cancellationToken">Optional cancellation token.</param>
         /// <returns>A task that resolves to <c>true</c> if the feature is off; otherwise, <c>false</c>.</returns>
-        Task<bool> IsOffAsync(string key, CancellationToken cancellationToken = default);
+        Task<bool> IsOffAsync(string key, CancellationToken? cancellationToken = null);
 
         /// <summary>
         /// Subscribes a synchronous callback to feature evaluations.
@@ -112,14 +111,14 @@ namespace GrowthBook
         /// </summary>
         /// <param name="experiment">The experiment to evaluate.</param>
         /// <returns>The experiment result.</returns>
-        ExperimentResult Run(Experiment experiment);
+        ExperimentResult? Run(Experiment experiment);
 
         /// <summary>
         /// Loads all available features from the API and caches them for faster retrieval.
         /// </summary>
         /// <param name="options">An optional set of choices that affect how the features will be loaded.</param>
         /// <returns>A <see cref="Task"/> that represents the feature retrieval action.</returns>
-        Task LoadFeatures(GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null);
+        Task LoadFeatures(GrowthBookRetrievalOptions? options = null, CancellationToken? cancellationToken = null);
 
         /// <summary>
         /// Loads all available features from the API and returns detailed result information.
@@ -127,6 +126,6 @@ namespace GrowthBook
         /// <param name="options">An optional set of choices that affect how the features will be loaded.</param>
         /// <param name="cancellationToken">The cancellation token for this operation.</param>
         /// <returns>A <see cref="FeatureLoadResult"/> indicating success or failure with details.</returns>
-        Task<FeatureLoadResult> LoadFeaturesWithResult(GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null);
+        Task<FeatureLoadResult> LoadFeaturesWithResult(GrowthBookRetrievalOptions? options = null, CancellationToken? cancellationToken = null);
     }
 }

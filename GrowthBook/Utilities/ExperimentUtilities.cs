@@ -3,12 +3,13 @@ using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Linq;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using System.Web;
 using GrowthBook.Extensions;
 using GrowthBook.Services;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
 
 namespace GrowthBook.Utilities
 {
@@ -21,9 +22,9 @@ namespace GrowthBook.Utilities
         /// <param name="url">The url to search.</param>
         /// <param name="numVariations">The number of variations in the experiment.</param>
         /// <returns>The overridden variation id, or null if not found.</returns>
-        public static int? GetQueryStringOverride(string id, string url, int numVariations)
+        public static int? GetQueryStringOverride(string? id, string? url, int? numVariations)
         {
-            if (url.IsNullOrWhitespace())
+            if (url == null || url.IsNullOrWhitespace())
             {
                 return null;
             }
@@ -62,7 +63,7 @@ namespace GrowthBook.Utilities
         /// <param name="userId">The user id string to check.</param>
         /// <param name="nSpace">The namespace to check.</param>
         /// <returns>True if the userid is within the experiment namespace.</returns>
-        public static bool InNamespace(string userId, Namespace nSpace)
+        public static bool InNamespace(string? userId, Namespace nSpace)
         {
             var n = HashUtilities.Hash("__" + nSpace.Id, userId, 1);
             return n >= nSpace.Start && n < nSpace.End;
@@ -91,7 +92,7 @@ namespace GrowthBook.Utilities
         /// <param name="coverage">The experiment's coverage (defaults to 1).</param>
         /// <param name="weights">Optional list of variant weights.</param>
         /// <returns>A list of bucket ranges.</returns>
-        public static IEnumerable<BucketRange> GetBucketRanges(int numVariations, double coverage = 1f, IEnumerable<double> weights = null)
+        public static IEnumerable<BucketRange> GetBucketRanges(int numVariations, double coverage = 1f, IEnumerable<double>? weights = null)
         {
             if (coverage < 0)
             {
@@ -151,7 +152,7 @@ namespace GrowthBook.Utilities
         /// <param name="number">The number to verify.</param>
         /// <param name="range">The bucket range.</param>
         /// <returns>True if the value is in the range, false otherwise.</returns>
-        public static bool InRange(double number, BucketRange range) => number >= range.Start && number < range.End;
+        public static bool InRange(double? number, BucketRange range) => number >= range.Start && number < range.End;
 
         public static bool IsUrlTargeted(string url, IEnumerable<UrlPattern> urlPatterns)
         {
@@ -220,7 +221,7 @@ namespace GrowthBook.Utilities
             // If a protocol is missing, but a host is specified, add `https://` to the front
             // Use "_____" as the wildcard since `*` is not a valid hostname in some browsers
 
-            var currentPattern = pattern.Pattern;
+            var currentPattern = pattern.Pattern ?? "";
 
             var match = Regex.Match(currentPattern, "^([^:/?]*)\\.");
 
@@ -244,15 +245,15 @@ namespace GrowthBook.Utilities
 
             if (expectedUri.ContainsHashInPath())
             {
-                comparisons.Add((actual.GetHashContents(), expectedUri.GetHashContents(), false));
+                comparisons.Add((actual.GetHashContents() ?? string.Empty, expectedUri.GetHashContents() ?? string.Empty, false));
             }
 
             var actualQueryParameters = HttpUtility.ParseQueryString(actual.Query);
             var expectedQueryParameters = HttpUtility.ParseQueryString(expectedUri.Query);
 
-            for(var i = 0; i < expectedQueryParameters.Count; i++)
+            for (var i = 0; i < expectedQueryParameters.Count; i++)
             {
-                comparisons.Add((actualQueryParameters[i] ?? string.Empty, expectedQueryParameters[i], false));
+                comparisons.Add((actualQueryParameters[i] ?? string.Empty, expectedQueryParameters[i] ?? string.Empty, false));
             }
 
             // Any failure means the whole thing fails.
@@ -278,12 +279,12 @@ namespace GrowthBook.Utilities
             return regex.IsMatch(actual);
         }
 
-        private static Regex GetUrlRegex(UrlPattern pattern)
+        private static Regex? GetUrlRegex(UrlPattern pattern)
         {
             try
             {
-                var match = Regex.IsMatch(pattern.Pattern, @"([^\\])\/");
-                var escaped = Regex.Replace(pattern.Pattern, @"([^\\])\/", @"$1\/");
+                var match = Regex.IsMatch(pattern.Pattern ?? "", @"([^\\])\/");
+                var escaped = Regex.Replace(pattern.Pattern ?? "", @"([^\\])\/", @"$1\/");
 
                 return new Regex(escaped);
             }
@@ -293,27 +294,33 @@ namespace GrowthBook.Utilities
             }
         }
 
-        public static (StickyAssignmentsDocument Document, bool IsChanged) GenerateStickyBucketAssignment(IStickyBucketService stickyBucketService, string attributeName, string attributeValue, IDictionary<string, string> assignments)
+        public static (StickyAssignmentsDocument Document, bool IsChanged) GenerateStickyBucketAssignment(IStickyBucketService stickyBucketService, string? attributeName, string? attributeValue, IDictionary<string, string?> assignments)
         {
             var existingDocument = stickyBucketService is null ? new StickyAssignmentsDocument(attributeName, attributeValue) : stickyBucketService.GetAssignments(attributeName, attributeValue);
-            var newAssignments = new Dictionary<string, string>(existingDocument?.Assignments ?? new Dictionary<string, string>());
+            var newAssignments = new Dictionary<string, string?>(existingDocument?.Assignments ?? new Dictionary<string, string?>());
 
             newAssignments.MergeWith(new[] { assignments });
 
-            var isChanged = JsonConvert.SerializeObject(existingDocument) != JsonConvert.SerializeObject(newAssignments);
             var document = new StickyAssignmentsDocument(attributeName, attributeValue, newAssignments);
+
+            var options = new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull };
+            var existingAssignmentsJson = JsonSerializer.Serialize(existingDocument?.Assignments, GrowthBookJsonContext.Default.DictionaryStringString);
+            var newAssignmentsJson = JsonSerializer.Serialize(document.Assignments, GrowthBookJsonContext.Default.DictionaryStringString);
+
+
+            var isChanged = existingAssignmentsJson != newAssignmentsJson;
 
             return (document, isChanged);
         }
 
-        public static StickyBucketVariation GetStickyBucketVariation(Experiment experiment, int bucketVersion, int minBucketVersion, IList<VariationMeta> meta, JObject attributes, IDictionary<string, StickyAssignmentsDocument> document)
+        public static StickyBucketVariation GetStickyBucketVariation(Experiment experiment, int bucketVersion, int minBucketVersion, IList<VariationMeta> meta, JsonObject? attributes, IDictionary<string, StickyAssignmentsDocument> document)
         {
             var id = GetStickyBucketExperimentKey(experiment.Key, experiment.BucketVersion);
             var assignments = GetStickyBucketAssignments(attributes, document, experiment.HashAttribute, experiment.FallbackAttribute);
 
             if (experiment.MinBucketVersion > 0)
             {
-                for(var i = 0; i <= experiment.MinBucketVersion; i++)
+                for (var i = 0; i <= experiment.MinBucketVersion; i++)
                 {
                     var blockedKey = GetStickyBucketExperimentKey(experiment.Key, i);
 
@@ -330,13 +337,13 @@ namespace GrowthBook.Utilities
             }
 
             var variationIndex = FindVariationIndex(meta, variationKey);
-                        
+
             return new StickyBucketVariation(variationIndex, isVersionBlocked: false);
         }
 
-        private static IDictionary<string, string> GetStickyBucketAssignments(JObject attributes, IDictionary<string, StickyAssignmentsDocument> stickyAssignmentDocs, string hashAttribute, string fallbackAttribute)
+        private static IDictionary<string, string?> GetStickyBucketAssignments(JsonObject? attributes, IDictionary<string, StickyAssignmentsDocument> stickyAssignmentDocs, string hashAttribute, string? fallbackAttribute)
         {
-            var mergedAssignments = new Dictionary<string, string>();
+            var mergedAssignments = new Dictionary<string, string?>();
 
             if (stickyAssignmentDocs is null)
             {
@@ -349,7 +356,7 @@ namespace GrowthBook.Utilities
             (var hashAttributeWithFallback, var hashValueWithFallback) = attributes.GetHashAttributeAndValue(fallbackAttribute, default);
             var fallbackKey = new StickyAssignmentsDocument(hashAttributeWithFallback, hashValueWithFallback);
 
-            var pendingAssignments = new List<IDictionary<string, string>>();
+            var pendingAssignments = new List<IDictionary<string, string?>>();
 
             // We're grabbing any fallback values first so that the original can override them if present as well.
 
@@ -366,9 +373,9 @@ namespace GrowthBook.Utilities
             return mergedAssignments.MergeWith(pendingAssignments);
         }
 
-        private static int FindVariationIndex(IList<VariationMeta> meta, string key)
+        private static int FindVariationIndex(IList<VariationMeta> meta, string? key)
         {
-            for(var i = 0; i < meta.Count; i++)
+            for (var i = 0; i < meta.Count; i++)
             {
                 if (meta[i].Key == key)
                 {
@@ -379,6 +386,6 @@ namespace GrowthBook.Utilities
             return -1;
         }
 
-        public static string GetStickyBucketExperimentKey(string key, int bucketVersion) => $"{key}__{bucketVersion}";
+        public static string GetStickyBucketExperimentKey(string? key, int bucketVersion) => $"{key}__{bucketVersion}";
     }
 }

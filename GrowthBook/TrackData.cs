@@ -12,11 +12,11 @@ namespace GrowthBook
         /// <summary>
         /// The tracked experiment.
         /// </summary>
-        public Experiment Experiment { get; set; }
+        public Experiment? Experiment { get; set; }
 
         /// <summary>
         /// The tracked experiment result.
         /// </summary>
-        public ExperimentResult Result { get; set; }
+        public ExperimentResult? Result { get; set; }
     }
 }

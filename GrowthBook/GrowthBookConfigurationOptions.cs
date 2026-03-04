@@ -24,12 +24,12 @@ namespace GrowthBook
         /// <summary>
         /// The key used to fetch features from the GrowthBook API. Required.
         /// </summary>
-        public string ClientKey { get; set; }
+        public string? ClientKey { get; set; }
 
         /// <summary>
         /// The key used to decrypt encrypted features from the API. Optional unless you use encrypted features.
         /// </summary>
-        public string DecryptionKey { get; set; }
+        public string? DecryptionKey { get; set; }
 
         /// <summary>
         /// In the case where server sent events are available from the API, which would indicate a near-realtime

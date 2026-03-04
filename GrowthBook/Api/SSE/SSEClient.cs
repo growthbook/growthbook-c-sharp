@@ -17,25 +17,25 @@ namespace GrowthBook.Api.SSE
         private readonly IHttpClientFactory _httpClientFactory;
         private readonly string _endpoint;
         private readonly Dictionary<string, string> _headers;
-        private readonly string _httpClientName;
+        private readonly string? _httpClientName;
         private readonly Dictionary<string, Func<SSEEvent, Task>> _eventListeners;
         private readonly SSEEventParser _parser;
 
         private SSEConnectionStatus _connectionStatus;
-        private CancellationTokenSource _cancellationTokenSource;
-        private Task _connectionTask;
-        private string _lastEventId;
+        private CancellationTokenSource? _cancellationTokenSource;
+        private Task? _connectionTask;
+        private string? _lastEventId;
         private int _retryTimeMs = 3000; // Default retry time
         private int _maxRetryAttempts = 10;
         private int _currentRetryAttempt = 0;
 
         public SSEConnectionStatus ConnectionStatus => _connectionStatus;
-        public string LastEventId => _lastEventId;
+        public string? LastEventId => _lastEventId;
 
-        public event Action<SSEConnectionStatus> ConnectionStatusChanged;
-        public event Action<Exception> ConnectionError;
+        public event Action<SSEConnectionStatus>? ConnectionStatusChanged;
+        public event Action<Exception>? ConnectionError;
 
-        public SSEClient(ILogger<SSEClient> logger, IHttpClientFactory httpClientFactory, string endpoint, Dictionary<string, string> headers = null, string httpClientName = null)
+        public SSEClient(ILogger<SSEClient> logger, IHttpClientFactory httpClientFactory, string endpoint, Dictionary<string, string>? headers = null, string? httpClientName = null)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
@@ -52,7 +52,7 @@ namespace GrowthBook.Api.SSE
         /// </summary>
         /// <param name="eventType">Event type to listen for (null for all events)</param>
         /// <param name="handler">Event handler function</param>
-        public void AddEventListener(string eventType, Func<SSEEvent, Task> handler)
+        public void AddEventListener(string? eventType, Func<SSEEvent, Task> handler)
         {
             if (handler == null)
                 throw new ArgumentNullException(nameof(handler));

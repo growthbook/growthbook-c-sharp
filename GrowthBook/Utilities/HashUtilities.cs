@@ -11,7 +11,7 @@ namespace GrowthBook.Utilities
         /// </summary>
         /// <param name="value">The string to hash.</param>
         /// <returns>float between 0 and 1, null if an unsupported version.</returns>
-        public static double? Hash(string seed, string value, int version)
+        public static double? Hash(string seed, string? value, int? version)
         {
             // New hashing algorithm.
 

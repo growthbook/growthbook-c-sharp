@@ -37,6 +37,6 @@ namespace GrowthBook
         /// <param name="features">The features to cache.</param>
         /// <param name="cancellationToken">Used to monitor whether the cache action should be cancelled.</param>
         /// <returns>A <see cref="Task"/> that represents the refresh action.</returns>
-        Task RefreshWith(IDictionary<string, Feature> features, CancellationToken? cancellationToken = null);
+        Task RefreshWith(IDictionary<string, Feature>? features, CancellationToken? cancellationToken = null);
     }
 }

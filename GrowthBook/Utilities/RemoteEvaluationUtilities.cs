@@ -1,10 +1,18 @@
 using System.Collections.Generic;
-using System.Linq;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
+
 
 namespace GrowthBook.Utilities
 {
+
+    internal class CacheKeyData
+    {
+        public JsonObject? Attributes { get; set; }
+        public IDictionary<string, int>? ForcedVariations { get; set; }
+        public string? Url { get; set; }
+    }
     /// <summary>
     /// Utility class for remote evaluation operations including cache key generation.
     /// </summary>
@@ -16,9 +24,12 @@ namespace GrowthBook.Utilities
         /// </summary>
         /// <param name="context">The GrowthBook context</param>
         /// <returns>A cache key string for remote evaluation</returns>
-        public static string GenerateCacheKey(Context context)
+        public static string? GenerateCacheKey(Context context)
         {
             if (context == null || !context.RemoteEval)
+                return null;
+
+            if (!IsValidForRemoteEvaluation(context))
                 return null;
 
             // Base key components
@@ -37,16 +48,16 @@ namespace GrowthBook.Utilities
                 forcedVariations = forcedVariations.Count > 0 ? forcedVariations : null,
                 url = !string.IsNullOrEmpty(context.Url) ? context.Url : null
             };
+            var data = new CacheKeyData
+            {
+                Attributes = relevantAttributes,
+                ForcedVariations = context.ForcedVariations,
+                Url = context.Url
+            };
+            var json = JsonSerializer.Serialize(data, GrowthBookJsonContext.Default.CacheKeyData);
 
-            // Serialize cache context
-            var cacheContextJson = JsonConvert.SerializeObject(cacheContext,
-                new JsonSerializerSettings
-                {
-                    NullValueHandling = NullValueHandling.Ignore,
-                    Formatting = Formatting.None
-                });
 
-            return $"{baseKey}||{cacheContextJson}";
+            return $"{baseKey}||{json}";
         }
 
         /// <summary>
@@ -57,9 +68,9 @@ namespace GrowthBook.Utilities
         /// <param name="cacheKeyAttributes">Attributes to monitor for changes</param>
         /// <returns>True if remote evaluation should be triggered</returns>
         public static bool ShouldTriggerRemoteEvaluation(
-            JObject oldAttributes,
-            JObject newAttributes,
-            string[] cacheKeyAttributes)
+            JsonObject? oldAttributes,
+            JsonObject? newAttributes,
+            string[]? cacheKeyAttributes)
         {
             if (oldAttributes == null && newAttributes == null)
                 return false;
@@ -70,7 +81,7 @@ namespace GrowthBook.Utilities
             // If no cache key attributes specified, monitor all attributes
             if (cacheKeyAttributes == null || cacheKeyAttributes.Length == 0)
             {
-                return !JToken.DeepEquals(oldAttributes, newAttributes);
+                return !JsonNode.DeepEquals(oldAttributes, newAttributes);
             }
 
             // Check only specified cache key attributes for changes
@@ -79,7 +90,7 @@ namespace GrowthBook.Utilities
                 var oldValue = oldAttributes[attributeKey];
                 var newValue = newAttributes[attributeKey];
 
-                if (!JToken.DeepEquals(oldValue, newValue))
+                if (!JsonNode.DeepEquals(oldValue, newValue))
                 {
                     return true;
                 }
@@ -95,8 +106,8 @@ namespace GrowthBook.Utilities
         /// <param name="newForcedVariations">New forced variations</param>
         /// <returns>True if remote evaluation should be triggered</returns>
         public static bool ShouldTriggerRemoteEvaluationForForcedVariations(
-            IDictionary<string, int> oldForcedVariations,
-            IDictionary<string, int> newForcedVariations)
+            IDictionary<string, int>? oldForcedVariations,
+            IDictionary<string, int>? newForcedVariations)
         {
             if (oldForcedVariations == null && newForcedVariations == null)
                 return false;
@@ -122,22 +133,26 @@ namespace GrowthBook.Utilities
         /// <param name="allAttributes">All available attributes</param>
         /// <param name="cacheKeyAttributes">Attributes to include in cache key</param>
         /// <returns>Filtered attributes object</returns>
-        private static JObject GetRelevantAttributes(JObject allAttributes, string[] cacheKeyAttributes)
+        private static JsonObject GetRelevantAttributes(JsonObject? allAttributes, string[]? cacheKeyAttributes)
         {
             if (allAttributes == null)
-                return new JObject();
+                return new JsonObject();
 
             // If no cache key attributes specified, use all attributes
             if (cacheKeyAttributes == null || cacheKeyAttributes.Length == 0)
-                return allAttributes.DeepClone() as JObject;
+                return (allAttributes.DeepClone() as JsonObject)!;
 
             // Filter to only include specified cache key attributes
-            var relevantAttributes = new JObject();
+            var relevantAttributes = new JsonObject();
             foreach (var attributeKey in cacheKeyAttributes)
             {
-                if (allAttributes.TryGetValue(attributeKey, out var value))
+                if (allAttributes.ContainsKey(attributeKey))
                 {
-                    relevantAttributes[attributeKey] = value.DeepClone();
+                    var value = allAttributes[attributeKey];
+                    if (value != null)
+                    {
+                        relevantAttributes[attributeKey] = value.DeepClone();
+                    }
                 }
             }
 

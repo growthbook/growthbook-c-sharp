@@ -3,13 +3,14 @@ using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using FluentAssertions;
 using GrowthBook;
 using GrowthBook.Api;
 using Microsoft.Extensions.Logging;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
 using NSubstitute;
 using Xunit;
 
@@ -24,7 +25,7 @@ namespace GrowthBook.Tests.ApiTests
             var httpClientFactory = Substitute.For<IHttpClientFactory>();
             var service = new RemoteEvaluationService(logger, httpClientFactory);
 
-        
+
             var features = new Dictionary<string, Feature>
             {
                 { "test", new Feature { DefaultValue = true } }
@@ -36,15 +37,16 @@ namespace GrowthBook.Tests.ApiTests
                 DateUpdated = DateTimeOffset.UtcNow
             };
 
-            var responseJson = JsonConvert.SerializeObject(apiResponse);
+            var responseJson = JsonSerializer.Serialize(apiResponse, GrowthBookJsonContext.Default.RemoteEvaluationResponse);
+
 
             var httpClient = CreateHttpClientWithResponse(HttpStatusCode.OK, responseJson);
             httpClientFactory.CreateClient(Arg.Is(ConfiguredClients.DefaultApiClient)).Returns(httpClient);
 
             var request = new RemoteEvaluationRequest
             {
-                Attributes = new JObject { ["id"] = "user_123" },
-                 Url = "https://api.example.com"
+                Attributes = new JsonObject { ["id"] = "user_123" },
+                Url = "https://api.example.com"
             };
             var result = await service.EvaluateAsync("https://api.example.com", "clientKey", request);
 

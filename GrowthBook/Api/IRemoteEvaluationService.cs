@@ -25,10 +25,10 @@ namespace GrowthBook.Api
         /// <exception cref="System.ArgumentException">Thrown when parameters are invalid</exception>
         /// <exception cref="RemoteEvaluationException">Thrown when the remote evaluation fails</exception>
         Task<RemoteEvaluationResponse> EvaluateAsync(
-            string apiHost,
-            string clientKey,
+            string? apiHost,
+            string? clientKey,
             RemoteEvaluationRequest request,
-            IDictionary<string, string> headers = null,
+            IDictionary<string, string>? headers = null,
             CancellationToken cancellationToken = default);
 
         /// <summary>

@@ -5,26 +5,17 @@ using System.Net.Http;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using Newtonsoft.Json.Linq;
-using Newtonsoft.Json;
 using GrowthBook.Extensions;
-using GrowthBook.Providers;
-using System.Linq;
-using System.IO;
 using Microsoft.Extensions.Logging;
 using GrowthBook.Api.Extensions;
 using GrowthBook.Api.SSE;
+using System.Text.Json;
+using System.Linq;
 
 namespace GrowthBook.Api
 {
     public class FeatureRefreshWorker : IGrowthBookFeatureRefreshWorker, IDisposable
     {
-        private sealed class FeaturesResponse
-        {
-            public int FeatureCount => Features?.Count ?? 0;
-            public Dictionary<string, Feature> Features { get; set; }
-            public string EncryptedFeatures { get; set; }
-        }
 
         private readonly ILogger<FeatureRefreshWorker> _logger;
         private readonly IHttpClientFactory _httpClientFactory;
@@ -33,7 +24,7 @@ namespace GrowthBook.Api
         private readonly string _featuresApiEndpoint;
         private readonly string _serverSentEventsApiEndpoint;
         private bool _isServerSentEventsEnabled;
-        private SSEClient _sseClient;
+        private SSEClient? _sseClient;
         private CancellationTokenSource _refreshWorkerCancellation = new CancellationTokenSource();
 
         public FeatureRefreshWorker(ILogger<FeatureRefreshWorker> logger, IHttpClientFactory httpClientFactory, GrowthBookConfigurationOptions config, IGrowthBookFeatureCache cache)
@@ -59,7 +50,7 @@ namespace GrowthBook.Api
             _sseClient?.Disconnect();
         }
 
-        public async Task<IDictionary<string, Feature>> RefreshCacheFromApi(CancellationToken? cancellationToken = null)
+        public async Task<IDictionary<string, Feature>?> RefreshCacheFromApi(CancellationToken? cancellationToken = null)
         {
             _logger.LogInformation("Making an HTTP request to the default Features API endpoint \'{FeaturesApiEndpoint}\'", _featuresApiEndpoint);
 
@@ -112,22 +103,22 @@ namespace GrowthBook.Api
             try
             {
                 _sseClient?.Dispose();
-                
-                var sseLogger = _logger as ILogger<SSEClient> ?? 
+
+                var sseLogger = _logger as ILogger<SSEClient> ??
                     new Microsoft.Extensions.Logging.Abstractions.NullLogger<SSEClient>();
-                
+
                 _sseClient = new SSEClient(sseLogger, _httpClientFactory, _serverSentEventsApiEndpoint, null, ConfiguredClients.ServerSentEventsApiClient);
-                
+
                 // Add general event listener for all events (handles data field)
                 _sseClient.AddEventListener(null, async (sseEvent) =>
                 {
                     if (sseEvent.HasData)
                     {
                         _logger.LogDebug("Received SSE event: {Data}", sseEvent.Data?.Substring(0, Math.Min(sseEvent.Data?.Length ?? 0, 100)));
-                        
-                        var features = GetFeaturesFrom(sseEvent.Data);
+
+                        var features = GetFeaturesFrom(sseEvent.Data ?? "");
                         await _cache.RefreshWith(features, _refreshWorkerCancellation.Token);
-                        
+
                         _logger.LogInformation("Cache has been refreshed with server sent event features");
                     }
                 });
@@ -163,10 +154,14 @@ namespace GrowthBook.Api
         }
 
 
-        private IDictionary<string, Feature> GetFeaturesFrom(string json)
+        private IDictionary<string, Feature>? GetFeaturesFrom(string json)
         {
-            var featuresResponse = JsonConvert.DeserializeObject<FeaturesResponse>(json);
+            var featuresResponse = JsonSerializer.Deserialize(json, GrowthBookJsonContext.Default.FeaturesResponse);
 
+            if (featuresResponse == null)
+            {
+                return null;
+            }
             if (featuresResponse.EncryptedFeatures.IsNullOrWhitespace())
             {
                 _logger.LogInformation("API response JSON contained no encrypted features, returning \'{FeaturesResponseFeatureCount}\' unencrypted features", featuresResponse.FeatureCount);
@@ -176,13 +171,21 @@ namespace GrowthBook.Api
             _logger.LogInformation("API response JSON contained encrypted features, decrypting them now");
             _logger.LogDebug("Attempting to decrypt features with the provided decryption key \'{ConfigDecryptionKey}\'", _config.DecryptionKey);
 
-            var decryptedFeaturesJson = featuresResponse.EncryptedFeatures.DecryptWith(_config.DecryptionKey);
+            var decryptedFeaturesJson = featuresResponse?.EncryptedFeatures?.DecryptWith(_config.DecryptionKey);
 
             _logger.LogDebug("Completed attempt to decrypt features which resulted in plaintext value of \'{DecryptedFeaturesJson}\'", decryptedFeaturesJson);
 
-            var jsonObject = JObject.Parse(decryptedFeaturesJson);
+            if (string.IsNullOrWhiteSpace(decryptedFeaturesJson))
+            {
+                _logger.LogWarning("Decrypted features JSON is null or empty.");
+                return null;
+            }
+            var features = JsonSerializer.Deserialize(
+        decryptedFeaturesJson,
+        GrowthBookJsonContext.Default.DictionaryStringFeature
+    );
 
-            return jsonObject.ToObject<Dictionary<string, Feature>>();
+            return features;
         }
 
         public void Dispose()
