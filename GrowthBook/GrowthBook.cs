@@ -1342,18 +1342,19 @@ namespace GrowthBook
             };
         }
 
+
         /// <summary>
         /// Notifies all synchronous and asynchronous subscribers about a feature or experiment evaluation result.
         /// </summary>
         /// <param name="experiment">The experiment that was evaluated (null if feature evaluation).</param>
         /// <param name="result">The result of the evaluation.</param>
-        private void NotifySubscribers(Experiment? experiment, ExperimentResult result)
+        private void NotifySubscribers(Experiment experiment, ExperimentResult result)
         {
             foreach (var subscriber in _subscribers)
             {
                 try
                 {
-                    subscriber(experiment!, result);
+                    subscriber(experiment, result);
                 }
                 catch (Exception ex)
                 {
@@ -1367,7 +1368,7 @@ namespace GrowthBook
                 {
                     try
                     {
-                        await asyncSubscriber(experiment!, result).ConfigureAwait(false);
+                        await asyncSubscriber(experiment, result).ConfigureAwait(false);
                     }
                     catch (Exception ex)
                     {
