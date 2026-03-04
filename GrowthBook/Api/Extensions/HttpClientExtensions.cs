@@ -36,14 +36,6 @@ namespace GrowthBook.Api.Extensions
             // Create request
             var request = new HttpRequestMessage(HttpMethod.Get, endpoint);
 
-            request.Headers.CacheControl = new System.Net.Http.Headers.CacheControlHeaderValue
-            {
-                MaxAge = TimeSpan.FromSeconds(3600)  // max-age=3600
-            };
-
-            request.Headers.AcceptEncoding.Add(new System.Net.Http.Headers.StringWithQualityHeaderValue("gzip"));
-            request.Headers.AcceptEncoding.Add(new System.Net.Http.Headers.StringWithQualityHeaderValue("deflate"));
-
             var sdkVersion = typeof(GrowthBook).Assembly.GetName().Version?.ToString() ?? "1.0.0";
             var clientKeySuffix = config.ClientKey?.Length >= 4
                 ? config.ClientKey.Substring(config.ClientKey.Length - 4)
@@ -71,8 +63,6 @@ namespace GrowthBook.Api.Extensions
                     etagCache.Remove(endpoint);
                 }
             }
-            // Це робить СЕРВЕР, а не клієнт
-            request.Headers.CacheControl = new System.Net.Http.Headers.CacheControlHeaderValue { MaxAge = TimeSpan.FromHours(1) };
 
             var response = await httpClient.SendAsync(request, cancellationToken);
             var statusCode = (int)response.StatusCode;
