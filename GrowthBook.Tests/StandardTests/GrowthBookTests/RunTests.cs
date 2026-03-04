@@ -11,7 +11,7 @@ using Xunit;
 namespace GrowthBook.Tests.StandardTests.GrowthBookTests;
 
 public class RunTests : UnitTest
-{   
+{
     public class RunTestCase
     {
         [TestPropertyIndex(0)]
@@ -101,7 +101,7 @@ public class RunTests : UnitTest
         });
 
         subscription.Dispose();
-        
+
         var subCounterThree = 0;
 
         gb.Subscribe((experiment, actualResult) =>
