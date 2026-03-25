@@ -300,7 +300,7 @@ namespace GrowthBook.Utilities
 
             newAssignments.MergeWith(new[] { assignments });
 
-            var isChanged = JsonConvert.SerializeObject(existingDocument) != JsonConvert.SerializeObject(newAssignments);
+            var isChanged = JsonConvert.SerializeObject(existingDocument?.Assignments) != JsonConvert.SerializeObject(newAssignments);
             var document = new StickyAssignmentsDocument(attributeName, attributeValue, newAssignments);
 
             return (document, isChanged);
