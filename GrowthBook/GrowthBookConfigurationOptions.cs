@@ -37,5 +37,10 @@ namespace GrowthBook
         /// in lieu of an explicit call to refresh through the API.
         /// </summary>
         public bool PreferServerSentEvents { get; set; }
+
+        /// <summary>
+        /// The maximum number of ETags to store in the LRU cache. Optional. Defaults to 100.
+        /// </summary>
+        public int EtagCacheSize { get; set; } = 100;
     }
 }

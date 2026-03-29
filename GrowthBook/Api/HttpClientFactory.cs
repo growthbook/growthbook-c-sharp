@@ -42,7 +42,12 @@ namespace GrowthBook.Api
 
         protected internal virtual HttpClient CreateClient(Func<HttpClient, HttpClient> configure)
         {
-            var client = new HttpClient
+            var handler = new HttpClientHandler
+            {
+                AutomaticDecompression =
+                    System.Net.DecompressionMethods.GZip | System.Net.DecompressionMethods.Deflate
+            };
+            var client = new HttpClient(handler)
             {
                 Timeout = TimeSpan.FromSeconds(_requestTimeoutInSeconds)
             };
