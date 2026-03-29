@@ -108,8 +108,21 @@ namespace GrowthBook
             }
             else
             {
-                var featureCache = new InMemoryFeatureCache(cacheExpirationInSeconds: 60);
                 var httpClientFactory = new HttpClientFactory(requestTimeoutInSeconds: 60);
+
+                // Use file-based cache (similar to Swift CachingManager)
+                var featureCacheLogger = _loggerFactory.CreateLogger<Api.InMemoryFeatureCache>();
+                var featureCache = new Api.InMemoryFeatureCache(logger: featureCacheLogger);
+
+                if (!string.IsNullOrEmpty(context.CachePath))
+                {
+                    featureCache.SetCustomCachePath(context.CachePath);
+                }
+
+                if (!string.IsNullOrEmpty(context.ClientKey))
+                {
+                    featureCache.SetCacheKey(context.ClientKey);
+                }
 
                 var featureRefreshLogger = _loggerFactory.CreateLogger<FeatureRefreshWorker>();
                 var featureRepositoryLogger = _loggerFactory.CreateLogger<FeatureRepository>();
@@ -124,6 +137,8 @@ namespace GrowthBook
                 }
 
                 _featureRepository = new FeatureRepository(featureRepositoryLogger, featureCache, featureRefreshWorker, remoteEvaluationService);
+
+                _logger.LogDebug("GrowthBook initialized with file-based cache");
             }
         }
 
@@ -328,7 +343,7 @@ namespace GrowthBook
         /// <param name="key">The feature key.</param>
         /// <param name="cancellationToken">Optional cancellation token.</param>
         /// <returns><c>true</c> if the feature is on; otherwise, <c>false</c>.</returns>
-        public async Task<bool> IsOnAsync(string key, CancellationToken cancellationToken = default)
+        public async Task<bool> IsOnAsync(string key, CancellationToken? cancellationToken = null)
         {
             await LoadFeatures(cancellationToken: cancellationToken);
             var result = EvaluateFeature(key);
@@ -342,7 +357,7 @@ namespace GrowthBook
         /// <param name="key">The feature key.</param>
         /// <param name="cancellationToken">Optional cancellation token.</param>
         /// <returns><c>true</c> if the feature is off; otherwise, <c>false</c>.</returns>
-        public async Task<bool> IsOffAsync(string key, CancellationToken cancellationToken = default)
+        public async Task<bool> IsOffAsync(string key, CancellationToken? cancellationToken = null)
         {
             var on = await IsOnAsync(key, cancellationToken);
             return !on;
@@ -398,7 +413,7 @@ namespace GrowthBook
             if (alwaysLoadFeatures)
             {
                 // Fire-and-wait carefully to avoid deadlocks.
-                LoadFeatures().GetAwaiter().GetResult();
+               LoadFeatures().GetAwaiter().GetResult();
             }
 
             var result = EvaluateFeature(key);
@@ -1201,7 +1216,6 @@ namespace GrowthBook
                 Url = Url
             };
         }
-
 
         /// <summary>
         /// Notifies all synchronous and asynchronous subscribers about a feature or experiment evaluation result.

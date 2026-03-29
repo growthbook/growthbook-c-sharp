@@ -31,7 +31,7 @@ namespace GrowthBook
         /// <param name="key">The feature key.</param>
         /// <param name="cancellationToken">Optional cancellation token.</param>
         /// <returns>A task that resolves to <c>true</c> if the feature is on; otherwise, <c>false</c>.</returns>
-        Task<bool> IsOnAsync(string key, CancellationToken cancellationToken = default);
+        Task<bool> IsOnAsync(string key, CancellationToken? cancellationToken = null);
 
         /// <summary>
         /// Asynchronously checks whether a feature is off (disabled) for the current context.
@@ -39,7 +39,7 @@ namespace GrowthBook
         /// <param name="key">The feature key.</param>
         /// <param name="cancellationToken">Optional cancellation token.</param>
         /// <returns>A task that resolves to <c>true</c> if the feature is off; otherwise, <c>false</c>.</returns>
-        Task<bool> IsOffAsync(string key, CancellationToken cancellationToken = default);
+        Task<bool> IsOffAsync(string key, CancellationToken? cancellationToken = null);
 
         /// <summary>
         /// Subscribes a synchronous callback to feature evaluations.
