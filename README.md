@@ -1,5 +1,92 @@
 # GrowthBook - SDK (C#)
 
+## Real-time Updates (SSE) — Background Sync
+
+Enable a lightweight Server-Sent Events (SSE) connection to receive near real-time feature updates. Recommended when admin toggles are frequent or you need low-latency updates. Prefer polling/manual refresh if updates are infrequent or the app is battery/latency-sensitive.
+
+### Initialization
+
+```csharp
+// Example storage helpers for Last-Event-ID persistence
+static class Storage
+{
+    public static Task<string> ReadAsync(string key)
+        => Task.FromResult(System.IO.File.Exists(key) ? System.IO.File.ReadAllText(key) : null);
+    public static Task WriteAsync(string key, string value)
+    {
+        System.IO.File.WriteAllText(key, value ?? string.Empty);
+        return Task.CompletedTask;
+    }
+}
+
+// Load previously persisted Last-Event-ID (optional)
+var lastEventId = await Storage.ReadAsync("gb_last_event_id");
+
+var ctx = new GrowthBook.Context
+{
+    ApiHost = "https://cdn.growthbook.io",
+    ClientKey = "sdk-abc123",
+
+    // Enable streaming updates
+    BackgroundSync = true,
+
+    // Optional request headers for polling/manual fetches
+    RequestHeaders = new Dictionary<string, string>
+    {
+        { "Authorization", "Bearer <token>" }
+    },
+
+    // Optional headers for SSE connection (Authorization, Last-Event-ID)
+    StreamingRequestHeaders = new Dictionary<string, string>
+    {
+        { "Authorization", "Bearer <token>" },
+        { "Last-Event-ID", lastEventId ?? string.Empty } // resume after restarts
+    },
+
+    // Fires on both initial/manual refresh and streaming updates
+    OnFeaturesRefreshed = success =>
+    {
+        if (success)
+        {
+            // e.g., notify listeners / rebuild UI / invalidate caches
+        }
+        else
+        {
+            // network failure or payload issue
+        }
+    },
+
+    // Provides the latest SSE Last-Event-ID so you can persist it
+    OnStreamingEventId = async eventId =>
+    {
+        if (!string.IsNullOrEmpty(eventId))
+        {
+            await Storage.WriteAsync("gb_last_event_id", eventId);
+        }
+    }
+};
+
+using var gb = new GrowthBook.GrowthBook(ctx);
+
+// Perform initial load (subsequent updates will arrive via SSE if enabled)
+await gb.LoadFeatures();
+
+// Example usage
+var isNewCheckoutOn = await gb.IsOnAsync("new-checkout");
+```
+
+### Lifecycle and Teardown
+
+- The SDK maintains a single SSE connection in the background when `BackgroundSync = true`.
+- On network errors, it uses an exponential backoff strategy and auto-reconnects.
+- Persist and reuse `Last-Event-ID` to avoid duplicate events on resume (see `OnStreamingEventId`).
+- Dispose your `GrowthBook` instance on shutdown; the SSE connection will close automatically.
+
+```csharp
+// When your app is shutting down:
+gb.Destroy(); // or gb.Dispose();
+```
+
 ![growthbook banner with csharp logo](https://camo.githubusercontent.com/b6cc3335dcf09b9c3baf421e28ded771ae34a5efaf87b794eef364f10384d904/68747470733a2f2f646f63732e67726f777468626f6f6b2e696f2f696d616765732f6865726f2d6373686172702d73646b2e706e67)
 
 Powerful feature flagging and A/B testing for C# apps using [GrowthBook](https://www.growthbook.io/).
@@ -118,6 +205,57 @@ To load your features from the GrowthBook API use the following example:
         }
     );
     ```
+
+---
+
+### Dependency Injection (ASP.NET Core)
+
+Register GrowthBook in your DI container using the provided extension:
+
+```csharp
+// Program.cs
+using GrowthBook;
+using GrowthBook.Extensions;
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Services.AddLogging();
+
+builder.Services.AddGrowthBook(ctx =>
+{
+    ctx.ApiHost = "https://cdn.growthbook.io";
+    ctx.ClientKey = "YOUR_CLIENT_KEY";
+    ctx.Enabled = true;
+    ctx.Attributes = new Newtonsoft.Json.Linq.JObject();
+});
+
+var app = builder.Build();
+```
+
+Inject and use `IGrowthBook` in your endpoints/services:
+
+```csharp
+app.MapGet("/feature", (IGrowthBook gb) =>
+{
+    var isOn = gb.IsOn("my-feature-key");
+    return Results.Ok(new { on = isOn });
+});
+```
+
+If you need per-user attributes, inject `GrowthBookFactory` and create a user-scoped instance:
+
+```csharp
+app.MapGet("/feature/user", (GrowthBookFactory factory) =>
+{
+    using var gb = factory.CreateForUser(new { id = "user-123", country = "US" });
+    var theme = gb.GetFeatureValue("app-theme", fallback: "light");
+    return Results.Ok(new { theme });
+});
+```
+
+Notes:
+- `GrowthBookFactory` is registered as a singleton.
+- `IGrowthBook` is registered as scoped. For per-request customization, prefer using the factory.
 
 ---
 

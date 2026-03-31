@@ -42,22 +42,6 @@ namespace GrowthBook
         Task<bool> IsOffAsync(string key, CancellationToken cancellationToken = default);
 
         /// <summary>
-        /// Subscribes a synchronous callback to feature evaluations.
-        /// The callback is invoked every time a feature or experiment is evaluated.
-        /// </summary>
-        /// <param name="callback">The callback to invoke after each evaluation.</param>
-        /// <returns>An <see cref="IDisposable"/> that can be disposed to unsubscribe.</returns>
-        IDisposable Subscribe(Action<Experiment, ExperimentResult> callback);
-
-        /// <summary>
-        /// Subscribes an asynchronous callback to feature evaluations.
-        /// The callback is awaited asynchronously in a fire-and-forget manner without blocking.
-        /// </summary>
-        /// <param name="callback">The asynchronous callback to invoke after each evaluation.</param>
-        /// <returns>An <see cref="IDisposable"/> that can be disposed to unsubscribe.</returns>
-        IDisposable SubscribeAsync(Func<Experiment, ExperimentResult, Task> callback);
-
-        /// <summary>
         /// Gets the value of a feature cast to the specified type. This is a blocking operation and should not be used from a UI thread.
         /// </summary>
         /// <typeparam name="T"></typeparam>
