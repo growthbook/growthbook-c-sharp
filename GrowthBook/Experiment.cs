@@ -129,6 +129,11 @@ namespace GrowthBook
         public bool PersistQueryString { get; set; }
 
         /// <summary>
+        /// Custom fields defined in the GrowthBook UI for this experiment.
+        /// </summary>
+        public IDictionary<string, object> CustomFields { get; set; }
+
+        /// <summary>
         /// Returns the experiment variations cast to the specified type.
         /// </summary>
         /// <typeparam name="T"></typeparam>
@@ -151,9 +156,24 @@ namespace GrowthBook
                     && Key == objExp.Key
                     && object.Equals(Namespace, objExp.Namespace)
                     && JToken.DeepEquals(Variations, objExp.Variations)
-                    && ((Weights == null && objExp.Weights == null) || (Weights == null || objExp.Weights == null ? false : Weights.SequenceEqual(objExp.Weights)));
+                    && ((Weights == null && objExp.Weights == null) || (Weights == null || objExp.Weights == null ? false : Weights.SequenceEqual(objExp.Weights)))
+                    && DictionariesEqual(CustomFields, objExp.CustomFields);
             }
             return false;
+        }
+
+        private static bool DictionariesEqual(IDictionary<string, object> dict1, IDictionary<string, object> dict2)
+        {
+            if (dict1 == null && dict2 == null) return true;
+            if (dict1 == null || dict2 == null) return false;
+            if (dict1.Count != dict2.Count) return false;
+
+            foreach (var kvp in dict1)
+            {
+                if (!dict2.TryGetValue(kvp.Key, out var value2)) return false;
+                if (!Equals(kvp.Value, value2)) return false;
+            }
+            return true;
         }
 
         public override int GetHashCode()
