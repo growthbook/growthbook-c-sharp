@@ -492,9 +492,14 @@ namespace GrowthBook.Providers
         /// <returns>True if the comparison is satisfied, false if attribute is null or comparison fails.</returns>
         private bool EvaluateComparison(JToken attributeValue, JToken conditionValue, Func<int, bool> meetsComparison)
         {
-            // Null/missing attributes should never satisfy comparison operators
+            // When attribute is missing, treat as 0 for numeric comparisons (matching spec behavior)
             if (attributeValue.IsNull())
             {
+                if (conditionValue.Type == JTokenType.Integer || conditionValue.Type == JTokenType.Float)
+                {
+                    var nullAttrCondNumber = conditionValue.Value<double>();
+                    return meetsComparison(((double)0).CompareTo(nullAttrCondNumber));
+                }
                 return false;
             }
 
