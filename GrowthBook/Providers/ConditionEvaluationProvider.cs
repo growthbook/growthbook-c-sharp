@@ -127,9 +127,15 @@ namespace GrowthBook.Providers
         /// <param name="conditionValue">The condition value to check.</param>
         /// <param name="attributeValue">The attribute value to check.</param>
         /// <returns>True if the condition value matches the attribute value.</returns>
-        private bool EvalConditionValue(JToken conditionValue, JToken attributeValue, JObject savedGroups)
+        private bool EvalConditionValue(JToken conditionValue, JToken attributeValue, JObject savedGroups, Boolean insensitive = false)
         {
             _logger.LogDebug("Evaluating condition value \'{ConditionValue}\'", conditionValue);
+
+            // Simple equality comparison with optional case-insensitivity
+            if (insensitive && conditionValue.Type == JTokenType.String && attributeValue.Type == JTokenType.String)
+            {
+                return conditionValue.ToString().ToLower().Equals(attributeValue.ToString().ToLower());
+            }
 
             if (conditionValue.Type == JTokenType.Object)
             {
@@ -214,15 +220,24 @@ namespace GrowthBook.Providers
 
             if (op == "$regex")
             {
-                try
-                {
-                    return Regex.IsMatch(attributeValue?.ToString(), conditionValue?.ToString());
-                }
-                catch (ArgumentException)
-                {
-                    return false;
-                }
+                return EvalRegex(attributeValue, conditionValue, RegexOptions.None);
             }
+            if (op == "$regexi")
+            {
+                return EvalRegex(attributeValue, conditionValue, RegexOptions.IgnoreCase);
+
+            }
+            if (op == "$notRegex")
+            {
+                return !EvalRegex(attributeValue, conditionValue, RegexOptions.None);
+
+            }
+            if (op == "$notRegexi")
+            {
+                return !EvalRegex(attributeValue, conditionValue, RegexOptions.IgnoreCase);
+
+            }
+
             if (op == "$nregex")
             {
                 try
@@ -242,6 +257,14 @@ namespace GrowthBook.Providers
                 }
                 return IsIn(conditionValue, attributeValue, savedGroups);
             }
+            if (op == "$ini")
+            {
+                if (conditionValue.Type != JTokenType.Array)
+                {
+                    return false;
+                }
+                return IsIn(conditionValue, attributeValue, savedGroups, true);
+            }
             if (op == "$nin")
             {
                 if (conditionValue.Type != JTokenType.Array)
@@ -250,29 +273,22 @@ namespace GrowthBook.Providers
                 }
                 return !IsIn(conditionValue, attributeValue, savedGroups);
             }
-            if (op == "$all")
+            if (op == "$nini")
             {
                 if (conditionValue.Type != JTokenType.Array)
                 {
                     return false;
                 }
-                if (attributeValue?.Type != JTokenType.Array)
-                {
-                    return false;
-                }
+                return !IsIn(conditionValue, attributeValue, savedGroups, true);
+            }
+            if (op == "$all")
+            {
+                return IsInAll(conditionValue, attributeValue, savedGroups,  false);
+            }
 
-                var conditionList = (JArray)conditionValue;
-                var attributeList = (JArray)attributeValue;
-
-                foreach (JToken condition in conditionList)
-                {
-                    if (!attributeList.Any(x => EvalConditionValue(condition, x, savedGroups)))
-                    {
-                        return false;
-                    }
-                }
-
-                return true;
+            if (op == "$alli")
+            {
+                return IsInAll(conditionValue, attributeValue, savedGroups,  true);
             }
 
             if (op == "$elemMatch")
@@ -401,8 +417,28 @@ namespace GrowthBook.Providers
             return true;
         }
 
-        private bool IsIn(JToken conditionValue, JToken actualValue, JObject savedGroups)
+        private bool EvalRegex(JToken attributeValue, JToken conditionValue, RegexOptions regexOptions)
         {
+            try
+            {
+                return Regex.IsMatch(
+                    attributeValue?.ToString() ?? string.Empty,
+                    conditionValue?.ToString() ?? string.Empty,
+                    regexOptions);
+            }
+            catch (ArgumentException)
+            {
+                return false;
+            }
+        }
+
+        private bool IsIn(JToken conditionValue, JToken actualValue, JObject savedGroups, Boolean insensitive = false)
+        {
+            JToken СaseFold(JToken value) =>
+                (insensitive && value.Type == JTokenType.String)
+                    ? value.ToString().ToLower()
+                    : value;
+
             if (actualValue?.Type == JTokenType.Array)
             {
                 _logger.LogDebug("Evaluating whether the specified value is in an array");
@@ -410,30 +446,41 @@ namespace GrowthBook.Providers
                 var conditionValues = new HashSet<JToken>(conditionValue);
                 var actualValues = new HashSet<JToken>(actualValue);
 
-                conditionValues.IntersectWith(actualValues);
-
-                return conditionValues.Any();
+                return actualValues.Any(actual =>
+                    conditionValues.Any(conditial =>
+                        JToken.DeepEquals(СaseFold(actual), СaseFold(conditial))));
             }
             else if (conditionValue is JArray array)
             {
-                return array.Any(x => x.Equals(actualValue));
+                return array.Any(x => JToken.DeepEquals(СaseFold(x), СaseFold(actualValue)));
             }
-            else
+
+            return false;
+        }
+
+        private bool IsInAll(JToken conditionValue, JToken attributeValue, JObject savedGroups, Boolean insensitive)
+        {
+            if (conditionValue.Type != JTokenType.Array)
             {
-                _logger.LogDebug("Evaluating whether the specified value is equal to or contained within the actual value");
+                return false;
+            }
+            if (attributeValue?.Type != JTokenType.Array)
+            {
+                return false;
+            }
 
-                if (conditionValue == actualValue)
-                {
-                    return true;
-                }
+            var conditionList = (JArray)conditionValue;
+            var attributeList = (JArray)attributeValue;
 
-                if (conditionValue.IsNullOrWhitespace() || actualValue.IsNullOrWhitespace())
+            foreach (JToken condition in conditionList)
+            {
+                if (!attributeList.Any(x => EvalConditionValue(condition, x, savedGroups, insensitive)))
                 {
                     return false;
                 }
-
-                return conditionValue.ToString().Contains(actualValue.ToString());
             }
+
+            return true;
         }
 
         private static bool CompareVersions(JToken left, JToken right, Func<int, bool> meetsComparison)
