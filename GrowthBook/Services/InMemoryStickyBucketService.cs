@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -7,7 +8,7 @@ namespace GrowthBook.Services
 {
     public class InMemoryStickyBucketService : IStickyBucketService
     {
-        private readonly IDictionary<string, StickyAssignmentsDocument> _cachedDocuments = new Dictionary<string, StickyAssignmentsDocument>();
+        private readonly ConcurrentDictionary<string, StickyAssignmentsDocument> _cachedDocuments = new ConcurrentDictionary<string, StickyAssignmentsDocument>();
 
         public IDictionary<string, StickyAssignmentsDocument> GetAllAssignments(IEnumerable<string> attributes)
         {
