@@ -32,8 +32,9 @@ namespace GrowthBook.Api
         private readonly IGrowthBookFeatureCache _cache;
         private readonly string _featuresApiEndpoint;
         private readonly string _serverSentEventsApiEndpoint;
-        private bool _isServerSentEventsEnabled;
+        private volatile bool _isServerSentEventsEnabled;
         private SSEClient _sseClient;
+        private readonly object _sseClientLock = new object();
         private CancellationTokenSource _refreshWorkerCancellation = new CancellationTokenSource();
 
         public FeatureRefreshWorker(ILogger<FeatureRefreshWorker> logger, IHttpClientFactory httpClientFactory, GrowthBookConfigurationOptions config, IGrowthBookFeatureCache cache)
@@ -56,7 +57,10 @@ namespace GrowthBook.Api
         public void Cancel()
         {
             _refreshWorkerCancellation.Cancel();
-            _sseClient?.Disconnect();
+            lock (_sseClientLock)
+            {
+                _sseClient?.Disconnect();
+            }
         }
 
         public async Task<IDictionary<string, Feature>> RefreshCacheFromApi(CancellationToken? cancellationToken = null)
@@ -89,20 +93,23 @@ namespace GrowthBook.Api
 
         private void EnsureCorrectRefreshModeIsActive()
         {
-            if (_isServerSentEventsEnabled)
+            lock (_sseClientLock)
             {
-                if (_sseClient == null || _sseClient.ConnectionStatus == SSEConnectionStatus.Disconnected)
+                if (_isServerSentEventsEnabled)
                 {
-                    _logger.LogDebug("Server sent events are enabled but not connected, starting SSE client now");
-                    StartSSEClient();
+                    if (_sseClient == null || _sseClient.ConnectionStatus == SSEConnectionStatus.Disconnected)
+                    {
+                        _logger.LogDebug("Server sent events are enabled but not connected, starting SSE client now");
+                        StartSSEClient();
+                    }
                 }
-            }
-            else
-            {
-                if (_sseClient != null && _sseClient.ConnectionStatus != SSEConnectionStatus.Disconnected)
+                else
                 {
-                    _logger.LogDebug("Server sent events are disabled but client is connected, disconnecting now");
-                    _sseClient.Disconnect();
+                    if (_sseClient != null && _sseClient.ConnectionStatus != SSEConnectionStatus.Disconnected)
+                    {
+                        _logger.LogDebug("Server sent events are disabled but client is connected, disconnecting now");
+                        _sseClient.Disconnect();
+                    }
                 }
             }
         }
@@ -112,22 +119,22 @@ namespace GrowthBook.Api
             try
             {
                 _sseClient?.Dispose();
-                
-                var sseLogger = _logger as ILogger<SSEClient> ?? 
+
+                var sseLogger = _logger as ILogger<SSEClient> ??
                     new Microsoft.Extensions.Logging.Abstractions.NullLogger<SSEClient>();
-                
+
                 _sseClient = new SSEClient(sseLogger, _httpClientFactory, _serverSentEventsApiEndpoint, null, ConfiguredClients.ServerSentEventsApiClient);
-                
+
                 // Add general event listener for all events (handles data field)
                 _sseClient.AddEventListener(null, async (sseEvent) =>
                 {
                     if (sseEvent.HasData)
                     {
                         _logger.LogDebug("Received SSE event: {Data}", sseEvent.Data?.Substring(0, Math.Min(sseEvent.Data?.Length ?? 0, 100)));
-                        
+
                         var features = GetFeaturesFrom(sseEvent.Data);
                         await _cache.RefreshWith(features, _refreshWorkerCancellation.Token);
-                        
+
                         _logger.LogInformation("Cache has been refreshed with server sent event features");
                     }
                 });
@@ -188,7 +195,10 @@ namespace GrowthBook.Api
         public void Dispose()
         {
             Cancel();
-            _sseClient?.Dispose();
+            lock (_sseClientLock)
+            {
+                _sseClient?.Dispose();
+            }
             _refreshWorkerCancellation?.Dispose();
         }
     }
