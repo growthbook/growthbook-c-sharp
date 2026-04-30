@@ -27,6 +27,7 @@ namespace GrowthBook
     {
         private readonly bool _qaMode;
         private readonly Dictionary<string, ExperimentAssignment> _assigned;
+        private readonly object _assignedLock = new object();
         private readonly ConcurrentDictionary<string, byte> _tracked;
         private Action<Experiment, ExperimentResult> _trackingCallback;
         private bool _disposedValue;
@@ -38,6 +39,7 @@ namespace GrowthBook
         private readonly JObject _savedGroups;
         private readonly ILoggerFactory _loggerFactory;
         private readonly bool _ownsLoggerFactory;
+        private readonly bool _ownsFeatureRepository;
         private readonly Context _context;
         private JObject _previousAttributes;
         private IDictionary<string, int> _previousForcedVariations;
@@ -105,6 +107,7 @@ namespace GrowthBook
             if (context.FeatureRepository != null)
             {
                 _featureRepository = context.FeatureRepository;
+                _ownsFeatureRepository = false;
             }
             else
             {
@@ -124,6 +127,7 @@ namespace GrowthBook
                 }
 
                 _featureRepository = new FeatureRepository(featureRepositoryLogger, featureCache, featureRefreshWorker, remoteEvaluationService);
+                _ownsFeatureRepository = true;
             }
         }
 
@@ -171,11 +175,17 @@ namespace GrowthBook
                     Features.Clear();
                     ForcedVariations = null;
                     _trackingCallback = null;
-                    _assigned.Clear();
+                    lock (_assignedLock)
+                    {
+                        _assigned.Clear();
+                    }
                     _tracked.Clear();
                     _subscribers.Clear();
                     _asyncSubscribers.Clear();
-                    _featureRepository.Cancel();
+                    if (_ownsFeatureRepository)
+                    {
+                        _featureRepository.Cancel();
+                    }
 
                     if (_ownsLoggerFactory && _loggerFactory is IDisposable disposableFactory)
                     {
@@ -419,7 +429,10 @@ namespace GrowthBook
         /// <inheritdoc />
         public IDictionary<string, ExperimentAssignment> GetAllResults()
         {
-            return _assigned;
+            lock (_assignedLock)
+            {
+                return new Dictionary<string, ExperimentAssignment>(_assigned);
+            }
         }
 
         /// <inheritdoc />
@@ -689,31 +702,34 @@ namespace GrowthBook
 
         private void TryAssignExperimentResult(Experiment experiment, ExperimentResult result)
         {
-            var assignment = new ExperimentAssignment { Experiment = experiment, Result = result };
-            bool shouldFireCallbacks = false;
-
-            // Always record the assignment locally for GetAllResults()
-            if (!_assigned.TryGetValue(experiment.Key, out ExperimentAssignment prev)
-                || prev.Result.InExperiment != result.InExperiment
-                || prev.Result.VariationId != result.VariationId)
+            lock (_assignedLock)
             {
-                _assigned[experiment.Key] = assignment;
-                shouldFireCallbacks = true;
-            }
+                var assignment = new ExperimentAssignment { Experiment = experiment, Result = result };
+                bool shouldFireCallbacks = false;
 
-            // Also use repository tracking if available (for preventing duplicate callbacks across instances)
-            if (_featureRepository != null)
-            {
-                if (!_featureRepository.HasIdenticalAssignment(experiment.Key, assignment))
+                // Always record the assignment locally for GetAllResults()
+                if (!_assigned.TryGetValue(experiment.Key, out ExperimentAssignment prev)
+                    || prev.Result.InExperiment != result.InExperiment
+                    || prev.Result.VariationId != result.VariationId)
                 {
-                    _featureRepository.RecordAssignment(experiment.Key, assignment);
+                    _assigned[experiment.Key] = assignment;
+                    shouldFireCallbacks = true;
                 }
-            }
 
-            // Fire subscription callbacks if needed
-            if (shouldFireCallbacks)
-            {
-                NotifySubscribers(experiment, result);
+                // Also use repository tracking if available (for preventing duplicate callbacks across instances)
+                if (_featureRepository != null)
+                {
+                    if (!_featureRepository.HasIdenticalAssignment(experiment.Key, assignment))
+                    {
+                        _featureRepository.RecordAssignment(experiment.Key, assignment);
+                    }
+                }
+
+                // Fire subscription callbacks if needed
+                if (shouldFireCallbacks)
+                {
+                    NotifySubscribers(experiment, result);
+                }
             }
         }
 
