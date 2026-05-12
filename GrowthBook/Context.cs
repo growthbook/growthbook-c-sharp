@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using GrowthBook.Plugin;
 using GrowthBook.Services;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
@@ -129,6 +130,11 @@ namespace GrowthBook
         public IGrowthBookFeatureRepository FeatureRepository { get; set; }
 
         /// <summary>
+        /// Optional list of plugins to receive experiment and feature evaluation events.
+        /// </summary>
+        public List<IGrowthBookPlugin> Plugins { get; set; }
+
+        /// <summary>
         /// A logger factory implementation that will enable logging throughout the SDK. Optional.
         /// </summary>
         public ILoggerFactory LoggerFactory { get; set; }
@@ -195,6 +201,7 @@ namespace GrowthBook
                 SavedGroups = this.SavedGroups?.DeepClone() as JObject,
                 QaMode = this.QaMode,
                 TrackingCallback = this.TrackingCallback,
+                Plugins = this.Plugins?.ToList(),
                 FeatureRepository = this.FeatureRepository,
                 LoggerFactory = this.LoggerFactory,
                 CachePath = this.CachePath,
