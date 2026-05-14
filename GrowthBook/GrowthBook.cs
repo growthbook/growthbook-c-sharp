@@ -38,6 +38,7 @@ namespace GrowthBook
         private readonly JObject _savedGroups;
         private readonly ILoggerFactory _loggerFactory;
         private readonly bool _ownsLoggerFactory;
+        private readonly bool _ownsFeatureRepository;
         private readonly Context _context;
         private JObject _previousAttributes;
         private IDictionary<string, int> _previousForcedVariations;
@@ -105,11 +106,13 @@ namespace GrowthBook
             if (context.FeatureRepository != null)
             {
                 _featureRepository = context.FeatureRepository;
+                _ownsFeatureRepository = false;
             }
             else
             {
-                var featureCache = new InMemoryFeatureCache(cacheExpirationInSeconds: 60);
+                var featureCache = context.FeatureCache ?? new InMemoryFeatureCache(cacheExpirationInSeconds: 60);
                 var httpClientFactory = new HttpClientFactory(requestTimeoutInSeconds: 60);
+                _ownsFeatureRepository = true;
 
                 var featureRefreshLogger = _loggerFactory.CreateLogger<FeatureRefreshWorker>();
                 var featureRepositoryLogger = _loggerFactory.CreateLogger<FeatureRepository>();
@@ -175,7 +178,10 @@ namespace GrowthBook
                     _tracked.Clear();
                     _subscribers.Clear();
                     _asyncSubscribers.Clear();
-                    _featureRepository.Cancel();
+                    if (_ownsFeatureRepository)
+                    {
+                        _featureRepository.Cancel();
+                    }
 
                     if (_ownsLoggerFactory && _loggerFactory is IDisposable disposableFactory)
                     {

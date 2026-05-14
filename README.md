@@ -281,6 +281,9 @@ public class Context
     /// A repository implementation for retrieving and caching features. Optional.
     public IGrowthBookFeatureRepository FeatureRepository { get; set; }
 
+    /// A custom cache implementation (e.g. Redis-backed) to replace the default InMemoryFeatureCache. Optional.
+    public IGrowthBookFeatureCache FeatureCache { get; set; }
+
     /// A logger factory implementation that will enable logging throughout the SDK. Optional.
     public ILoggerFactory LoggerFactory { get; set; }
 
