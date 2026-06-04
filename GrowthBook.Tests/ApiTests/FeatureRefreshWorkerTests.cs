@@ -7,6 +7,7 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
@@ -243,7 +244,7 @@ public class FeatureRefreshWorkerTests : ApiUnitTest<FeatureRefreshWorker>
     {
         var etag = "test-etag";
         var endpoint = "https://cdn.growthbook.io/api/features/sdk-test";
-        var json = JsonConvert.SerializeObject(new FeaturesResponse { Features = _availableFeatures });
+        var json = JsonSerializer.Serialize(new FeaturesResponse { Features = _availableFeatures }, GrowthBookJsonContext.Default.FeaturesResponse);
         var handler = new ETagTestDelegatingHandler(etag, json);
         var httpClient = new HttpClient(handler);
         var etagCache = new LruETagCache();
@@ -262,7 +263,7 @@ public class FeatureRefreshWorkerTests : ApiUnitTest<FeatureRefreshWorker>
     public async Task PublicGetFeaturesFromOverloadDoesNotRequireETagCache()
     {
         var endpoint = "https://cdn.growthbook.io/api/features/sdk-test";
-        var json = JsonConvert.SerializeObject(new FeaturesResponse { Features = _availableFeatures });
+        var json = JsonSerializer.Serialize(new FeaturesResponse { Features = _availableFeatures }, GrowthBookJsonContext.Default.FeaturesResponse);
         var handler = new ETagTestDelegatingHandler("public-overload-etag", json);
         var httpClient = new HttpClient(handler);
 
@@ -276,7 +277,7 @@ public class FeatureRefreshWorkerTests : ApiUnitTest<FeatureRefreshWorker>
     public async Task NotModifiedResponseReturnsCachedFeaturesWithoutReplacingCache()
     {
         var etag = "test-etag-304";
-        var json = JsonConvert.SerializeObject(new FeaturesResponse { Features = _availableFeatures });
+        var json = JsonSerializer.Serialize(new FeaturesResponse { Features = _availableFeatures }, GrowthBookJsonContext.Default.FeaturesResponse);
         var handler = new ETagTestDelegatingHandler(etag, json, returnNotModifiedOnSecondCall: true);
         var worker = new FeatureRefreshWorker(_logger, new ETagHttpClientFactory(handler), _config, _cache);
 

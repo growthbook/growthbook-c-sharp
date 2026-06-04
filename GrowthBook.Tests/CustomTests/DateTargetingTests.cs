@@ -5,7 +5,6 @@ using System.Text.Json.Nodes;
 using System.Threading;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
-using Newtonsoft.Json.Linq;
 using Xunit;
 using GrowthBookSdk = GrowthBook;
 
@@ -132,7 +131,7 @@ namespace GrowthBook.Tests.CustomTests
                 var context = new Context
                 {
                     Enabled = true,
-                    Attributes = JObject.FromObject(new { priceString = "99.50" }),
+                    Attributes = JsonNode.Parse(@"{""priceString"": ""99.50""}") as JsonObject,
                     Features = new Dictionary<string, Feature>
                     {
                         ["price-feature"] = new Feature
@@ -142,11 +141,11 @@ namespace GrowthBook.Tests.CustomTests
                             {
                                 new FeatureRule
                                 {
-                                    Condition = JObject.Parse(@"{
+                                    Condition = JsonNode.Parse(@"{
                                         ""priceString"": {
                                             ""$lt"": ""100.00""
                                         }
-                                    }"),
+                                    }") as JsonObject,
                                     Force = true
                                 }
                             }

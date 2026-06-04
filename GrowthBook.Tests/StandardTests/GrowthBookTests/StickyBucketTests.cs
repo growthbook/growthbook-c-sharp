@@ -154,7 +154,7 @@ public class StickyBucketTests : UnitTest
             new VariationMeta { Key = "1" },
             new VariationMeta { Key = "2" }
         };
-        var attributes = JObject.FromObject(new { id = "i123" });
+        var attributes = JsonNode.Parse(@"{""id"": ""i123""}") as JsonObject;
         var documents = new Dictionary<string, StickyAssignmentsDocument>
         {
             ["id||i123"] = new StickyAssignmentsDocument(
