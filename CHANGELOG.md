@@ -23,6 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   where those logs are retained or shipped elsewhere.
 - Stopped logging feature payload bodies, both the raw API response and the decrypted one. A payload carries saved
   groups, which are typically lists of user identifiers, so it is personal data. Character counts are logged instead.
+## [1.3.0]
+
+- Added `FileBasedFeatureCache` — a persistent, file-backed cache implementation inspired by the Swift CachingManager pattern. Supports custom cache paths, SHA256-based key isolation, and `ClearCache()`.
+- Added `Context.FeatureCache` — allows injecting a custom `IGrowthBookFeatureCache` (e.g. `FileBasedFeatureCache` or a Redis-backed implementation) without replacing the entire `FeatureRepository`.
+- Removed `Context.CachePath` — replaced by `FileBasedFeatureCache(cachePath: ...)` constructor parameter.
 
 ## [1.2.0]
 

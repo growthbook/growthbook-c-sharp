@@ -12,6 +12,7 @@ Powerful feature flagging and A/B testing for C# apps using [GrowthBook](https:/
 - [Installation](#installation)
 - [Integration](#integration)
 - [Usage Guide](#usage-guide)
+- [Feature Caching](#feature-caching)
 - [Sticky Bucketing](#sticky-bucketing)
 - [Models](#models)
 - [Streaming Updates](#streaming-updates)
@@ -200,6 +201,47 @@ or create it when initializing
 
 ---
 
+## Feature Caching
+
+By default, GrowthBook uses an in-memory cache (`InMemoryFeatureCache`). You can replace it via `Context.FeatureCache`.
+
+### File-based cache (survives app restarts)
+
+```csharp
+var cache = new FileBasedFeatureCache(
+    cacheExpirationInSeconds: 60,
+    cachePath: "/var/cache/myapp",
+    cacheKey: context.ClientKey
+);
+
+var growthBook = new GrowthBook.GrowthBook(new Context
+{
+    ClientKey = "YOUR_CLIENT_KEY",
+    FeatureCache = cache
+});
+```
+
+### Custom cache (e.g. Redis)
+
+```csharp
+public class RedisFeatureCache : IGrowthBookFeatureCache
+{
+    public bool IsCacheExpired => /* check Redis TTL */;
+    public Task<IDictionary<string, Feature>> GetFeatures(CancellationToken? cancellationToken = null) => /* read from Redis */;
+    public Task RefreshWith(IDictionary<string, Feature> features, CancellationToken? cancellationToken = null) => /* write to Redis */;
+}
+```
+
+```csharp
+var context = new Context
+{
+    ClientKey = "YOUR_CLIENT_KEY",
+    FeatureCache = new RedisFeatureCache()
+};
+```
+
+---
+
 ## Sticky Bucketing
 Implement a `StickyBucketService`:
 
@@ -284,8 +326,9 @@ public class Context
     /// A logger factory implementation that will enable logging throughout the SDK. Optional.
     public ILoggerFactory LoggerFactory { get; set; }
 
-    /// Custom cache directory path for the cache manager. Uses system temp directory if not specified.
-    public string CachePath { get; set; }
+    /// A cache implementation that overrides the default InMemoryFeatureCache. Optional.
+    /// Use this to provide FileBasedFeatureCache or a custom Redis-backed implementation.
+    public IGrowthBookFeatureCache FeatureCache { get; set; }
 }
 ```
 
