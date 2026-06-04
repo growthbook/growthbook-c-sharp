@@ -60,7 +60,8 @@ namespace GrowthBook.Providers
                         break;
 
                     default:
-                        if (!EvalConditionValue(innerCondition.Value, GetPath(attributes, innerCondition.Key), savedGroups))
+                        var attrValue = GetPath(attributes, innerCondition.Key, out bool attrFound);
+                        if (!EvalConditionValue(innerCondition.Value, attrValue, savedGroups, attrFound))
                         {
                             return false;
                         }
@@ -125,7 +126,7 @@ namespace GrowthBook.Providers
         /// <param name="conditionValue">The condition value to check.</param>
         /// <param name="attributeValue">The attribute value to check.</param>
         /// <returns>True if the condition value matches the attribute value.</returns>
-        private bool EvalConditionValue(JsonNode? conditionValue, JsonNode? attributeValue, JsonObject? savedGroups)
+        private bool EvalConditionValue(JsonNode? conditionValue, JsonNode? attributeValue, JsonObject? savedGroups, bool attributeFound = true)
         {
             _logger.LogDebug("Evaluating condition value \'{ConditionValue}\'", conditionValue);
 
@@ -138,7 +139,7 @@ namespace GrowthBook.Providers
 
                     foreach (var property in conditionObj)
                     {
-                        if (!EvalOperatorCondition(property.Key, attributeValue, property.Value, savedGroups))
+                        if (!EvalOperatorCondition(property.Key, attributeValue, property.Value, savedGroups, attributeFound))
                         {
                             return false;
                         }
@@ -190,7 +191,7 @@ namespace GrowthBook.Providers
         /// <param name="attributeValue">The attribute value to check.</param>
         /// <param name="conditionValue">The condition value to check.</param>
         /// <returns></returns>
-        private bool EvalOperatorCondition(string op, JsonNode? attributeValue, JsonNode? conditionValue, JsonObject? savedGroups)
+        private bool EvalOperatorCondition(string op, JsonNode? attributeValue, JsonNode? conditionValue, JsonObject? savedGroups, bool attributeFound = true)
         {
             _logger.LogDebug("Evaluating operator condition \'{Op}\'", op);
 
@@ -206,7 +207,7 @@ namespace GrowthBook.Providers
             // Handle comparison operators with a cleaner approach
             if (ComparisonOperators.TryGetValue(op, out var comparisonFunc))
             {
-                return EvaluateComparison(attributeValue, conditionValue, comparisonFunc);
+                return EvaluateComparison(attributeValue, conditionValue, comparisonFunc, attributeFound);
             }
 
             var actualComparableValue = attributeValue as IComparable;
@@ -219,10 +220,13 @@ namespace GrowthBook.Providers
             {
                 return EvaluateRegex(attributeValue, conditionValue, RegexOptions.IgnoreCase, negate: false);
             }
-            if (op == "$nregex")
+            if (op == "$notRegex")
             {
                 return EvaluateRegex(attributeValue, conditionValue, RegexOptions.None, negate: true);
-
+            }
+            if (op == "$notRegexi")
+            {
+                return EvaluateRegex(attributeValue, conditionValue, RegexOptions.IgnoreCase, negate: true);
             }
             if (op == "$in")
             {
@@ -410,7 +414,9 @@ namespace GrowthBook.Providers
             // Case: condition is array
             if (conditionValue is JsonArray conditionArrayOnly)
             {
-                return conditionArrayOnly.Any(conditionItem => JsonNodeDeepEqualsStrict(conditionItem, actualValue));
+                if (stringComparison is null)
+                    return conditionArrayOnly.Any(conditionItem => JsonNodeDeepEqualsStrict(conditionItem, actualValue));
+                return conditionArrayOnly.Any(conditionItem => JsonNodeEquals(conditionItem, actualValue, stringComparison.Value));
             }
 
             if (conditionValue is JsonValue && actualValue is JsonValue)
@@ -498,8 +504,10 @@ namespace GrowthBook.Providers
             return meetsComparison(comparisonResult);
         }
 
-        private static JsonNode? GetPath(JsonNode? attributes, string key)
+        private static JsonNode? GetPath(JsonNode? attributes, string key, out bool found)
         {
+            found = false;
+
             if (attributes == null || string.IsNullOrEmpty(key))
                 return null;
 
@@ -508,12 +516,16 @@ namespace GrowthBook.Providers
 
             foreach (var part in parts)
             {
-                if (current is JsonObject obj && obj.TryGetPropertyValue(part, out var next))
+                if (current is JsonObject obj)
                 {
+                    if (!obj.TryGetPropertyValue(part, out var next))
+                        return null; // key not found
+                    found = true;
                     current = next;
                 }
                 else
                 {
+                    found = false;
                     return null;
                 }
             }
@@ -581,10 +593,20 @@ namespace GrowthBook.Providers
         /// <param name="conditionValue">The condition value to compare against.</param>
         /// <param name="meetsComparison">Function that determines if the comparison result meets the criteria.</param>
         /// <returns>True if the comparison is satisfied, false if attribute is null or comparison fails.</returns>
-        private bool EvaluateComparison(JsonNode? attributeValue, JsonNode? conditionValue, Func<int, bool> meetsComparison)
+        private bool EvaluateComparison(JsonNode? attributeValue, JsonNode? conditionValue, Func<int, bool> meetsComparison, bool attributeFound = true)
         {
-            if (attributeValue == null)
+            if (attributeValue == null && !attributeFound)
             {
+                // Missing attribute (key not in object) → treat as 0 for numeric comparisons
+                var zero = JsonValue.Create(0.0);
+                if (TryParseNumbers(zero, conditionValue, out _, out var condNum))
+                    return meetsComparison(((double)0).CompareTo(condNum));
+                return false;
+            }
+
+            if (attributeValue == null || attributeValue.IsNull())
+            {
+                // Explicit null value → never satisfies comparison operators
                 return false;
             }
 

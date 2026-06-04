@@ -647,7 +647,7 @@ namespace GrowthBook
                             }
                         }
 
-                        NotifySubscribers(null, new ExperimentResult { InExperiment = false, Value = rule.Force });
+                        NotifySubscribers(null!, new ExperimentResult { InExperiment = false, Value = rule.Force });
 
                         _logger.LogDebug("Rule {RuleIndex}: returning forced value for feature '{FeatureId}'",
                             ruleIndex, featureId);

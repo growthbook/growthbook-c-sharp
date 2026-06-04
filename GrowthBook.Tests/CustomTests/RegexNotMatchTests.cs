@@ -111,35 +111,35 @@ namespace GrowthBook.Tests.CustomTests
         [Fact]
         public void NRegex_Should_Not_Match_When_Pattern_Found()
         {
-            // Test new $nregex operator (negative regex)
+            // Test new $notRegex operator (negative regex)
             var attributes = JsonSerializer.SerializeToNode(new { region = "FR,LO,W6" })!.AsObject();
 
             var condition = JsonNode.Parse(@"{
                 ""region"": {
-                    ""$nregex"": "".*(FR|W6).*""
+                    ""$notRegex"": "".*(FR|W6).*""
                 }
             }");
 
             var result = _provider.EvalCondition(attributes, condition);
 
-            result.Should().BeFalse("because FR,LO,W6 matches the regex, so $nregex should return false");
+            result.Should().BeFalse("because FR,LO,W6 matches the regex, so $notRegex should return false");
         }
 
         [Fact]
         public void NRegex_Should_Match_When_Pattern_Not_Found()
         {
-            // Test $nregex with non-matching value
+            // Test $notRegex with non-matching value
             var attributes = JsonSerializer.SerializeToNode(new { region = "US,CA" })!.AsObject();
 
             var condition = JsonNode.Parse(@"{
                 ""region"": {
-                    ""$nregex"": "".*(FR|W6).*""
+                    ""$notRegex"": "".*(FR|W6).*""
                 }
             }");
 
             var result = _provider.EvalCondition(attributes, condition);
 
-            result.Should().BeTrue("because US,CA does not match the regex, so $nregex should return true");
+            result.Should().BeTrue("because US,CA does not match the regex, so $notRegex should return true");
         }
     }
 }

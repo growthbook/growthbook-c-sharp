@@ -37,7 +37,7 @@ namespace GrowthBook.Api.Extensions
             return (response.Features, response.IsServerSentEventsEnabled);
         }
 
-        internal static async Task<(IDictionary<string, Feature> Features, bool IsServerSentEventsEnabled, bool IsNotModified)> GetFeaturesFrom(this HttpClient httpClient, string endpoint, ILogger logger, GrowthBookConfigurationOptions config, CancellationToken cancellationToken, LruETagCache etagCache)
+        internal static async Task<(IDictionary<string, Feature>? Features, bool IsServerSentEventsEnabled, bool IsNotModified)> GetFeaturesFrom(this HttpClient httpClient, string endpoint, ILogger logger, GrowthBookConfigurationOptions config, CancellationToken cancellationToken, LruETagCache? etagCache)
         {
             using (var request = new HttpRequestMessage(HttpMethod.Get, endpoint))
             {

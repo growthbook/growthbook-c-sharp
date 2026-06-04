@@ -250,11 +250,11 @@ public class FeatureRefreshWorkerTests : ApiUnitTest<FeatureRefreshWorker>
         var etagCache = new LruETagCache();
 
         var first = await httpClient.GetFeaturesFrom(endpoint, _logger, _config, CancellationToken.None, etagCache);
-        first.Features.Should().BeEquivalentTo(_availableFeatures);
+        first.Features.Should().BeEquivalentTo(_availableFeatures, opt => opt.Using<JsonNode>(ctx => ctx.Subject.ToJsonString().Should().Be(ctx.Expectation.ToJsonString())).WhenTypeIs<JsonNode>());
         handler.ReceivedIfNoneMatchHeader.Should().BeFalse("because the first request has no cached ETag yet");
 
         var second = await httpClient.GetFeaturesFrom(endpoint, _logger, _config, CancellationToken.None, etagCache);
-        second.Features.Should().BeEquivalentTo(_availableFeatures);
+        second.Features.Should().BeEquivalentTo(_availableFeatures, opt => opt.Using<JsonNode>(ctx => ctx.Subject.ToJsonString().Should().Be(ctx.Expectation.ToJsonString())).WhenTypeIs<JsonNode>());
         handler.ReceivedIfNoneMatchHeader.Should().BeTrue("because the ETag from the first response should be reused");
         handler.ReceivedETagValue.Should().Be(etag);
     }
@@ -269,7 +269,7 @@ public class FeatureRefreshWorkerTests : ApiUnitTest<FeatureRefreshWorker>
 
         var response = await httpClient.GetFeaturesFrom(endpoint, _logger, _config, CancellationToken.None);
 
-        response.Features.Should().BeEquivalentTo(_availableFeatures);
+        response.Features.Should().BeEquivalentTo(_availableFeatures, opt => opt.Using<JsonNode>(ctx => ctx.Subject.ToJsonString().Should().Be(ctx.Expectation.ToJsonString())).WhenTypeIs<JsonNode>());
         handler.ReceivedIfNoneMatchHeader.Should().BeFalse("because the public overload has no ETag cache");
     }
 
@@ -291,8 +291,8 @@ public class FeatureRefreshWorkerTests : ApiUnitTest<FeatureRefreshWorker>
         var first = await worker.RefreshCacheFromApi();
         var second = await worker.RefreshCacheFromApi();
 
-        first.Should().BeEquivalentTo(_availableFeatures);
-        second.Should().BeEquivalentTo(_availableFeatures);
+        first.Should().BeEquivalentTo(_availableFeatures, opt => opt.Using<JsonNode>(ctx => ctx.Subject.ToJsonString().Should().Be(ctx.Expectation.ToJsonString())).WhenTypeIs<JsonNode>());
+        second.Should().BeEquivalentTo(_availableFeatures, opt => opt.Using<JsonNode>(ctx => ctx.Subject.ToJsonString().Should().Be(ctx.Expectation.ToJsonString())).WhenTypeIs<JsonNode>());
         handler.ReceivedIfNoneMatchHeader.Should().BeTrue();
         await _cache.Received(1).RefreshWith(Arg.Any<IDictionary<string, Feature>>(), Arg.Any<CancellationToken?>());
         await _cache.Received(1).GetFeatures(Arg.Any<CancellationToken?>());

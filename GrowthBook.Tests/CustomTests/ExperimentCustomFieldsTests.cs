@@ -1,6 +1,6 @@
 using System.Collections.Generic;
+using System.Text.Json;
 using FluentAssertions;
-using Newtonsoft.Json;
 using Xunit;
 
 namespace GrowthBook.Tests.CustomTests
@@ -15,7 +15,6 @@ namespace GrowthBook.Tests.CustomTests
         [Fact]
         public void Experiment_Should_Deserialize_CustomFields()
         {
-            // Arrange - JSON from actual GrowthBook API response
             var json = @"{
                 ""key"": ""test-experiment"",
                 ""variations"": [0, 1],
@@ -26,31 +25,26 @@ namespace GrowthBook.Tests.CustomTests
                 }
             }";
 
-            // Act
-            var experiment = JsonConvert.DeserializeObject<Experiment>(json);
+            var experiment = JsonSerializer.Deserialize<Experiment>(json, GrowthBookJsonContext.Default.Experiment);
 
-            // Assert
             experiment.Should().NotBeNull();
             experiment.CustomFields.Should().NotBeNull();
             experiment.CustomFields.Should().HaveCount(2);
-            experiment.CustomFields["cfl_4bzy5k3zmcjet8q5"].Should().Be("My custom field xyz");
-            experiment.CustomFields["cfl_another_field"].Should().Be("Another value");
+            experiment.CustomFields["cfl_4bzy5k3zmcjet8q5"].ToString().Should().Be("My custom field xyz");
+            experiment.CustomFields["cfl_another_field"].ToString().Should().Be("Another value");
         }
 
         [Fact]
         public void Experiment_Should_Handle_Missing_CustomFields()
         {
-            // Arrange - Experiment without customFields (backward compatibility)
             var json = @"{
                 ""key"": ""old-experiment"",
                 ""variations"": [0, 1],
                 ""active"": true
             }";
 
-            // Act
-            var experiment = JsonConvert.DeserializeObject<Experiment>(json);
+            var experiment = JsonSerializer.Deserialize<Experiment>(json, GrowthBookJsonContext.Default.Experiment);
 
-            // Assert
             experiment.Should().NotBeNull();
             experiment.CustomFields.Should().BeNull();
         }
@@ -58,17 +52,14 @@ namespace GrowthBook.Tests.CustomTests
         [Fact]
         public void Experiment_Should_Handle_Empty_CustomFields()
         {
-            // Arrange
             var json = @"{
                 ""key"": ""test-experiment"",
                 ""variations"": [0, 1],
                 ""customFields"": {}
             }";
 
-            // Act
-            var experiment = JsonConvert.DeserializeObject<Experiment>(json);
+            var experiment = JsonSerializer.Deserialize<Experiment>(json, GrowthBookJsonContext.Default.Experiment);
 
-            // Assert
             experiment.Should().NotBeNull();
             experiment.CustomFields.Should().NotBeNull();
             experiment.CustomFields.Should().BeEmpty();
@@ -77,7 +68,6 @@ namespace GrowthBook.Tests.CustomTests
         [Fact]
         public void Experiment_Should_Support_Different_CustomField_Types()
         {
-            // Arrange - Different data types in custom fields
             var json = @"{
                 ""key"": ""test-experiment"",
                 ""variations"": [0, 1],
@@ -90,22 +80,19 @@ namespace GrowthBook.Tests.CustomTests
                 }
             }";
 
-            // Act
-            var experiment = JsonConvert.DeserializeObject<Experiment>(json);
+            var experiment = JsonSerializer.Deserialize<Experiment>(json, GrowthBookJsonContext.Default.Experiment);
 
-            // Assert
             experiment.CustomFields.Should().HaveCount(5);
-            experiment.CustomFields["cfl_string"].Should().Be("text value");
-            experiment.CustomFields["cfl_number"].Should().Be(42L);
-            experiment.CustomFields["cfl_decimal"].Should().Be(99.99);
-            experiment.CustomFields["cfl_bool"].Should().Be(true);
+            experiment.CustomFields["cfl_string"].ToString().Should().Be("text value");
+            ((JsonElement)experiment.CustomFields["cfl_number"]).GetInt64().Should().Be(42);
+            ((JsonElement)experiment.CustomFields["cfl_decimal"]).GetDouble().Should().Be(99.99);
+            ((JsonElement)experiment.CustomFields["cfl_bool"]).GetBoolean().Should().BeTrue();
             experiment.CustomFields["cfl_null"].Should().BeNull();
         }
 
         [Fact]
         public void GetCustomField_Should_Return_Value_When_Exists()
         {
-            // Arrange
             var experiment = new Experiment
             {
                 Key = "test",
@@ -116,11 +103,9 @@ namespace GrowthBook.Tests.CustomTests
                 }
             };
 
-            // Act
             var value1 = experiment.GetCustomField("cfl_field1");
             var value2 = experiment.GetCustomField("cfl_field2");
 
-            // Assert
             value1.Should().Be("value1");
             value2.Should().Be(123);
         }
@@ -128,7 +113,6 @@ namespace GrowthBook.Tests.CustomTests
         [Fact]
         public void GetCustomField_Should_Return_Null_When_Not_Exists()
         {
-            // Arrange
             var experiment = new Experiment
             {
                 Key = "test",
@@ -138,34 +122,28 @@ namespace GrowthBook.Tests.CustomTests
                 }
             };
 
-            // Act
             var value = experiment.GetCustomField("cfl_does_not_exist");
 
-            // Assert
             value.Should().BeNull();
         }
 
         [Fact]
         public void GetCustomField_Should_Return_Null_When_CustomFields_Is_Null()
         {
-            // Arrange
             var experiment = new Experiment
             {
                 Key = "test",
                 CustomFields = null
             };
 
-            // Act
             var value = experiment.GetCustomField("cfl_any");
 
-            // Assert
             value.Should().BeNull();
         }
 
         [Fact]
         public void GetCustomField_Generic_Should_Cast_To_Correct_Type()
         {
-            // Arrange
             var experiment = new Experiment
             {
                 Key = "test",
@@ -177,7 +155,6 @@ namespace GrowthBook.Tests.CustomTests
                 }
             };
 
-            // Act & Assert
             experiment.GetCustomField<string>("cfl_string").Should().Be("text");
             experiment.GetCustomField<int>("cfl_int").Should().Be(42);
             experiment.GetCustomField<bool>("cfl_bool").Should().BeTrue();
@@ -186,7 +163,6 @@ namespace GrowthBook.Tests.CustomTests
         [Fact]
         public void GetCustomField_Generic_Should_Return_Default_When_Cast_Fails()
         {
-            // Arrange
             var experiment = new Experiment
             {
                 Key = "test",
@@ -196,17 +172,14 @@ namespace GrowthBook.Tests.CustomTests
                 }
             };
 
-            // Act
             var value = experiment.GetCustomField<int>("cfl_string");
 
-            // Assert
-            value.Should().Be(0); // default(int)
+            value.Should().Be(0);
         }
 
         [Fact]
         public void HasCustomField_Should_Return_True_When_Field_Exists()
         {
-            // Arrange
             var experiment = new Experiment
             {
                 Key = "test",
@@ -216,51 +189,36 @@ namespace GrowthBook.Tests.CustomTests
                 }
             };
 
-            // Act
-            var hasField = experiment.HasCustomField("cfl_exists");
-
-            // Assert
-            hasField.Should().BeTrue();
+            experiment.HasCustomField("cfl_exists").Should().BeTrue();
         }
 
         [Fact]
         public void HasCustomField_Should_Return_False_When_Field_Does_Not_Exist()
         {
-            // Arrange
             var experiment = new Experiment
             {
                 Key = "test",
                 CustomFields = new Dictionary<string, object>()
             };
 
-            // Act
-            var hasField = experiment.HasCustomField("cfl_does_not_exist");
-
-            // Assert
-            hasField.Should().BeFalse();
+            experiment.HasCustomField("cfl_does_not_exist").Should().BeFalse();
         }
 
         [Fact]
         public void HasCustomField_Should_Return_False_When_CustomFields_Is_Null()
         {
-            // Arrange
             var experiment = new Experiment
             {
                 Key = "test",
                 CustomFields = null
             };
 
-            // Act
-            var hasField = experiment.HasCustomField("cfl_any");
-
-            // Assert
-            hasField.Should().BeFalse();
+            experiment.HasCustomField("cfl_any").Should().BeFalse();
         }
 
         [Fact]
         public void Experiment_Equals_Should_Compare_CustomFields()
         {
-            // Arrange
             var experiment1 = new Experiment
             {
                 Key = "test",
@@ -293,7 +251,6 @@ namespace GrowthBook.Tests.CustomTests
                 }
             };
 
-            // Act & Assert
             experiment1.Equals(experiment2).Should().BeTrue("identical custom fields should be equal");
             experiment1.Equals(experiment3).Should().BeFalse("different custom fields should not be equal");
         }
@@ -301,7 +258,6 @@ namespace GrowthBook.Tests.CustomTests
         [Fact]
         public void Experiment_Should_Serialize_CustomFields_Back_To_Json()
         {
-            // Arrange
             var experiment = new Experiment
             {
                 Key = "test-experiment",
@@ -313,15 +269,13 @@ namespace GrowthBook.Tests.CustomTests
                 }
             };
 
-            // Act
-            var json = JsonConvert.SerializeObject(experiment);
-            var deserialized = JsonConvert.DeserializeObject<Experiment>(json);
+            var json = JsonSerializer.Serialize(experiment, GrowthBookJsonContext.Default.Experiment);
+            var deserialized = JsonSerializer.Deserialize<Experiment>(json, GrowthBookJsonContext.Default.Experiment);
 
-            // Assert
             deserialized.CustomFields.Should().NotBeNull();
             deserialized.CustomFields.Should().HaveCount(2);
-            deserialized.CustomFields["cfl_4bzy5k3zmcjet8q5"].Should().Be("My custom field xyz");
-            deserialized.CustomFields["cfl_number"].Should().Be(42L);
+            deserialized.CustomFields["cfl_4bzy5k3zmcjet8q5"].ToString().Should().Be("My custom field xyz");
+            ((JsonElement)deserialized.CustomFields["cfl_number"]).GetInt32().Should().Be(42);
         }
     }
 }

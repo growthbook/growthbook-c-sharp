@@ -303,7 +303,6 @@ namespace GrowthBook.Utilities
 
             var document = new StickyAssignmentsDocument(attributeName, attributeValue, newAssignments);
 
-            var options = new JsonSerializerOptions { DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull };
             var existingAssignmentsJson = JsonSerializer.Serialize(existingDocument?.Assignments, GrowthBookJsonContext.Default.DictionaryStringString);
             var newAssignmentsJson = JsonSerializer.Serialize(document.Assignments, GrowthBookJsonContext.Default.DictionaryStringString);
 

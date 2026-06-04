@@ -130,7 +130,7 @@ namespace GrowthBook
         /// <summary>
         /// Custom fields defined in the GrowthBook UI for this experiment.
         /// </summary>
-        public IDictionary<string, object> CustomFields { get; set; }
+        public IDictionary<string, object>? CustomFields { get; set; }
 
         /// <summary>
         /// Returns the experiment variations cast to the specified type.
@@ -167,7 +167,7 @@ namespace GrowthBook
             return false;
         }
 
-        private static bool DictionariesEqual(IDictionary<string, object> dict1, IDictionary<string, object> dict2)
+        private static bool DictionariesEqual(IDictionary<string, object>? dict1, IDictionary<string, object>? dict2)
         {
             if (dict1 == null && dict2 == null) return true;
             if (dict1 == null || dict2 == null) return false;

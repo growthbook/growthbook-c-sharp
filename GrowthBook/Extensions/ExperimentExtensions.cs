@@ -14,7 +14,7 @@ namespace GrowthBook
         /// <param name="experiment">The experiment instance.</param>
         /// <param name="fieldId">The custom field ID (e.g., "cfl_4bzy5k3zmcjet8q5").</param>
         /// <returns>The custom field value, or null if not found.</returns>
-        public static object GetCustomField(this Experiment experiment, string fieldId)
+        public static object? GetCustomField(this Experiment experiment, string fieldId)
         {
             if (experiment?.CustomFields == null) return null;
             return experiment.CustomFields.TryGetValue(fieldId, out var value) ? value : null;
@@ -27,7 +27,7 @@ namespace GrowthBook
         /// <param name="experiment">The experiment instance.</param>
         /// <param name="fieldId">The custom field ID.</param>
         /// <returns>The custom field value cast to type T, or default(T) if not found or cast fails.</returns>
-        public static T GetCustomField<T>(this Experiment experiment, string fieldId)
+        public static T? GetCustomField<T>(this Experiment experiment, string fieldId)
         {
             var value = experiment.GetCustomField(fieldId);
             if (value == null) return default(T);
