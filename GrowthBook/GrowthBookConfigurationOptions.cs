@@ -37,5 +37,10 @@ namespace GrowthBook
         /// in lieu of an explicit call to refresh through the API.
         /// </summary>
         public bool PreferServerSentEvents { get; set; }
+
+        /// <summary>
+        /// The maximum number of ETags to keep for conditional feature API requests.
+        /// </summary>
+        public int EtagCacheSize { get; set; } = 100;
     }
 }

@@ -101,7 +101,6 @@ public class RunTests : UnitTest
         });
 
         subscription.Dispose();
-
         var subCounterThree = 0;
 
         gb.Subscribe((experiment, actualResult) =>

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Net;
 using System.Net.Http;
 using System.Threading.Tasks;
 using System.Threading;
@@ -31,41 +32,76 @@ namespace GrowthBook.Api.Extensions
         /// <exception cref="FeatureLoadException">Thrown on HTTP errors</exception>
         public static async Task<(IDictionary<string, Feature>? Features, bool IsServerSentEventsEnabled)> GetFeaturesFrom(this HttpClient httpClient, string endpoint, ILogger logger, GrowthBookConfigurationOptions config, CancellationToken cancellationToken)
         {
-            var response = await httpClient.GetAsync(endpoint, cancellationToken);
+            var response = await GetFeaturesFrom(httpClient, endpoint, logger, config, cancellationToken, etagCache: null);
 
-            if (!response.IsSuccessStatusCode)
+            return (response.Features, response.IsServerSentEventsEnabled);
+        }
+
+        internal static async Task<(IDictionary<string, Feature> Features, bool IsServerSentEventsEnabled, bool IsNotModified)> GetFeaturesFrom(this HttpClient httpClient, string endpoint, ILogger logger, GrowthBookConfigurationOptions config, CancellationToken cancellationToken, LruETagCache etagCache)
+        {
+            using (var request = new HttpRequestMessage(HttpMethod.Get, endpoint))
             {
-                var statusCode = (int)response.StatusCode;
-                var message = $"Failed to load features from API. HTTP {statusCode} ({response.StatusCode}) for endpoint '{endpoint}'";
+                var cachedETag = etagCache?.Get(endpoint);
 
-                if (statusCode == 400)
+                if (etagCache != null && !string.IsNullOrWhiteSpace(cachedETag))
                 {
-                    message += ". This usually indicates an invalid ClientKey.";
-                }
-                else if (statusCode == 401)
-                {
-                    message += ". Authentication failed - check your ClientKey.";
-                }
-                else if (statusCode == 403)
-                {
-                    message += ". Access forbidden - check your ClientKey permissions.";
+                    try
+                    {
+                        request.Headers.IfNoneMatch.Add(System.Net.Http.Headers.EntityTagHeaderValue.Parse(cachedETag));
+                    }
+                    catch (FormatException ex)
+                    {
+                        logger.LogWarning(ex, "Invalid cached ETag '{ETag}' for endpoint '{Endpoint}', skipping conditional request", cachedETag, endpoint);
+                        etagCache.Remove(endpoint);
+                    }
                 }
 
-                logger.LogError(message);
-                throw new FeatureLoadException(message, statusCode);
+                var response = await httpClient.SendAsync(request, cancellationToken);
+                var isServerSentEventsEnabled = response.Headers.TryGetValues(HttpHeaders.ServerSentEvents.Key, out var values) && values.Contains(HttpHeaders.ServerSentEvents.EnabledValue);
+
+                if (response.StatusCode == HttpStatusCode.NotModified)
+                {
+                    logger.LogInformation("Features API returned 304 Not Modified for endpoint '{Endpoint}'", endpoint);
+                    return (null, isServerSentEventsEnabled, true);
+                }
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    var statusCode = (int)response.StatusCode;
+                    var message = $"Failed to load features from API. HTTP {statusCode} ({response.StatusCode}) for endpoint '{endpoint}'";
+
+                    if (statusCode == 400)
+                    {
+                        message += ". This usually indicates an invalid ClientKey.";
+                    }
+                    else if (statusCode == 401)
+                    {
+                        message += ". Authentication failed - check your ClientKey.";
+                    }
+                    else if (statusCode == 403)
+                    {
+                        message += ". Access forbidden - check your ClientKey permissions.";
+                    }
+
+                    logger.LogError(message);
+                    throw new FeatureLoadException(message, statusCode);
+                }
+
+                var json = await response.Content.ReadAsStringAsync();
+
+                logger.LogDebug($"Read response JSON from default Features API request: '{json}'");
+
+                logger.LogDebug($"{nameof(FeatureRefreshWorker)} is configured to prefer server sent events and enabled is now '{isServerSentEventsEnabled}'");
+
+                var features = ParseFeaturesFrom(json, logger, config);
+
+                if (response.Headers.ETag != null)
+                {
+                    etagCache?.Put(endpoint, response.Headers.ETag.ToString());
+                }
+
+                return (features, isServerSentEventsEnabled, false);
             }
-
-            var json = await response.Content.ReadAsStringAsync();
-
-            logger.LogDebug($"Read response JSON from default Features API request: '{json}'");
-
-            var isServerSentEventsEnabled = response.Headers.TryGetValues(HttpHeaders.ServerSentEvents.Key, out var values) && values.Contains(HttpHeaders.ServerSentEvents.EnabledValue);
-
-            logger.LogDebug($"{nameof(FeatureRefreshWorker)} is configured to prefer server sent events and enabled is now '{isServerSentEventsEnabled}'");
-
-            var features = ParseFeaturesFrom(json, logger, config);
-
-            return (features, isServerSentEventsEnabled);
         }
 
         /// <summary>

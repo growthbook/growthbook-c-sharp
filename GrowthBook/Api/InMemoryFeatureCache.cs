@@ -95,5 +95,14 @@ namespace GrowthBook.Api
                 return Task.CompletedTask;
             }
         }
+
+        internal Task RefreshExpiration(CancellationToken? cancellationToken = null)
+        {
+            lock(_cacheLock)
+            {
+                _nextCacheExpiration = DateTime.UtcNow.AddSeconds(_cacheExpirationInSeconds);
+                return Task.CompletedTask;
+            }
+        }
     }
 }

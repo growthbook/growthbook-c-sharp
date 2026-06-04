@@ -213,64 +213,49 @@ namespace GrowthBook.Providers
 
             if (op == "$regex")
             {
-                try
-                {
-                    if (attributeValue == null || conditionValue == null)
-                    {
-                        return false;
-                    }
-                    return Regex.IsMatch(attributeValue.ToString(), conditionValue.ToString());
-                }
-                catch (ArgumentException)
-                {
-                    return false;
-                }
+                return EvaluateRegex(attributeValue, conditionValue, RegexOptions.None, negate: false);
+            }
+            if (op == "$regexi")
+            {
+                return EvaluateRegex(attributeValue, conditionValue, RegexOptions.IgnoreCase, negate: false);
             }
             if (op == "$nregex")
             {
-                try
-                {
-                    if (attributeValue == null || conditionValue == null)
-                    {
-                        return false;
-                    }
-                    return !Regex.IsMatch(attributeValue.ToString(), conditionValue.ToString());
-                }
-                catch (ArgumentException)
-                {
-                    return false;
-                }
+                return EvaluateRegex(attributeValue, conditionValue, RegexOptions.None, negate: true);
+
             }
             if (op == "$in")
             {
-                if (conditionValue is not JsonArray arr)
-                {
+                if (conditionValue is not JsonArray)
                     return false;
-                }
-                return IsIn(conditionValue, attributeValue, savedGroups);
+                return IsIn(conditionValue, attributeValue);
+            }
+            if (op == "$ini")
+            {
+                if (conditionValue is not JsonArray)
+                    return false;
+                return IsIn(conditionValue, attributeValue, StringComparison.OrdinalIgnoreCase);
             }
             if (op == "$nin")
             {
-                if (conditionValue is not JsonArray arr)
-                {
+                if (conditionValue is not JsonArray)
                     return false;
-                }
-                return !IsIn(conditionValue, attributeValue, savedGroups);
+                return !IsIn(conditionValue, attributeValue);
+            }
+            if (op == "$nini")
+            {
+                if (conditionValue is not JsonArray)
+                    return false;
+                return !IsIn(conditionValue, attributeValue, StringComparison.OrdinalIgnoreCase);
             }
             if (op == "$all")
             {
-                if (conditionValue is not JsonArray condList || attributeValue is not JsonArray attrList)
-                    return false;
-
-                foreach (var cond in condList)
-                {
-                    if (!attrList.Any(x => EvalConditionValue(cond, x, savedGroups)))
-                        return false;
-                }
-
-                return true;
+                return IsAll(conditionValue, attributeValue, savedGroups, stringComparison: null);
             }
-
+            if (op == "$alli")
+            {
+                return IsAll(conditionValue, attributeValue, savedGroups, StringComparison.OrdinalIgnoreCase);
+            }
             if (op == "$elemMatch")
             {
                 if (conditionValue is JsonObject condObj)
@@ -326,7 +311,7 @@ namespace GrowthBook.Providers
                 {
                     var array = savedGroups?[conditionValue.ToString()] as JsonArray ?? new JsonArray();
 
-                    return IsIn(array, attributeValue, savedGroups);
+                    return IsIn(array, attributeValue);
                 }
             }
             if (op == "$notInGroup")
@@ -335,7 +320,7 @@ namespace GrowthBook.Providers
                 {
                     var array = savedGroups?[conditionValue.ToString()] as JsonArray ?? new JsonArray();
 
-                    return !IsIn(array, attributeValue, savedGroups);
+                    return !IsIn(array, attributeValue);
                 }
             }
 
@@ -390,7 +375,23 @@ namespace GrowthBook.Providers
             return true;
         }
 
-        private bool IsIn(JsonNode conditionValue, JsonNode? actualValue, JsonObject? savedGroups)
+        private static bool EvaluateRegex(JsonNode? attributeValue, JsonNode? conditionValue, RegexOptions options, bool negate)
+        {
+            if (attributeValue.IsNull() || conditionValue.IsNull())
+                return false;
+
+            try
+            {
+                var isMatch = Regex.IsMatch(attributeValue!.ToString(), conditionValue!.ToString(), options);
+                return negate ? !isMatch : isMatch;
+            }
+            catch (ArgumentException)
+            {
+                return false;
+            }
+        }
+
+        private bool IsIn(JsonNode? conditionValue, JsonNode? actualValue, StringComparison? stringComparison = null)
         {
             // Case: actual is array
             if (actualValue is JsonArray actualArray)
@@ -398,9 +399,12 @@ namespace GrowthBook.Providers
                 if (conditionValue is not JsonArray conditionArray)
                     return false;
 
+                if (stringComparison is null)
+                    return actualArray.Any(actualItem =>
+                        conditionArray.Any(conditionItem => JsonNode.DeepEquals(actualItem, conditionItem)));
+
                 return actualArray.Any(actualItem =>
-                    conditionArray.Any(conditionItem => JsonNode.DeepEquals(actualItem, conditionItem))
-                );
+                    conditionArray.Any(conditionItem => JsonNodeEquals(actualItem, conditionItem, stringComparison.Value)));
             }
 
             // Case: condition is array
@@ -453,6 +457,36 @@ namespace GrowthBook.Providers
 
             return JsonNode.DeepEquals(a, b);
         }
+
+        private bool IsAll(JsonNode? conditionValue, JsonNode? attributeValue, JsonObject? savedGroups, StringComparison? stringComparison)
+        {
+            if (conditionValue is not JsonArray conditionList)
+                return false;
+            if (attributeValue is not JsonArray attributeList)
+                return false;
+
+            foreach (var condition in conditionList)
+            {
+                if (stringComparison is null)
+                {
+                    if (!attributeList.Any(x => EvalConditionValue(condition, x, savedGroups)))
+                        return false;
+                }
+                else if (!attributeList.Any(x => JsonNodeEquals(condition, x, stringComparison.Value)))
+                    return false;
+            }
+
+            return true;
+        }
+
+        private static bool JsonNodeEquals(JsonNode? a, JsonNode? b, StringComparison stringComparison)
+        {
+            if (a is JsonValue va && b is JsonValue vb &&
+                va.TryGetValue<string>(out var sa) && vb.TryGetValue<string>(out var sb))
+                return string.Equals(sa, sb, stringComparison);
+            return JsonNode.DeepEquals(a, b);
+        }
+
 
         private static bool CompareVersions(JsonNode? left, JsonNode? right, Func<int, bool> meetsComparison)
         {
@@ -540,7 +574,8 @@ namespace GrowthBook.Providers
 
         /// <summary>
         /// Evaluates a comparison operation between an attribute value and a condition value.
-        /// Returns false if the attribute is null/missing, as null values should not satisfy any comparison.
+        /// Missing numeric attributes are compared as zero to match the standard fixture.
+        /// Explicit null values never satisfy comparison operators.
         /// </summary>
         /// <param name="attributeValue">The attribute value to compare.</param>
         /// <param name="conditionValue">The condition value to compare against.</param>
@@ -548,7 +583,6 @@ namespace GrowthBook.Providers
         /// <returns>True if the comparison is satisfied, false if attribute is null or comparison fails.</returns>
         private bool EvaluateComparison(JsonNode? attributeValue, JsonNode? conditionValue, Func<int, bool> meetsComparison)
         {
-            // Null/missing attributes should never satisfy comparison operators
             if (attributeValue == null)
             {
                 return false;
@@ -606,11 +640,11 @@ namespace GrowthBook.Providers
             {
                 if (!attrValue.TryGetValue<double>(out attrNumber))
                 {
-                    if (!double.TryParse(attributeValue.ToString(), out attrNumber))
+                    if (!double.TryParse(attributeValue.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture,  out attrNumber))
                         return false;
                 }
             }
-            else if (!double.TryParse(attributeValue?.ToString(), out attrNumber))
+            else if (!double.TryParse(attributeValue?.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture,  out attrNumber))
             {
                 return false;
             }
@@ -619,11 +653,11 @@ namespace GrowthBook.Providers
             {
                 if (!condValue.TryGetValue<double>(out condNumber))
                 {
-                    if (!double.TryParse(conditionValue.ToString(), out condNumber))
+                    if (!double.TryParse(conditionValue.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture,  out condNumber))
                         return false;
                 }
             }
-            else if (!double.TryParse(conditionValue?.ToString(), out condNumber))
+            else if (!double.TryParse(conditionValue?.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture,  out condNumber))
             {
                 return false;
             }

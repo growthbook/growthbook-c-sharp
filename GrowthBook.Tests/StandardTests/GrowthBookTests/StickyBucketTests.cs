@@ -8,6 +8,7 @@ using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 using FluentAssertions;
 using GrowthBook.Services;
+using GrowthBook.Utilities;
 using Xunit;
 using Xunit.Abstractions;
 
@@ -134,5 +135,37 @@ public class StickyBucketTests : UnitTest
                 .ComparingByMembers<StickyAssignmentsDocument>(),
             $"Test: {testCase.TestName} - Documents should have been stored correctly"
         );
+    }
+
+    [Fact]
+    public void MinBucketVersionAllowsAssignmentAtSameVersion()
+    {
+        var experiment = new Experiment
+        {
+            Key = "feature-exp",
+            HashAttribute = "id",
+            FallbackAttribute = "deviceId",
+            BucketVersion = 3,
+            MinBucketVersion = 3
+        };
+        var meta = new List<VariationMeta>
+        {
+            new VariationMeta { Key = "0" },
+            new VariationMeta { Key = "1" },
+            new VariationMeta { Key = "2" }
+        };
+        var attributes = JObject.FromObject(new { id = "i123" });
+        var documents = new Dictionary<string, StickyAssignmentsDocument>
+        {
+            ["id||i123"] = new StickyAssignmentsDocument(
+                "id",
+                "i123",
+                new Dictionary<string, string> { ["feature-exp__3"] = "2" })
+        };
+
+        var result = ExperimentUtilities.GetStickyBucketVariation(experiment, 3, 3, meta, attributes, documents);
+
+        result.IsVersionBlocked.Should().BeFalse("because minBucketVersion blocks older versions only");
+        result.VariationIndex.Should().Be(2);
     }
 }

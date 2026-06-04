@@ -1,34 +1,49 @@
 name: dotnet package
 
-on: [push]
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
 
 jobs:
   build:
     runs-on: ubuntu-latest
     env:
+      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
+      DOTNET_NOLOGO: true
       # set value
       SHOULD_DEPLOY: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
     strategy:
+      fail-fast: false
       matrix:
-        dotnet-version: ["6.0.x", "7.0.x"]
+        dotnet-version: ["6.0.x", "8.0.x"]
     steps:
       - uses: actions/checkout@v4
       - name: Setup dotnet ${{ matrix.dotnet-version }}
-        uses: actions/setup-dotnet@v3
+        uses: actions/setup-dotnet@v4
         with:
           dotnet-version: |
             6.0.x
             ${{ matrix.dotnet-version }}
 
       - name: Restore
-        run: dotnet restore GrowthBook/GrowthBook.csproj
+        run: dotnet restore GrowthBook.Tests/GrowthBook.Tests.csproj
 
       - name: Build
-        run: dotnet build GrowthBook/GrowthBook.csproj --configuration Release
+        run: dotnet build GrowthBook.Tests/GrowthBook.Tests.csproj --configuration Release --no-restore
 
-      # current tests are written for visual studio only
       - name: Test
-        run: dotnet test GrowthBook.Tests/GrowthBook.Tests.csproj --logger:"console;verbosity=normal"
+        run: dotnet test GrowthBook.Tests/GrowthBook.Tests.csproj --configuration Release --no-build --logger:"console;verbosity=normal" --logger:"trx;LogFileName=test-results-${{ matrix.dotnet-version }}.trx"
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-${{ matrix.dotnet-version }}
+          path: GrowthBook.Tests/TestResults/*.trx
+          if-no-files-found: ignore
 
       - name: pack
         run: dotnet pack --configuration Release --no-build --output dist GrowthBook/GrowthBook.csproj

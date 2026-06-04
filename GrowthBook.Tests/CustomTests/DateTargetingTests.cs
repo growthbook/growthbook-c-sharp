@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Text.Json.Nodes;
+using System.Threading;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Newtonsoft.Json.Linq;
@@ -115,6 +117,53 @@ namespace GrowthBook.Tests.CustomTests
 
             growthBook.IsOn("age-feature").Should().BeTrue("integers should be compared numerically");
             growthBook.IsOn("price-feature").Should().BeTrue("numeric strings should be parsed and compared as numbers");
+        }
+
+        [Fact]
+        public void NumericComparison_Should_Parse_Decimal_Strings_With_Invariant_Culture()
+        {
+            var originalCulture = Thread.CurrentThread.CurrentCulture;
+            var originalUICulture = Thread.CurrentThread.CurrentUICulture;
+            Thread.CurrentThread.CurrentCulture = new CultureInfo("fr-FR");
+            Thread.CurrentThread.CurrentUICulture = new CultureInfo("fr-FR");
+
+            try
+            {
+                var context = new Context
+                {
+                    Enabled = true,
+                    Attributes = JObject.FromObject(new { priceString = "99.50" }),
+                    Features = new Dictionary<string, Feature>
+                    {
+                        ["price-feature"] = new Feature
+                        {
+                            DefaultValue = false,
+                            Rules = new List<FeatureRule>
+                            {
+                                new FeatureRule
+                                {
+                                    Condition = JObject.Parse(@"{
+                                        ""priceString"": {
+                                            ""$lt"": ""100.00""
+                                        }
+                                    }"),
+                                    Force = true
+                                }
+                            }
+                        }
+                    },
+                    LoggerFactory = NullLoggerFactory.Instance
+                };
+
+                using var growthBook = new GrowthBookSdk.GrowthBook(context);
+
+                growthBook.IsOn("price-feature").Should().BeTrue("decimal targeting strings should not depend on the process culture");
+            }
+            finally
+            {
+                Thread.CurrentThread.CurrentCulture = originalCulture;
+                Thread.CurrentThread.CurrentUICulture = originalUICulture;
+            }
         }
 
     }

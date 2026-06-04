@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0]
+
+- Added custom fields support for experiments.
+- Added non-breaking ETag caching support for feature API refreshes.
+- Fixed sticky bucket min bucket version handling.
+- Fixed invariant numeric condition parsing.
+- Fixed bucket range serialization.
+- Improved CI build, test, and packaging coverage.
+
 ## [1.1.0]
 
 - Upated SDK to comply with the 0.7.0 SDK spec.

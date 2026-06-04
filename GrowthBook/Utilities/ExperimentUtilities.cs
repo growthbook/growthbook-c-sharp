@@ -320,7 +320,7 @@ namespace GrowthBook.Utilities
 
             if (experiment.MinBucketVersion > 0)
             {
-                for (var i = 0; i <= experiment.MinBucketVersion; i++)
+                for(var i = 0; i < experiment.MinBucketVersion; i++)
                 {
                     var blockedKey = GetStickyBucketExperimentKey(experiment.Key, i);
 

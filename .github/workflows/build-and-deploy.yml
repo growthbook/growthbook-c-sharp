@@ -24,9 +24,10 @@ jobs:
       with:
         fetch-depth: 0 # Get all history
 
-    # Install the .NET SDK indicated in the global.json file
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 6.0.x
 
     # Create the NuGet package in the folder from the environment variable NuGetDirectory
     - run: dotnet pack ./GrowthBook/GrowthBook.csproj --configuration Release --output ${{ env.NuGetDirectory }}
@@ -45,8 +46,10 @@ jobs:
     - uses: actions/checkout@v4
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: 6.0.x
     - name: Run tests
-      run: dotnet test --configuration Release ./GrowthBook/GrowthBook.csproj
+      run: dotnet test --configuration Release ./GrowthBook.Tests/GrowthBook.Tests.csproj --logger:"console;verbosity=normal"
 
   deploy:
     # Publish only when creating a GitHub Release
@@ -61,9 +64,10 @@ jobs:
           name: nuget
           path: ${{ env.NuGetDirectory }}
 
-      # Install the .NET SDK indicated in the global.json file
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 6.0.x
 
       # Publish all NuGet packages to NuGet.org
       # Use --skip-duplicate to prevent errors if a package with the same version already exists.
