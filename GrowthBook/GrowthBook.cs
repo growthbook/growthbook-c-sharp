@@ -108,7 +108,7 @@ namespace GrowthBook
             }
             else
             {
-                var featureCache = new InMemoryFeatureCache(cacheExpirationInSeconds: 60);
+                var featureCache = context.FeatureCache ?? new InMemoryFeatureCache(cacheExpirationInSeconds: config.CacheExpirationInSeconds);
                 var httpClientFactory = new HttpClientFactory(requestTimeoutInSeconds: 60);
 
                 var featureRefreshLogger = _loggerFactory.CreateLogger<FeatureRefreshWorker>();

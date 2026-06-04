@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0]
+
+- Added `FileBasedFeatureCache` — a persistent, file-backed cache implementation inspired by the Swift CachingManager pattern. Supports custom cache paths, SHA256-based key isolation, and `ClearCache()`.
+- Added `Context.FeatureCache` — allows injecting a custom `IGrowthBookFeatureCache` (e.g. `FileBasedFeatureCache` or a Redis-backed implementation) without replacing the entire `FeatureRepository`.
+- Removed `Context.CachePath` — replaced by `FileBasedFeatureCache(cachePath: ...)` constructor parameter.
+
 ## [1.2.0]
 
 - Added custom fields support for experiments.
