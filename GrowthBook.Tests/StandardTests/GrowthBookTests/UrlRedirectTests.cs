@@ -4,7 +4,6 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using FluentAssertions;
-using Newtonsoft.Json.Linq;
 using Xunit;
 
 namespace GrowthBook.Tests.StandardTests.GrowthBookTests;

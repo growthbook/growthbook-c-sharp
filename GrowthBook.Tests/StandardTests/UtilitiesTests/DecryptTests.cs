@@ -6,8 +6,7 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using GrowthBook.Exceptions;
 using GrowthBook.Utilities;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
+using System.Text.Json.Nodes;
 using Xunit;
 using Xunit.Sdk;
 
@@ -51,9 +50,9 @@ public class DecryptTests : UnitTest
 
             try
             {
-                var jsonObject = JObject.Parse(actualValue);
+                JsonNode.Parse(actualValue);
             }
-            catch(JsonReaderException)
+            catch(System.Text.Json.JsonException)
             {
                 return;
             }

@@ -3,7 +3,6 @@ using System.Text.Json.Nodes;
 using FluentAssertions;
 using GrowthBook;
 using GrowthBook.Utilities;
-using Newtonsoft.Json.Linq;
 using Xunit;
 
 namespace GrowthBook.Tests.Utilities

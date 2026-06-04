@@ -4,7 +4,6 @@ using System.Linq;
 using System.Text.Json;
 using FluentAssertions;
 using GrowthBook.Extensions;
-using Newtonsoft.Json.Linq;
 using Xunit;
 
 namespace GrowthBook.Tests.Api
