@@ -1,18 +1,16 @@
 using System.Collections.Generic;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
+using System.Text.Json;
 using Xunit;
 
 namespace GrowthBook.Tests;
 
-public class BucketRangeTupleConverterTests
+public class BucketRangeConverterTests
 {
-
     [Fact]
     public void ReadJson_ValidArray_ShouldDeserializeCorrectly()
     {
         var json = "[0.0, 0.5]";
-        var result = JsonConvert.DeserializeObject<BucketRange>(json);
+        var result = JsonSerializer.Deserialize<BucketRange>(json, GrowthBookJsonContext.Default.BucketRange);
 
         Assert.NotNull(result);
         Assert.Equal(0.0, result.Start);
@@ -29,7 +27,7 @@ public class BucketRangeTupleConverterTests
               }]
             }";
 
-        var feature = JsonConvert.DeserializeObject<Feature>(json);
+        var feature = JsonSerializer.Deserialize<Feature>(json, GrowthBookJsonContext.Default.Feature);
 
         Assert.NotNull(feature);
         Assert.Equal(0.0, feature.Rules[0].Ranges[0].Start);
@@ -42,12 +40,14 @@ public class BucketRangeTupleConverterTests
     public void WriteJson_ShouldSerializeAsTwoElementArray()
     {
         var bucketRange = new BucketRange(0.0, 0.5);
-        var json = JsonConvert.SerializeObject(bucketRange);
-        var array = JArray.Parse(json);
+        var json = JsonSerializer.Serialize(bucketRange, GrowthBookJsonContext.Default.BucketRange);
+        using var doc = JsonDocument.Parse(json);
+        var array = doc.RootElement;
 
-        Assert.Equal(2, array.Count);
-        Assert.Equal(0.0, array[0].Value<double>());
-        Assert.Equal(0.5, array[1].Value<double>());
+        Assert.Equal(JsonValueKind.Array, array.ValueKind);
+        Assert.Equal(2, array.GetArrayLength());
+        Assert.Equal(0.0, array[0].GetDouble());
+        Assert.Equal(0.5, array[1].GetDouble());
     }
 
     [Fact]
@@ -67,7 +67,7 @@ public class BucketRangeTupleConverterTests
             }
         };
 
-        var ex = Record.Exception(() => JsonConvert.SerializeObject(features));
+        var ex = Record.Exception(() => JsonSerializer.Serialize(features, GrowthBookJsonContext.Default.DictionaryStringFeature));
         Assert.Null(ex);
     }
 
@@ -76,8 +76,8 @@ public class BucketRangeTupleConverterTests
     {
         var original = new BucketRange(0.25, 0.75);
 
-        var json = JsonConvert.SerializeObject(original);
-        var restored = JsonConvert.DeserializeObject<BucketRange>(json);
+        var json = JsonSerializer.Serialize(original, GrowthBookJsonContext.Default.BucketRange);
+        var restored = JsonSerializer.Deserialize<BucketRange>(json, GrowthBookJsonContext.Default.BucketRange);
 
         Assert.Equal(original.Start, restored.Start);
         Assert.Equal(original.End, restored.End);

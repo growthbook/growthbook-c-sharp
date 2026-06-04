@@ -10,17 +10,17 @@ namespace GrowthBook.Api.SSE
         /// <summary>
         /// Event ID for reconnection purposes
         /// </summary>
-        public string Id { get; set; }
+        public string? Id { get; set; }
 
         /// <summary>
         /// Event type/name
         /// </summary>
-        public string Event { get; set; }
+        public string? Event { get; set; }
 
         /// <summary>
         /// Event data payload
         /// </summary>
-        public string Data { get; set; }
+        public string? Data { get; set; }
 
         /// <summary>
         /// Retry time in milliseconds for reconnection

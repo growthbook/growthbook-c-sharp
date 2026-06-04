@@ -1,7 +1,7 @@
-using System;
+using System.Text.Json.Nodes;
 using GrowthBook.Converters;
-using Newtonsoft.Json;
-using Newtonsoft.Json.Linq;
+using System.Text.Json.Serialization;
+using System;
 
 namespace GrowthBook
 {
@@ -9,7 +9,7 @@ namespace GrowthBook
     /// A tuple that specifies what part of a namespace an experiment includes.
     /// If two experiments are in the same namespace and their ranges don't overlap, they wil be mutually exclusive.
     /// </summary>
-    [JsonConverter(typeof(NamespaceTupleConverter))]
+    [JsonConverter(typeof(NamespaceConverter))]
     public class Namespace
     {
         public Namespace(string id, double start, double end)
@@ -19,8 +19,10 @@ namespace GrowthBook
             End = end;
         }
 
-        public Namespace(JArray jArray) :
-            this(jArray[0].ToString(), jArray[1].ToObject<double>(), jArray[2].ToObject<double>())
+        public Namespace(JsonArray jsonArray) :
+            this(
+                jsonArray[0]!.ToString(), jsonArray[1]!.GetValue<double>(), jsonArray[2]!.GetValue<double>()
+                )
         { }
 
         /// <summary>
@@ -38,11 +40,10 @@ namespace GrowthBook
         /// </summary>
         public double End { get; }
 
-        public override bool Equals(object obj)
+        public override bool Equals(object? obj)
         {
-            if (obj.GetType() == typeof(Namespace))
+            if (obj is Namespace objNamespace)
             {
-                var objNamespace = (Namespace)obj;
                 return Id == objNamespace.Id && Start == objNamespace.Start && End == objNamespace.End;
             }
             return false;

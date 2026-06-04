@@ -7,13 +7,14 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using GrowthBook.Api;
 using GrowthBook.Api.Extensions;
 using Microsoft.Extensions.Logging;
-using Newtonsoft.Json;
 using NSubstitute;
 using Xunit;
 
@@ -147,19 +148,19 @@ public class FeatureRefreshWorkerTests : ApiUnitTest<FeatureRefreshWorker>
             // Also, we're reusing the handler here so we can accurately keep track of the shared call amounts
             // between the two paths.
 
-            var json = JsonConvert.SerializeObject(new FeaturesResponse { Features = ResponseContent });
-            var streamJson = JsonConvert.SerializeObject(new FeaturesResponse { Features = StreamResponseContent });
+            var json = System.Text.Json.JsonSerializer.Serialize(
+                new FeaturesResponse { Features = ResponseContent },
+                GrowthBookJsonContext.Default.FeaturesResponse
+            );
+            var streamJson = System.Text.Json.JsonSerializer.Serialize(
+                new FeaturesResponse { Features = StreamResponseContent },
+                GrowthBookJsonContext.Default.FeaturesResponse
+            );
+
             var httpClient = new HttpClient(_handler ??= new TestDelegatingHandler(ResponseStatusCode, json, streamJson, IsServerSentEventsEnabled));
 
             return configure(httpClient);
         }
-    }
-
-    private sealed class FeaturesResponse
-    {
-        public int FeatureCount { get; set; }
-        public Dictionary<string, Feature> Features { get; set; }
-        public string EncryptedFeatures { get; set; }
     }
 
     private readonly TestHttpClientFactory _httpClientFactory;
@@ -187,7 +188,13 @@ public class FeatureRefreshWorkerTests : ApiUnitTest<FeatureRefreshWorker>
 
         var features = await _worker.RefreshCacheFromApi();
 
-        features.Should().BeEquivalentTo(_availableFeatures);
+        features.Should().BeEquivalentTo(
+            _availableFeatures,
+            options => options.Using<JsonNode>(ctx =>
+            {
+                ctx.Subject.ToJsonString().Should().Be(ctx.Expectation.ToJsonString());
+            })
+        .WhenTypeIs<JsonNode>());
 
         await _cache.Received(1).RefreshWith(Arg.Any<IDictionary<string, Feature>>(), Arg.Any<CancellationToken?>());
     }
@@ -237,17 +244,17 @@ public class FeatureRefreshWorkerTests : ApiUnitTest<FeatureRefreshWorker>
     {
         var etag = "test-etag";
         var endpoint = "https://cdn.growthbook.io/api/features/sdk-test";
-        var json = JsonConvert.SerializeObject(new FeaturesResponse { Features = _availableFeatures });
+        var json = JsonSerializer.Serialize(new FeaturesResponse { Features = _availableFeatures }, GrowthBookJsonContext.Default.FeaturesResponse);
         var handler = new ETagTestDelegatingHandler(etag, json);
         var httpClient = new HttpClient(handler);
         var etagCache = new LruETagCache();
 
         var first = await httpClient.GetFeaturesFrom(endpoint, _logger, _config, CancellationToken.None, etagCache);
-        first.Features.Should().BeEquivalentTo(_availableFeatures);
+        first.Features.Should().BeEquivalentTo(_availableFeatures, opt => opt.Using<JsonNode>(ctx => ctx.Subject.ToJsonString().Should().Be(ctx.Expectation.ToJsonString())).WhenTypeIs<JsonNode>());
         handler.ReceivedIfNoneMatchHeader.Should().BeFalse("because the first request has no cached ETag yet");
 
         var second = await httpClient.GetFeaturesFrom(endpoint, _logger, _config, CancellationToken.None, etagCache);
-        second.Features.Should().BeEquivalentTo(_availableFeatures);
+        second.Features.Should().BeEquivalentTo(_availableFeatures, opt => opt.Using<JsonNode>(ctx => ctx.Subject.ToJsonString().Should().Be(ctx.Expectation.ToJsonString())).WhenTypeIs<JsonNode>());
         handler.ReceivedIfNoneMatchHeader.Should().BeTrue("because the ETag from the first response should be reused");
         handler.ReceivedETagValue.Should().Be(etag);
     }
@@ -256,13 +263,13 @@ public class FeatureRefreshWorkerTests : ApiUnitTest<FeatureRefreshWorker>
     public async Task PublicGetFeaturesFromOverloadDoesNotRequireETagCache()
     {
         var endpoint = "https://cdn.growthbook.io/api/features/sdk-test";
-        var json = JsonConvert.SerializeObject(new FeaturesResponse { Features = _availableFeatures });
+        var json = JsonSerializer.Serialize(new FeaturesResponse { Features = _availableFeatures }, GrowthBookJsonContext.Default.FeaturesResponse);
         var handler = new ETagTestDelegatingHandler("public-overload-etag", json);
         var httpClient = new HttpClient(handler);
 
         var response = await httpClient.GetFeaturesFrom(endpoint, _logger, _config, CancellationToken.None);
 
-        response.Features.Should().BeEquivalentTo(_availableFeatures);
+        response.Features.Should().BeEquivalentTo(_availableFeatures, opt => opt.Using<JsonNode>(ctx => ctx.Subject.ToJsonString().Should().Be(ctx.Expectation.ToJsonString())).WhenTypeIs<JsonNode>());
         handler.ReceivedIfNoneMatchHeader.Should().BeFalse("because the public overload has no ETag cache");
     }
 
@@ -270,7 +277,7 @@ public class FeatureRefreshWorkerTests : ApiUnitTest<FeatureRefreshWorker>
     public async Task NotModifiedResponseReturnsCachedFeaturesWithoutReplacingCache()
     {
         var etag = "test-etag-304";
-        var json = JsonConvert.SerializeObject(new FeaturesResponse { Features = _availableFeatures });
+        var json = JsonSerializer.Serialize(new FeaturesResponse { Features = _availableFeatures }, GrowthBookJsonContext.Default.FeaturesResponse);
         var handler = new ETagTestDelegatingHandler(etag, json, returnNotModifiedOnSecondCall: true);
         var worker = new FeatureRefreshWorker(_logger, new ETagHttpClientFactory(handler), _config, _cache);
 
@@ -284,8 +291,8 @@ public class FeatureRefreshWorkerTests : ApiUnitTest<FeatureRefreshWorker>
         var first = await worker.RefreshCacheFromApi();
         var second = await worker.RefreshCacheFromApi();
 
-        first.Should().BeEquivalentTo(_availableFeatures);
-        second.Should().BeEquivalentTo(_availableFeatures);
+        first.Should().BeEquivalentTo(_availableFeatures, opt => opt.Using<JsonNode>(ctx => ctx.Subject.ToJsonString().Should().Be(ctx.Expectation.ToJsonString())).WhenTypeIs<JsonNode>());
+        second.Should().BeEquivalentTo(_availableFeatures, opt => opt.Using<JsonNode>(ctx => ctx.Subject.ToJsonString().Should().Be(ctx.Expectation.ToJsonString())).WhenTypeIs<JsonNode>());
         handler.ReceivedIfNoneMatchHeader.Should().BeTrue();
         await _cache.Received(1).RefreshWith(Arg.Any<IDictionary<string, Feature>>(), Arg.Any<CancellationToken?>());
         await _cache.Received(1).GetFeatures(Arg.Any<CancellationToken?>());

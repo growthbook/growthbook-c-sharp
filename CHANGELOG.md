@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0]
+
+### Breaking Changes
+- Upgraded target framework from `netstandard2.0` to `net8.0`
+- Replaced `Newtonsoft.Json` with `System.Text.Json`. All public APIs that previously used `JObject`, `JToken`, `JArray` now use `JsonObject`, `JsonNode`, `JsonArray`
+
+### Added
+- Nullable Reference Types (NRT) across all public and internal APIs
+- Source generation via `GrowthBookJsonContext` for AOT and trimming compatibility
+- New targeting operators from standard spec 0.7.1: `$regexi`, `$ini`, `$nini`, `$alli`
+- Restored `$notRegex` and `$notRegexi` operators
+
+### Fixed
+- Replaced `TaskFactory.StartNew().Unwrap()` with `Task.Run()` in `FeatureRepository`
+- Comparison operators (`$gt`, `$lt`, `$gte`, `$lte`) now correctly distinguish between missing attributes (treated as 0) and explicitly null attributes (returns false)
+
 ## [1.2.0]
 
 - Added custom fields support for experiments.

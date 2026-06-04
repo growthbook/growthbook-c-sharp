@@ -24,7 +24,7 @@ Powerful feature flagging and A/B testing for C# apps using [GrowthBook](https:/
 
 - **Lightweight and fast**
 - **Supports all platforms via C#**
-- **Latest spec version: 0.7.0 [View Changelog](https://docs.growthbook.io/lib/build-your-own#changelog)**
+- **Latest spec version: 0.7.1 [View Changelog](https://docs.growthbook.io/lib/build-your-own#changelog)**
 
 ---
 
@@ -78,8 +78,7 @@ dotnet add package growthbook-c-sharp
 
 ### Loading feature definitions from an API
 
-Because feature definitions are typically loaded from API calls or cache, [Json.NET](https://www.nuget.org/packages/Newtonsoft.Json/13.0.2-beta1)
-objects are used to represent arbitrary document types such as Attributes, Conditions, and Feature values.
+Feature definitions are typically loaded from API calls or cache. The SDK uses `System.Text.Json` to represent arbitrary document types such as Attributes, Conditions, and Feature values.
 
 To load your features from the GrowthBook API use the following example:
 
@@ -94,16 +93,16 @@ To load your features from the GrowthBook API use the following example:
     }
     ```
 
-2. call the endpoint and deserialize result
+2. Call the endpoint and deserialize result
 
     ```csharp
-     var url = "YOUR_GROWTHBOOK_URL/api/features/YOUR_API_KEY";
+    var url = "YOUR_GROWTHBOOK_URL/api/features/YOUR_API_KEY";
     var response = await client.GetAsync(url);
 
     if (response.IsSuccessStatusCode)
     {
         var content = await response.Content.ReadAsStringAsync();
-        var featuresResult = JsonConvert.DeserializeObject<FeaturesResult>(content);
+        var featuresResult = JsonSerializer.Deserialize<FeaturesResult>(content);
     }
     ```
 
@@ -246,7 +245,7 @@ public class Context
     public string DecryptionKey { get; set; }
 
     /// Map of user attributes that are used to assign variations.
-    public JObject Attributes { get; set; } = new JObject();
+    public JsonObject? Attributes { get; set; }
 
     /// The URL of the current page.
     public string Url { get; set; }
@@ -270,7 +269,7 @@ public class Context
     public IDictionary<string, int> ForcedVariations { get; set; } = new Dictionary<string, int>();
 
     /// Saved groups for sticky bucketing or other purposes. Optional.
-    public JObject SavedGroups { get; set; }
+    public JsonObject? SavedGroups { get; set; }
 
     /// If true, random assignment is disabled, and only explicitly forced variations are used.
     public bool QaMode { get; set; } = false;
@@ -302,7 +301,7 @@ public class Experiment
     public string Key { get; set; }
 
     /// The different variations to choose between.
-    public JArray Variations { get; set; }
+    public JsonArray? Variations { get; set; }
 
     /// How to weight traffic between variations. Must add to 1.
     public IList<double> Weights { get; set; }
@@ -317,13 +316,13 @@ public class Experiment
     public IList<BucketRange> Ranges { get; set; }
 
     /// Optional targeting condition.
-    public JObject Condition { get; set; }
+    public JsonObject? Condition { get; set; }
 
     /// Each item defines a prerequisite where a condition must evaluate against a parent feature's value (identified by id). If gate is true, then this is a blocking feature-level prerequisite; otherwise it applies to the current rule only.
-    public IList<ParentCondition> ParentConditions { get; set; }
+    public IList<ParentCondition>? ParentConditions { get; set; }
 
     /// Adds the experiment to a namespace.
-    public Namespace Namespace { get; set; }
+    public Namespace? Namespace { get; set; }
 
     /// All users included in the experiment will be forced into the specific variation index.
     public int? Force { get; set; }
@@ -386,7 +385,7 @@ public class ExperimentResult
     public int VariationId { get; set; }
 
     // The array value of the assigned variation.
-    public JToken Value { get; set; } = JValue.CreateNull();
+    public JsonNode? Value { get; set; }
 
     // If a hash was used to assign a variation.
     public bool HashUsed { get; set; }
@@ -428,7 +427,7 @@ Represents an object consisting of a default value plus rules that can override 
 public class Feature
 {
     // The default value (should use null if not specified).
-    public JToken DefaultValue { get; set; }
+    public JsonNode? DefaultValue { get; set; }
 
     // Array of FeatureRule objects that determine when and how the defaultValue gets overridden.
     public IList<FeatureRule> Rules { get; set; }
@@ -466,7 +465,7 @@ public class FeatureResult
     }
 
     //The assigned value of the feature.
-    public JToken Value { get; set; }
+    public JsonNode? Value { get; set; }
 
     //The assigned value cast to a boolean. Returns `true` if the value is non-null, non-empty, and not equivalent to "0" or "false".
     public bool On
@@ -496,19 +495,19 @@ public class FeatureRule
     public string Id { get; set; }
 
     //Optional targeting condition.
-    public JObject Condition { get; set; }
+    public JsonObject? Condition { get; set; }
 
     //Each item defines a prerequisite where a condition must evaluate against a parent feature's value (identified by id). If `gate` is true, then this is a blocking feature-level prerequisite; otherwise, it applies to the current rule only.
-    public IList<ParentCondition> ParentConditions { get; set; }
+    public IList<ParentCondition>? ParentConditions { get; set; }
 
     //What percent of users should be included in the experiment (between 0 and 1, inclusive).
     public double? Coverage { get; set; }
 
     //Immediately force a specific value (ignore every other option besides `condition` and `coverage`).
-    public JToken Force { get; set; }
+    public JsonNode? Force { get; set; }
 
     //Run an experiment (A/B test) and randomly choose between these variations.
-    public JArray Variations { get; set; }
+    public JsonArray? Variations { get; set; }
 
     //The globally unique tracking key for the experiment (defaults to the feature key).
     public string Key { get; set; }

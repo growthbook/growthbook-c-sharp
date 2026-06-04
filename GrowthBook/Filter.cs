@@ -12,12 +12,12 @@ namespace GrowthBook
         /// <summary>
         /// The seed used in the hash.
         /// </summary>
-        public string Seed { get; set; }
+        public string? Seed { get; set; }
 
         /// <summary>
         /// Array of ranges that are included.
         /// </summary>
-        public BucketRange[] Ranges { get; set; }
+        public BucketRange[]? Ranges { get; set; }
 
         /// <summary>
         /// The hash version to use (defaults to 2).

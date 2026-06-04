@@ -1,8 +1,8 @@
 using System.Collections.Generic;
+using System.Text.Json.Nodes;
 using FluentAssertions;
 using GrowthBook;
 using GrowthBook.Utilities;
-using Newtonsoft.Json.Linq;
 using Xunit;
 
 namespace GrowthBook.Tests.Utilities
@@ -17,7 +17,7 @@ namespace GrowthBook.Tests.Utilities
                 RemoteEval = true,
                 ApiHost = "https://api.example.com",
                 ClientKey = "test-key",
-                Attributes = JObject.Parse(@"{""userId"": ""123"", ""plan"": ""basic""}"),
+                Attributes = JsonNode.Parse(@"{""userId"": ""123"", ""plan"": ""basic""}")!.AsObject(),
                 CacheKeyAttributes = new[] { "userId" }
             };
 
@@ -40,8 +40,8 @@ namespace GrowthBook.Tests.Utilities
         [Fact]
         public void ShouldTriggerRemoteEvaluation_ShouldDetectChanges()
         {
-            var oldAttributes = JObject.Parse(@"{""userId"": ""123"", ""plan"": ""basic""}");
-            var newAttributes = JObject.Parse(@"{""userId"": ""456"", ""plan"": ""basic""}");
+            var oldAttributes = JsonNode.Parse(@"{""userId"": ""123"", ""plan"": ""basic""}")!.AsObject();
+            var newAttributes = JsonNode.Parse(@"{""userId"": ""456"", ""plan"": ""basic""}")!.AsObject();
             var cacheKeyAttributes = new[] { "userId" };
 
             // Should trigger when monitored attribute changes
@@ -50,7 +50,7 @@ namespace GrowthBook.Tests.Utilities
             result.Should().BeTrue();
 
             // Should not trigger when non-monitored attribute changes
-            var newAttributes2 = JObject.Parse(@"{""userId"": ""123"", ""plan"": ""premium""}");
+            var newAttributes2 = JsonNode.Parse(@"{""userId"": ""123"", ""plan"": ""premium""}")!.AsObject();
             var result2 = RemoteEvaluationUtilities.ShouldTriggerRemoteEvaluation(
                 oldAttributes, newAttributes2, cacheKeyAttributes);
             result2.Should().BeFalse();

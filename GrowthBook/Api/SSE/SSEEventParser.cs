@@ -34,7 +34,7 @@ namespace GrowthBook.Api.SSE
         /// </summary>
         /// <param name="eventString">Raw event string</param>
         /// <returns>Parsed SSEEvent or null if invalid</returns>
-        public static SSEEvent ParseEvent(string eventString)
+        public static SSEEvent? ParseEvent(string eventString)
         {
             if (string.IsNullOrEmpty(eventString) || eventString.StartsWith(":"))
                 return null; // Comments start with ":"

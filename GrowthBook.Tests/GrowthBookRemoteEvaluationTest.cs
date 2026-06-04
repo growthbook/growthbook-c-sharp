@@ -85,11 +85,11 @@ namespace GrowthBook.Tests
             var growthBook = new GrowthBook(context);
 
             // Test UpdateAttributes
-            growthBook.UpdateAttributes(new { userId = "123" });
+            growthBook.UpdateAttributes(new Dictionary<string, object> { { "userId", "123" } });
             growthBook.Attributes["userId"].ToString().Should().Be("123");
 
             // Test MergeAttributes
-            growthBook.MergeAttributes(new { plan = "premium" });
+            growthBook.MergeAttributes(new Dictionary<string, object> { { "plan", "premium" } });
             growthBook.Attributes["userId"].ToString().Should().Be("123");
             growthBook.Attributes["plan"].ToString().Should().Be("premium");
         }

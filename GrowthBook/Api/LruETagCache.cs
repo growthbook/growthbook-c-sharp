@@ -12,8 +12,8 @@ namespace GrowthBook.Api
 
         private class CacheItem
         {
-            public string Url { get; set; }
-            public string ETag { get; set; }
+            public string? Url { get; set; }
+            public string? ETag { get; set; }
         }
 
         public LruETagCache(int maxSize = 100)
@@ -22,19 +22,15 @@ namespace GrowthBook.Api
             _cache = new Dictionary<string, LinkedListNode<CacheItem>>(_maxSize);
         }
 
-        public string Get(string url)
+        public string? Get(string? url)
         {
             if (url == null)
-            {
                 return null;
-            }
 
             lock (_lock)
             {
                 if (!_cache.TryGetValue(url, out var node))
-                {
                     return null;
-                }
 
                 _lruList.Remove(node);
                 _lruList.AddFirst(node);
@@ -43,12 +39,10 @@ namespace GrowthBook.Api
             }
         }
 
-        public void Put(string url, string etag)
+        public void Put(string? url, string? etag)
         {
             if (url == null)
-            {
                 return;
-            }
 
             lock (_lock)
             {
@@ -69,8 +63,11 @@ namespace GrowthBook.Api
                 if (_cache.Count >= _maxSize)
                 {
                     var lruNode = _lruList.Last;
-                    _cache.Remove(lruNode.Value.Url);
-                    _lruList.RemoveLast();
+                    if (lruNode != null)
+                    {
+                        _cache.Remove(lruNode.Value.Url!);
+                        _lruList.RemoveLast();
+                    }
                 }
 
                 var item = new CacheItem { Url = url, ETag = etag };
@@ -78,12 +75,10 @@ namespace GrowthBook.Api
             }
         }
 
-        public string Remove(string url)
+        public string? Remove(string? url)
         {
             if (url == null)
-            {
                 return null;
-            }
 
             lock (_lock)
             {
@@ -99,12 +94,10 @@ namespace GrowthBook.Api
             }
         }
 
-        private string RemoveCore(string url)
+        private string? RemoveCore(string url)
         {
             if (!_cache.TryGetValue(url, out var node))
-            {
                 return null;
-            }
 
             _cache.Remove(url);
             _lruList.Remove(node);
