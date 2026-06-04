@@ -129,15 +129,15 @@ namespace GrowthBook
         public IGrowthBookFeatureRepository FeatureRepository { get; set; }
 
         /// <summary>
+        /// A cache implementation that overrides the default <see cref="Api.InMemoryFeatureCache"/>.
+        /// Use this to provide a custom cache such as <see cref="Api.FileBasedFeatureCache"/> or a Redis-backed implementation. Optional.
+        /// </summary>
+        public IGrowthBookFeatureCache FeatureCache { get; set; }
+
+        /// <summary>
         /// A logger factory implementation that will enable logging throughout the SDK. Optional.
         /// </summary>
         public ILoggerFactory LoggerFactory { get; set; }
-
-        /// <summary>
-        /// Custom cache directory path for cache manager. Optional.
-        /// Uses system temp directory if not specified.
-        /// </summary>
-        public string CachePath { get; set; }
 
         /// <summary>
         /// Enable remote evaluation of features. When true, the SDK will send user attributes
@@ -196,8 +196,8 @@ namespace GrowthBook
                 QaMode = this.QaMode,
                 TrackingCallback = this.TrackingCallback,
                 FeatureRepository = this.FeatureRepository,
+                FeatureCache = this.FeatureCache,
                 LoggerFactory = this.LoggerFactory,
-                CachePath = this.CachePath,
                 RemoteEval = this.RemoteEval,
                 CacheKeyAttributes = this.CacheKeyAttributes?.ToArray(),
                 ForcedFeatures = this.ForcedFeatures
