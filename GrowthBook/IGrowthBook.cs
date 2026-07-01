@@ -128,5 +128,12 @@ namespace GrowthBook
         /// <param name="cancellationToken">The cancellation token for this operation.</param>
         /// <returns>A <see cref="FeatureLoadResult"/> indicating success or failure with details.</returns>
         Task<FeatureLoadResult> LoadFeaturesWithResult(GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null);
+
+        /// <summary>
+        /// Raised whenever the server confirms features: on HTTP 200 (WasModified=true),
+        /// HTTP 304 Not Modified (WasModified=false), and server-sent event updates.
+        /// May fire on a background thread (SSE) — marshal to the UI thread if needed.
+        /// </summary>
+        event EventHandler<FeaturesRefreshedEventArgs> FeaturesRefreshed;
     }
 }
