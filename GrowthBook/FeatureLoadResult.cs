@@ -33,17 +33,29 @@ namespace GrowthBook
         /// </summary>
         public Exception Exception { get; private set; }
 
+        /// <summary>
+        ///  Whether the server returns modified features (HHTP 200) as opposed to confirming the
+        /// cached features are still valid (HHTP 304 Not Modified).
+        /// <para>
+        /// Reliable only when the load waited for the server round-trip - i.e the first load
+        /// (empty cache or when <sse cref="GrowthBookRetrievalOptions.WaitForCompletion"/> is true.
+        /// In the fire-and-forget path the method returns before the refresh copletes, and for remote evaluation there is no 304 concept, so this stays <c>false</c> in those cases.
+        /// </para>
+        /// </summary>
+        public bool WasModified { get; private set; }
+
         private FeatureLoadResult() { }
 
         /// <summary>
         /// Creates a successful result.
         /// </summary>
-        public static FeatureLoadResult CreateSuccess(int featureCount)
+        public static FeatureLoadResult CreateSuccess(int featureCount, bool wasModified = true)
         {
             return new FeatureLoadResult
             {
                 Success = true,
-                FeatureCount = featureCount
+                FeatureCount = featureCount,
+                WasModified = wasModified
             };
         }
 
@@ -67,7 +79,7 @@ namespace GrowthBook
             {
                 return $"Success: Loaded {FeatureCount} features";
             }
-            
+
             var result = $"Failed: {ErrorMessage}";
             if (StatusCode.HasValue)
             {
