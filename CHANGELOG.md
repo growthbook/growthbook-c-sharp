@@ -24,6 +24,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Stopped logging feature payload bodies, both the raw API response and the decrypted one. A payload carries saved
   groups, which are typically lists of user identifiers, so it is personal data. Character counts are logged instead.
 
+### Added
+- `FeaturesRefreshed` event on `IGrowthBook` (and on `IGrowthBookFeatureRepository` /
+  `IGrowthBookFeatureRefreshWorker`) that fires whenever the server confirms features —
+  on HTTP 200 (`WasModified = true`), HTTP 304 Not Modified (`WasModified = false`), and
+  server-sent events. Brings parity with the Kotlin/Flutter refresh handlers.
+- `FeaturesRefreshedEventArgs` (WasModified, Source, Features, FeatureCount, RefreshedAt)
+  and `FeatureRefreshSource` enum (Http, ServerSentEvent).
+- `FeatureLoadResult.WasModified` so `LoadFeaturesWithResult` callers can distinguish a
+  200 from a 304 on the pull path.
+
+### Fixed
+- The 304 Not Modified path now notifies subscribers instead of silently confirming the
+  cache, and `GrowthBook.Features` is now updated on background/SSE refreshes.
+
+### Changed (breaking)
+- `IGrowthBookFeatureRepository` and `IGrowthBookFeatureRefreshWorker` gained a
+  `FeaturesRefreshed` event member. Custom implementations of these interfaces must add it.
+-
 ## [1.2.0]
 
 - Added custom fields support for experiments.

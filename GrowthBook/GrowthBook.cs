@@ -25,6 +25,8 @@ namespace GrowthBook
     /// </summary>
     public class GrowthBook : IGrowthBook, IDisposable
     {
+        /// <inheritdoc/>
+        public event EventHandler<FeaturesRefreshedEventArgs> FeaturesRefreshed;
         private readonly bool _qaMode;
         private readonly Dictionary<string, ExperimentAssignment> _assigned;
         private readonly ConcurrentDictionary<string, byte> _tracked;
@@ -50,6 +52,7 @@ namespace GrowthBook
             = new List<Action<Experiment, ExperimentResult>>();
         private readonly List<Func<Experiment, ExperimentResult, Task>> _asyncSubscribers
             = new List<Func<Experiment, ExperimentResult, Task>>();
+        private volatile bool _lastHttpRefreshWasModified;
 
         /// <summary>
         /// Creates a new GrowthBook instance from the passed context.
@@ -113,6 +116,7 @@ namespace GrowthBook
             if (context.FeatureRepository != null)
             {
                 _featureRepository = context.FeatureRepository;
+                _featureRepository.FeaturesRefreshed += OnRepositoryFeaturesRefreshed;
             }
             else
             {
@@ -132,6 +136,7 @@ namespace GrowthBook
                 }
 
                 _featureRepository = new FeatureRepository(featureRepositoryLogger, featureCache, featureRefreshWorker, remoteEvaluationService);
+                _featureRepository.FeaturesRefreshed += OnRepositoryFeaturesRefreshed;
             }
         }
 
@@ -218,6 +223,7 @@ namespace GrowthBook
                     {
                         disposableFactory.Dispose();
                     }
+                    _featureRepository.FeaturesRefreshed -= OnRepositoryFeaturesRefreshed;
                 }
                 _disposedValue = true;
             }
@@ -700,6 +706,7 @@ namespace GrowthBook
                 _logger.LogInformation("Loading features from the repository");
                 IDictionary<string, Feature> features;
 
+                _lastHttpRefreshWasModified = false;
                 // Use remote evaluation if enabled and configured
                 if (_context.RemoteEval && RemoteEvaluationUtilities.IsValidForRemoteEvaluation(_context))
                 {
@@ -723,7 +730,7 @@ namespace GrowthBook
 
                 _logger.LogInformation($"Loading features has completed, retrieved '{featureCount}' features");
 
-                return FeatureLoadResult.CreateSuccess(featureCount);
+                return FeatureLoadResult.CreateSuccess(featureCount, _lastHttpRefreshWasModified);
             }
             catch (FeatureLoadException ex)
             {
@@ -1292,6 +1299,20 @@ namespace GrowthBook
                     }
                 });
             }
+        }
+
+        private void OnRepositoryFeaturesRefreshed(object sender, FeaturesRefreshedEventArgs e)
+        {
+            if (e.WasModified)
+            {
+                Features = e.Features.ToDictionary(k => k.Key, v => v.Value);
+            }
+
+            if (e.Source == FeatureRefreshSource.Http)
+            {
+                _lastHttpRefreshWasModified = e.WasModified;
+            }
+            FeaturesRefreshed?.Invoke(this, e);
         }
     }
 }
