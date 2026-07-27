@@ -57,6 +57,7 @@ namespace GrowthBook
         private readonly object _attributesLock = new object();
         private JObject _previousAttributes;
         private IDictionary<string, int> _previousForcedVariations;
+        private Task _pendingRemoteEvaluation;
         private readonly List<Action<Experiment, ExperimentResult>> _subscribers
             = new List<Action<Experiment, ExperimentResult>>();
         private readonly List<Func<Experiment, ExperimentResult, Task>> _asyncSubscribers
@@ -352,6 +353,7 @@ namespace GrowthBook
                 if (disposing)
                 {
                     Attributes = null;
+                    _pendingRemoteEvaluation = null;
                     Features.Clear();
                     ForcedVariations = null;
                     _trackingCallback = null;
@@ -476,14 +478,150 @@ namespace GrowthBook
         }
 
         /// <summary>
-        /// Applies the provided attributes, either replacing the existing ones entirely or merging into them.
+        /// Replaces all user attributes with the ones provided and, in remote evaluation mode, waits for the
+        /// features to be evaluated again against them.
+        /// </summary>
+        /// <remarks>
+        /// Behaves like <see cref="UpdateAttributes(IDictionary{string, object})"/>, except that the returned task
+        /// only completes once any triggered remote evaluation has finished.
+        /// </remarks>
+        /// <param name="attributes">New user attributes as IDictionary, or null to clear all attributes.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A <see cref="Task"/> that represents the update and any remote evaluation it triggered.</returns>
+        public Task UpdateAttributesAsync(IDictionary<string, object> attributes, CancellationToken? cancellationToken = null)
+        {
+            _logger?.LogDebug("Replaced attributes with {Count} properties", attributes?.Count ?? 0);
+
+            return ApplyAttributesAsync(ToJObject(attributes), isMerge: false, cancellationToken);
+        }
+
+        /// <summary>
+        /// Replaces all user attributes with the ones provided and, in remote evaluation mode, waits for the
+        /// features to be evaluated again against them.
+        /// </summary>
+        /// <remarks>
+        /// Behaves like <see cref="UpdateAttributes(object)"/>, except that the returned task only completes once
+        /// any triggered remote evaluation has finished.
+        /// </remarks>
+        /// <param name="attributes">New user attributes as an anonymous object or a <see cref="JObject"/>, or null to clear all attributes.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A <see cref="Task"/> that represents the update and any remote evaluation it triggered.</returns>
+        public Task UpdateAttributesAsync(object attributes, CancellationToken? cancellationToken = null)
+        {
+            _logger?.LogDebug("Replaced attributes from object");
+
+            return ApplyAttributesAsync(ToJObject(attributes), isMerge: false, cancellationToken);
+        }
+
+        /// <summary>
+        /// Merges additional attributes into the existing ones and, in remote evaluation mode, waits for the
+        /// features to be evaluated again against them.
+        /// </summary>
+        /// <remarks>
+        /// Behaves like <see cref="MergeAttributes(IDictionary{string, object})"/>, except that the returned task
+        /// only completes once any triggered remote evaluation has finished.
+        /// </remarks>
+        /// <param name="additionalAttributes">Additional attributes to merge.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A <see cref="Task"/> that represents the merge and any remote evaluation it triggered.</returns>
+        public Task MergeAttributesAsync(IDictionary<string, object> additionalAttributes, CancellationToken? cancellationToken = null)
+        {
+            if (additionalAttributes == null) return Task.CompletedTask;
+
+            _logger?.LogDebug("Merged {Count} additional attributes", additionalAttributes.Count);
+
+            return ApplyAttributesAsync(ToJObject(additionalAttributes), isMerge: true, cancellationToken);
+        }
+
+        /// <summary>
+        /// Merges additional attributes into the existing ones and, in remote evaluation mode, waits for the
+        /// features to be evaluated again against them.
+        /// </summary>
+        /// <remarks>
+        /// Behaves like <see cref="MergeAttributes(object)"/>, except that the returned task only completes once
+        /// any triggered remote evaluation has finished.
+        /// </remarks>
+        /// <param name="additionalAttributes">Additional attributes to merge as an anonymous object or a <see cref="JObject"/>.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A <see cref="Task"/> that represents the merge and any remote evaluation it triggered.</returns>
+        public Task MergeAttributesAsync(object additionalAttributes, CancellationToken? cancellationToken = null)
+        {
+            if (additionalAttributes == null) return Task.CompletedTask;
+
+            _logger?.LogDebug("Merged additional attributes from object");
+
+            return ApplyAttributesAsync(ToJObject(additionalAttributes), isMerge: true, cancellationToken);
+        }
+
+        /// <summary>
+        /// Applies the provided attributes, either replacing the existing ones entirely or merging into them,
+        /// and starts a remote evaluation in the background if the change requires one.
         /// </summary>
         /// <param name="attributes">The attributes to apply.</param>
         /// <param name="isMerge">True to merge into the existing attributes, false to replace them.</param>
         private void ApplyAttributes(JObject attributes, bool isMerge)
         {
-            bool shouldTriggerRemoteEvaluation;
+            var requiresRemoteEvaluation = SwapInAttributes(attributes, isMerge);
 
+            // Outside the attributes lock, since this reaches the sticky bucket service. Every attribute change
+            // funnels through here - including a direct assignment to Attributes - so the assignments are
+            // re-resolved for the new identifier exactly once per change.
+            RefreshStickyBucketAssignments();
+
+            if (requiresRemoteEvaluation)
+            {
+                // The caller has no way to wait for this, so the task is kept around for the next feature load
+                // to await. Callers that need the refreshed features can use the async version of this method.
+                StartRemoteEvaluation(null);
+            }
+        }
+
+        /// <summary>
+        /// Applies the provided attributes, either replacing the existing ones entirely or merging into them,
+        /// and waits for any remote evaluation the change requires.
+        /// </summary>
+        /// <param name="attributes">The attributes to apply.</param>
+        /// <param name="isMerge">True to merge into the existing attributes, false to replace them.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A <see cref="Task"/> that represents any remote evaluation that was triggered.</returns>
+        private Task ApplyAttributesAsync(JObject attributes, bool isMerge, CancellationToken? cancellationToken)
+        {
+            var requiresRemoteEvaluation = SwapInAttributes(attributes, isMerge);
+
+            RefreshStickyBucketAssignments();
+
+            if (!requiresRemoteEvaluation)
+            {
+                return Task.CompletedTask;
+            }
+
+            return StartRemoteEvaluation(cancellationToken);
+        }
+
+        /// <summary>
+        /// Starts a remote evaluation and records it so that a subsequent feature load can wait for it.
+        /// </summary>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A <see cref="Task"/> that represents the remote evaluation.</returns>
+        private Task StartRemoteEvaluation(CancellationToken? cancellationToken)
+        {
+            // Attributes are part of the remote evaluation payload, so changing them makes the previously
+            // evaluated features stale. This runs after the swap so the request uses the new attributes.
+            var remoteEvaluation = TriggerRemoteEvaluationAsync(cancellationToken);
+
+            Interlocked.Exchange(ref _pendingRemoteEvaluation, remoteEvaluation);
+
+            return remoteEvaluation;
+        }
+
+        /// <summary>
+        /// Builds the updated attributes and publishes them as the current ones.
+        /// </summary>
+        /// <param name="attributes">The attributes to apply.</param>
+        /// <param name="isMerge">True to merge into the existing attributes, false to replace them.</param>
+        /// <returns>True if the change requires a remote evaluation.</returns>
+        private bool SwapInAttributes(JObject attributes, bool isMerge)
+        {
             lock (_attributesLock)
             {
                 var updatedAttributes = attributes;
@@ -498,25 +636,20 @@ namespace GrowthBook
                     }
                 }
 
-                shouldTriggerRemoteEvaluation = _context.RemoteEval && ShouldTriggerRemoteEvaluation(updatedAttributes);
+                var shouldTriggerRemoteEvaluation = _context.RemoteEval && ShouldTriggerRemoteEvaluation(updatedAttributes);
 
                 // The updated attributes are built off to the side and swapped in with a single reference assignment
                 // so that a concurrent evaluation sees either the previous attributes or the fully updated ones,
                 // but never a partially merged state.
                 Attributes = updatedAttributes;
                 _previousAttributes = updatedAttributes.DeepClone() as JObject;
-            }
 
-            // Outside the lock: this reaches the sticky bucket service, and every attribute change funnels
-            // through here - including a direct assignment to Attributes - so the assignments are re-resolved
-            // for the new identifier exactly once per change.
-            RefreshStickyBucketAssignments();
+                // Snapshot the forced variations as well, since they're part of the same comparison. Without this
+                // they would stay different from the previous ones forever once they've been changed, and every
+                // later attribute change would trigger a remote evaluation whether or not it needed one.
+                _previousForcedVariations = ForcedVariations?.ToDictionary(k => k.Key, v => v.Value);
 
-            if (shouldTriggerRemoteEvaluation)
-            {
-                // Attributes are part of the remote evaluation payload, so changing them makes the previously
-                // evaluated features stale. This is triggered after the swap so the request uses the new attributes.
-                TriggerRemoteEvaluationAsync().ConfigureAwait(false);
+                return shouldTriggerRemoteEvaluation;
             }
         }
 
@@ -927,6 +1060,16 @@ namespace GrowthBook
             {
                 _logger.LogInformation("Loading features from the repository");
                 IDictionary<string, Feature> features;
+
+                // A remote evaluation started by an attribute change may still be in flight. Wait for it first so
+                // that its now older response can't land after this load and overwrite the features it retrieves.
+                // It handles its own errors, so it never faults.
+                var pendingRemoteEvaluation = Interlocked.Exchange(ref _pendingRemoteEvaluation, null);
+
+                if (pendingRemoteEvaluation != null)
+                {
+                    await pendingRemoteEvaluation;
+                }
 
                 // Use remote evaluation if enabled and configured
                 if (_context.RemoteEval && RemoteEvaluationUtilities.IsValidForRemoteEvaluation(_context))
@@ -1485,14 +1628,15 @@ namespace GrowthBook
         /// <summary>
         /// Triggers remote evaluation asynchronously when attribute changes are detected.
         /// </summary>
-        private async Task TriggerRemoteEvaluationAsync()
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        private async Task TriggerRemoteEvaluationAsync(CancellationToken? cancellationToken)
         {
             try
             {
                 _logger?.LogDebug("Triggering remote evaluation due to attribute changes");
 
                 var currentContext = CreateCurrentContext();
-                var features = await _featureRepository.GetFeaturesWithContext(currentContext).ConfigureAwait(false);
+                var features = await _featureRepository.GetFeaturesWithContext(currentContext, cancellationToken: cancellationToken).ConfigureAwait(false);
 
                 if (features != null)
                 {

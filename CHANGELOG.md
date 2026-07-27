@@ -39,6 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `MergeAttributes` mutating the attributes in place, which could expose a partially merged state to a
   concurrent evaluation, and fixed it throwing on null values.
 - Added `UpdateAttributes`/`MergeAttributes` to `IGrowthBook`.
+- Added `UpdateAttributesAsync`/`MergeAttributesAsync`, which wait for the remote evaluation that an attribute
+  change triggers. The synchronous versions no longer leave that evaluation unobserved: the next feature load
+  waits for it, so a stale in-flight response can't overwrite newer features.
 
 ## [1.2.0]
 

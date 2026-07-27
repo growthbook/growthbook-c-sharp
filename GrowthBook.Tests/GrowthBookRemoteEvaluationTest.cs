@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using GrowthBook;
@@ -92,6 +93,99 @@ namespace GrowthBook.Tests
             growthBook.MergeAttributes(new { plan = "premium" });
             growthBook.Attributes["userId"].ToString().Should().Be("123");
             growthBook.Attributes["plan"].ToString().Should().Be("premium");
+        }
+
+        [Fact]
+        public async Task MergeAttributesAsync_ShouldWaitForTheRemoteEvaluationOfTheMergedAttributes()
+        {
+            // Arrange
+            var mockRepository = Substitute.For<IGrowthBookFeatureRepository>();
+            var features = new Dictionary<string, Feature> { { "test", new Feature { DefaultValue = true } } };
+
+            mockRepository.GetFeaturesWithContext(Arg.Any<Context>(), Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken?>())
+                .Returns(Task.FromResult<IDictionary<string, Feature>>(features));
+
+            var context = new Context(new { userId = "123" })
+            {
+                RemoteEval = true,
+                ClientKey = "test-key",
+                ApiHost = "https://api.example.com",
+                FeatureRepository = mockRepository
+            };
+
+            using var growthBook = new GrowthBook(context);
+
+            // Act
+            await growthBook.MergeAttributesAsync(new { plan = "premium" });
+
+            // Assert
+            await mockRepository.Received(1).GetFeaturesWithContext(
+                Arg.Is<Context>(x => x.Attributes["userId"].ToString() == "123" && x.Attributes["plan"].ToString() == "premium"),
+                Arg.Any<GrowthBookRetrievalOptions>(),
+                Arg.Any<CancellationToken?>());
+
+            growthBook.Features.Should().ContainKey("test");
+        }
+
+        [Fact]
+        public async Task MergeAttributesAsync_WithoutAnActualChange_ShouldNotTriggerRemoteEvaluation()
+        {
+            // Arrange
+            var mockRepository = Substitute.For<IGrowthBookFeatureRepository>();
+
+            var context = new Context(new { userId = "123" })
+            {
+                RemoteEval = true,
+                ClientKey = "test-key",
+                ApiHost = "https://api.example.com",
+                FeatureRepository = mockRepository
+            };
+
+            using var growthBook = new GrowthBook(context);
+
+            // Act
+            await growthBook.MergeAttributesAsync(new { userId = "123" });
+
+            // Assert
+            await mockRepository.DidNotReceive().GetFeaturesWithContext(Arg.Any<Context>(), Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken?>());
+        }
+
+        [Fact]
+        public async Task LoadFeaturesWithResult_ShouldWaitForAPendingRemoteEvaluation()
+        {
+            // Arrange
+            var pendingRemoteEvaluation = new TaskCompletionSource<IDictionary<string, Feature>>();
+            var mockRepository = Substitute.For<IGrowthBookFeatureRepository>();
+            var features = new Dictionary<string, Feature> { { "test", new Feature { DefaultValue = true } } };
+
+            mockRepository.GetFeaturesWithContext(Arg.Any<Context>(), Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken?>())
+                .Returns(pendingRemoteEvaluation.Task, Task.FromResult<IDictionary<string, Feature>>(features));
+
+            var context = new Context(new { userId = "123" })
+            {
+                RemoteEval = true,
+                ClientKey = "test-key",
+                ApiHost = "https://api.example.com",
+                FeatureRepository = mockRepository
+            };
+
+            using var growthBook = new GrowthBook(context);
+
+            // Act
+            growthBook.MergeAttributes(new { plan = "premium" });
+
+            var load = growthBook.LoadFeaturesWithResult();
+
+            // Assert
+            load.IsCompleted.Should().BeFalse(); // Blocked on the remote evaluation that the merge started
+
+            pendingRemoteEvaluation.SetResult(features);
+
+            var result = await load;
+
+            result.Success.Should().BeTrue();
+
+            await mockRepository.Received(2).GetFeaturesWithContext(Arg.Any<Context>(), Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken?>());
         }
     }
 }

@@ -155,6 +155,42 @@ namespace GrowthBook
         void MergeAttributes(object additionalAttributes);
 
         /// <summary>
+        /// Replaces all user attributes with the ones provided and, in remote evaluation mode, waits for the
+        /// features to be evaluated again against them.
+        /// </summary>
+        /// <param name="attributes">New user attributes as IDictionary, or null to clear all attributes.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A <see cref="Task"/> that represents the update and any remote evaluation it triggered.</returns>
+        Task UpdateAttributesAsync(IDictionary<string, object> attributes, CancellationToken? cancellationToken = null);
+
+        /// <summary>
+        /// Replaces all user attributes with the ones provided and, in remote evaluation mode, waits for the
+        /// features to be evaluated again against them.
+        /// </summary>
+        /// <param name="attributes">New user attributes as an anonymous object, or null to clear all attributes.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A <see cref="Task"/> that represents the update and any remote evaluation it triggered.</returns>
+        Task UpdateAttributesAsync(object attributes, CancellationToken? cancellationToken = null);
+
+        /// <summary>
+        /// Merges additional attributes into the existing ones and, in remote evaluation mode, waits for the
+        /// features to be evaluated again against them.
+        /// </summary>
+        /// <param name="additionalAttributes">Additional attributes to merge.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A <see cref="Task"/> that represents the merge and any remote evaluation it triggered.</returns>
+        Task MergeAttributesAsync(IDictionary<string, object> additionalAttributes, CancellationToken? cancellationToken = null);
+
+        /// <summary>
+        /// Merges additional attributes into the existing ones and, in remote evaluation mode, waits for the
+        /// features to be evaluated again against them.
+        /// </summary>
+        /// <param name="additionalAttributes">Additional attributes to merge as an anonymous object.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A <see cref="Task"/> that represents the merge and any remote evaluation it triggered.</returns>
+        Task MergeAttributesAsync(object additionalAttributes, CancellationToken? cancellationToken = null);
+
+        /// <summary>
         /// Loads all available features from the API and caches them for faster retrieval.
         /// </summary>
         /// <param name="options">An optional set of choices that affect how the features will be loaded.</param>

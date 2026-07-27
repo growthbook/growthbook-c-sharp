@@ -192,6 +192,13 @@ about have changed, since attributes are part of the evaluation payload.
   // Merges — attributes are now { "id": "user123", "country": "US", "age": 30 }
   ```
 
+- **Wait for the remote evaluation an attribute change triggers**:
+  ```csharp
+  await growthBook.MergeAttributesAsync(new { age = 30 });
+  // The features have been evaluated again against the new attributes
+  ```
+  The synchronous methods start that evaluation in the background instead, and the next feature load waits for it.
+
 ---
 
 ### 4. **Lifecycle Management**
