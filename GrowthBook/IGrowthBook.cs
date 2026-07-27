@@ -115,6 +115,46 @@ namespace GrowthBook
         ExperimentResult Run(Experiment experiment);
 
         /// <summary>
+        /// Replaces all user attributes with the ones provided.
+        /// </summary>
+        /// <remarks>
+        /// This is a full replace: any attribute that isn't present in <paramref name="attributes"/> is dropped.
+        /// Use <see cref="MergeAttributes(IDictionary{string, object})"/> to merge into the existing attributes instead.
+        /// </remarks>
+        /// <param name="attributes">New user attributes as IDictionary, or null to clear all attributes.</param>
+        void UpdateAttributes(IDictionary<string, object> attributes);
+
+        /// <summary>
+        /// Replaces all user attributes with the ones provided.
+        /// </summary>
+        /// <remarks>
+        /// This is a full replace: any attribute that isn't present in <paramref name="attributes"/> is dropped.
+        /// Use <see cref="MergeAttributes(object)"/> to merge into the existing attributes instead.
+        /// </remarks>
+        /// <param name="attributes">New user attributes as an anonymous object, or null to clear all attributes.</param>
+        void UpdateAttributes(object attributes);
+
+        /// <summary>
+        /// Merges additional attributes into the existing ones.
+        /// </summary>
+        /// <remarks>
+        /// This is a shallow merge: new keys are added, existing keys are overwritten, and keys that aren't present
+        /// in <paramref name="additionalAttributes"/> are preserved. Passing null is a no-op.
+        /// </remarks>
+        /// <param name="additionalAttributes">Additional attributes to merge.</param>
+        void MergeAttributes(IDictionary<string, object> additionalAttributes);
+
+        /// <summary>
+        /// Merges additional attributes into the existing ones.
+        /// </summary>
+        /// <remarks>
+        /// This is a shallow merge: new keys are added, existing keys are overwritten, and keys that aren't present
+        /// in <paramref name="additionalAttributes"/> are preserved. Passing null is a no-op.
+        /// </remarks>
+        /// <param name="additionalAttributes">Additional attributes to merge as an anonymous object.</param>
+        void MergeAttributes(object additionalAttributes);
+
+        /// <summary>
         /// Loads all available features from the API and caches them for faster retrieval.
         /// </summary>
         /// <param name="options">An optional set of choices that affect how the features will be loaded.</param>

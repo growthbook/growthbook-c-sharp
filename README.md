@@ -167,16 +167,29 @@ Run A/B tests and manage experiment assignments.
 ---
 
 ### 3. **Attribute Management**
-Update or merge user attributes dynamically to reflect changes in targeting or experiment assignment.
+Update or merge user attributes dynamically to reflect changes in targeting or experiment assignment. There are two
+APIs with different semantics:
 
-- **Update Attributes**:
+- `UpdateAttributes` **replaces** the whole attribute set — anything not included is dropped.
+- `MergeAttributes` **merges** into the existing attributes — new keys are added, existing keys are overwritten, and
+  untouched keys are preserved (parity with the TypeScript SDK's `updateAttributes()`). The merge is shallow, so
+  nested objects are replaced rather than merged.
+
+Both accept an anonymous object, an `IDictionary<string, object>`, or a `JObject`. A `null` value is stored as a JSON
+null and does not remove the key; passing `null` clears all attributes for `UpdateAttributes` and is a no-op for
+`MergeAttributes`. In remote-eval mode, either call triggers a fresh remote evaluation when the attributes it cares
+about have changed, since attributes are part of the evaluation payload.
+
+- **Update (replace) Attributes**:
   ```csharp
   growthBook.UpdateAttributes(new { id = "user123", country = "US" });
+  // Replaces everything — attributes are now just { "id": "user123", "country": "US" }
   ```
 
 - **Merge Additional Attributes**:
   ```csharp
   growthBook.MergeAttributes(new { age = 30 });
+  // Merges — attributes are now { "id": "user123", "country": "US", "age": 30 }
   ```
 
 ---

@@ -36,6 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Callbacks that touch context-affine state — UI controls on WPF/WinForms, `HttpContext.Current` on classic
   ASP.NET — have to marshal back themselves. The synchronous overloads are unaffected: they still invoke callbacks
   on the calling thread. `SubscribeAsync` was already dispatched off-context and is unchanged. No public API changed.
+- Fixed `MergeAttributes` mutating the attributes in place, which could expose a partially merged state to a
+  concurrent evaluation, and fixed it throwing on null values.
+- Added `UpdateAttributes`/`MergeAttributes` to `IGrowthBook`.
 
 ## [1.2.0]
 

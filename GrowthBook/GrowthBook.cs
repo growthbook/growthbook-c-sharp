@@ -53,6 +53,8 @@ namespace GrowthBook
         /// Whether there is anywhere to fetch features from at all.
         /// </summary>
         private readonly bool _canFetchFeatures;
+
+        private readonly object _attributesLock = new object();
         private JObject _previousAttributes;
         private IDictionary<string, int> _previousForcedVariations;
         private readonly List<Action<Experiment, ExperimentResult>> _subscribers
@@ -387,118 +389,73 @@ namespace GrowthBook
         }
 
         /// <summary>
-        /// Updates user attributes from an IDictionary for singleton usage pattern.
+        /// Replaces all user attributes with the ones provided.
         /// </summary>
-        /// <param name="attributes">New user attributes as IDictionary</param>
+        /// <remarks>
+        /// This is a full replace: any attribute that isn't present in <paramref name="attributes"/> is dropped.
+        /// Use <see cref="MergeAttributes(IDictionary{string, object})"/> to merge into the existing attributes instead.
+        /// Passing null clears all attributes, and a null value is stored as a JSON null rather than removing the key.
+        /// </remarks>
+        /// <param name="attributes">New user attributes as IDictionary, or null to clear all attributes.</param>
         public void UpdateAttributes(IDictionary<string, object> attributes)
         {
-            var newAttributes = attributes != null ? JObject.FromObject(attributes) : new JObject();
+            ApplyAttributes(ToJObject(attributes), isMerge: false);
 
-            if (_context.RemoteEval && ShouldTriggerRemoteEvaluation(newAttributes))
-            {
-                TriggerRemoteEvaluationAsync(newAttributes).ConfigureAwait(false);
-            }
-
-            Attributes = newAttributes;
-            _previousAttributes = newAttributes?.DeepClone() as JObject;
-
-            if (attributes != null)
-            {
-                Attributes = JObject.FromObject(attributes);
-                _logger?.LogDebug("Updated attributes with {Count} properties", attributes.Count);
-            }
-            else
-            {
-                Attributes = new JObject();
-                _logger?.LogDebug("Cleared attributes");
-            }
-
-            RefreshStickyBucketAssignments();
+            _logger?.LogDebug("Replaced attributes with {Count} properties", attributes?.Count ?? 0);
         }
 
         /// <summary>
-        /// Updates user attributes from an anonymous object for singleton usage pattern.
+        /// Replaces all user attributes with the ones provided.
         /// </summary>
-        /// <param name="attributes">New user attributes as anonymous object</param>
+        /// <remarks>
+        /// This is a full replace: any attribute that isn't present in <paramref name="attributes"/> is dropped.
+        /// Use <see cref="MergeAttributes(object)"/> to merge into the existing attributes instead.
+        /// Passing null clears all attributes, and a null value is stored as a JSON null rather than removing the key.
+        /// </remarks>
+        /// <param name="attributes">New user attributes as an anonymous object or a <see cref="JObject"/>, or null to clear all attributes.</param>
         public void UpdateAttributes(object attributes)
         {
-            var newAttributes = attributes != null ? JObject.FromObject(attributes) : new JObject();
+            ApplyAttributes(ToJObject(attributes), isMerge: false);
 
-            if (_context.RemoteEval && ShouldTriggerRemoteEvaluation(newAttributes))
-            {
-                TriggerRemoteEvaluationAsync(newAttributes).ConfigureAwait(false);
-            }
-
-            Attributes = newAttributes;
-            _previousAttributes = newAttributes?.DeepClone() as JObject;
-
-            if (attributes != null)
-            {
-                Attributes = JObject.FromObject(attributes);
-                _logger?.LogDebug("Updated attributes from object");
-            }
-            else
-            {
-                Attributes = new JObject();
-                _logger?.LogDebug("Cleared attributes");
-            }
-
-            RefreshStickyBucketAssignments();
+            _logger?.LogDebug("Replaced attributes from object");
         }
 
         /// <summary>
-        /// Merges additional attributes with existing ones.
+        /// Merges additional attributes into the existing ones.
         /// </summary>
+        /// <remarks>
+        /// This is a shallow merge, matching the TypeScript SDK's updateAttributes(): new keys are added, existing keys
+        /// are overwritten, and keys that aren't present in <paramref name="additionalAttributes"/> are preserved.
+        /// Nested objects are replaced rather than merged. Passing null is a no-op, and a null value is stored as a
+        /// JSON null rather than removing the key.
+        /// </remarks>
         /// <param name="additionalAttributes">Additional attributes to merge</param>
         public void MergeAttributes(IDictionary<string, object> additionalAttributes)
         {
             if (additionalAttributes == null) return;
-            var oldAttributes = Attributes?.DeepClone() as JObject;
 
-
-            foreach (var kvp in additionalAttributes)
-            {
-                Attributes[kvp.Key] = JToken.FromObject(kvp.Value);
-            }
-
-            if (_context.RemoteEval && ShouldTriggerRemoteEvaluation(Attributes))
-            {
-                TriggerRemoteEvaluationAsync(Attributes).ConfigureAwait(false);
-            }
-
-            _previousAttributes = Attributes?.DeepClone() as JObject;
+            ApplyAttributes(ToJObject(additionalAttributes), isMerge: true);
 
             _logger?.LogDebug("Merged {Count} additional attributes", additionalAttributes.Count);
-
-            RefreshStickyBucketAssignments();
         }
 
         /// <summary>
-        /// Merges additional attributes from an anonymous object with existing ones.
+        /// Merges additional attributes into the existing ones.
         /// </summary>
-        /// <param name="additionalAttributes">Additional attributes to merge as anonymous object</param>
+        /// <remarks>
+        /// This is a shallow merge, matching the TypeScript SDK's updateAttributes(): new keys are added, existing keys
+        /// are overwritten, and keys that aren't present in <paramref name="additionalAttributes"/> are preserved.
+        /// Nested objects are replaced rather than merged. Passing null is a no-op, and a null value is stored as a
+        /// JSON null rather than removing the key.
+        /// </remarks>
+        /// <param name="additionalAttributes">Additional attributes to merge as an anonymous object or a <see cref="JObject"/>.</param>
         public void MergeAttributes(object additionalAttributes)
         {
             if (additionalAttributes == null) return;
 
-            var oldAttributes = Attributes?.DeepClone() as JObject;
-
-            var additionalJObject = JObject.FromObject(additionalAttributes);
-            foreach (var property in additionalJObject.Properties())
-            {
-                Attributes[property.Name] = property.Value;
-            }
-
-            if (_context.RemoteEval && ShouldTriggerRemoteEvaluation(Attributes))
-            {
-                TriggerRemoteEvaluationAsync(Attributes).ConfigureAwait(false);
-            }
-
-            _previousAttributes = Attributes?.DeepClone() as JObject;
+            ApplyAttributes(ToJObject(additionalAttributes), isMerge: true);
 
             _logger?.LogDebug("Merged additional attributes from object");
-
-            RefreshStickyBucketAssignments();
         }
 
         /// <summary>
@@ -516,6 +473,73 @@ namespace GrowthBook
             }
 
             _logger?.LogDebug("Set {Count} forced feature override(s)", _forcedFeatures.Count);
+        }
+
+        /// <summary>
+        /// Applies the provided attributes, either replacing the existing ones entirely or merging into them.
+        /// </summary>
+        /// <param name="attributes">The attributes to apply.</param>
+        /// <param name="isMerge">True to merge into the existing attributes, false to replace them.</param>
+        private void ApplyAttributes(JObject attributes, bool isMerge)
+        {
+            bool shouldTriggerRemoteEvaluation;
+
+            lock (_attributesLock)
+            {
+                var updatedAttributes = attributes;
+
+                if (isMerge)
+                {
+                    updatedAttributes = Attributes?.DeepClone() as JObject ?? new JObject();
+
+                    foreach (var property in attributes.Properties())
+                    {
+                        updatedAttributes[property.Name] = property.Value;
+                    }
+                }
+
+                shouldTriggerRemoteEvaluation = _context.RemoteEval && ShouldTriggerRemoteEvaluation(updatedAttributes);
+
+                // The updated attributes are built off to the side and swapped in with a single reference assignment
+                // so that a concurrent evaluation sees either the previous attributes or the fully updated ones,
+                // but never a partially merged state.
+                Attributes = updatedAttributes;
+                _previousAttributes = updatedAttributes.DeepClone() as JObject;
+            }
+
+            // Outside the lock: this reaches the sticky bucket service, and every attribute change funnels
+            // through here - including a direct assignment to Attributes - so the assignments are re-resolved
+            // for the new identifier exactly once per change.
+            RefreshStickyBucketAssignments();
+
+            if (shouldTriggerRemoteEvaluation)
+            {
+                // Attributes are part of the remote evaluation payload, so changing them makes the previously
+                // evaluated features stale. This is triggered after the swap so the request uses the new attributes.
+                TriggerRemoteEvaluationAsync().ConfigureAwait(false);
+            }
+        }
+
+        /// <summary>
+        /// Converts the provided attributes into a JSON object that this instance can safely take ownership of.
+        /// </summary>
+        /// <param name="attributes">The attributes to convert, which may be null.</param>
+        /// <returns>The attributes as a JSON object, or an empty one if they were null.</returns>
+        private static JObject ToJObject(object attributes)
+        {
+            if (attributes == null)
+            {
+                return new JObject();
+            }
+
+            // Clone rather than take the caller's instance so that later changes on their side
+            // can't mutate the attributes that evaluations are running against.
+            if (attributes is JObject json)
+            {
+                return (JObject)json.DeepClone();
+            }
+
+            return JObject.FromObject(attributes);
         }
 
         /// <inheritdoc />
@@ -1461,8 +1485,7 @@ namespace GrowthBook
         /// <summary>
         /// Triggers remote evaluation asynchronously when attribute changes are detected.
         /// </summary>
-        /// <param name="newAttributes">The new attributes</param>
-        private async Task TriggerRemoteEvaluationAsync(JObject newAttributes)
+        private async Task TriggerRemoteEvaluationAsync()
         {
             try
             {
