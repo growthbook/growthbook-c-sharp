@@ -96,6 +96,57 @@ namespace GrowthBook.Tests.Api
         }
 
         [Fact]
+        public void GrowthBook_MergeAttributes_ShouldReplaceNestedObjectsRatherThanMergeThem()
+        {
+            // Arrange
+            var context = new Context(new { account = new { age = 90, plan = "pro" } });
+            using var growthBook = new GrowthBook(context);
+
+            // Act
+            growthBook.MergeAttributes(new { account = new { age = 10 } });
+
+            // Assert
+            growthBook.Attributes["account"]["age"].ToObject<int>().Should().Be(10);
+            ((JObject)growthBook.Attributes["account"]).ContainsKey("plan").Should().BeFalse(); // The merge is shallow
+        }
+
+        [Fact]
+        public void GrowthBook_MergeAttributes_ShouldBeUsedForTargeting()
+        {
+            // Arrange
+            const string FeatureName = "test-merged-targeting";
+
+            var context = new Context(new { userId = "user123" })
+            {
+                Features = new Dictionary<string, Feature>
+                {
+                    [FeatureName] = new Feature
+                    {
+                        DefaultValue = false,
+                        Rules = new List<FeatureRule>
+                        {
+                            new FeatureRule
+                            {
+                                Condition = JObject.FromObject(new { userId = "user123", plan = "pro" }),
+                                Force = JToken.FromObject(true)
+                            }
+                        }
+                    }
+                }
+            };
+
+            using var growthBook = new GrowthBook(context);
+
+            growthBook.IsOn(FeatureName).Should().BeFalse(); // The plan attribute is missing so far
+
+            // Act
+            growthBook.MergeAttributes(new { plan = "pro" });
+
+            // Assert
+            growthBook.IsOn(FeatureName).Should().BeTrue(); // Evaluation sees both the original and the merged attribute
+        }
+
+        [Fact]
         public void GrowthBook_MergeAttributes_WithNullValue_ShouldStoreJsonNullAndKeepTheKey()
         {
             // Arrange
