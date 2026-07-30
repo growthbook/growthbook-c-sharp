@@ -42,6 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `UpdateAttributesAsync`/`MergeAttributesAsync`, which wait for the remote evaluation that an attribute
   change triggers. The synchronous versions no longer leave that evaluation unobserved: the next feature load
   waits for it, so a stale in-flight response can't overwrite newer features.
+- Fixed a superseded remote evaluation overwriting a newer one. Each evaluation is now tagged with a generation
+  allocated together with the state it sends, and only the most recent one publishes its features, so a response
+  built for attributes that have already been replaced is dropped instead of applied.
 
 ## [1.2.0]
 

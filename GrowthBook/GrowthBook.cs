@@ -58,6 +58,7 @@ namespace GrowthBook
         private JObject _previousAttributes;
         private IDictionary<string, int> _previousForcedVariations;
         private Task _pendingRemoteEvaluation;
+        private long _remoteEvaluationGeneration;
         private readonly List<Action<Experiment, ExperimentResult>> _subscribers
             = new List<Action<Experiment, ExperimentResult>>();
         private readonly List<Func<Experiment, ExperimentResult, Task>> _asyncSubscribers
@@ -607,11 +608,46 @@ namespace GrowthBook
         {
             // Attributes are part of the remote evaluation payload, so changing them makes the previously
             // evaluated features stale. This runs after the swap so the request uses the new attributes.
-            var remoteEvaluation = TriggerRemoteEvaluationAsync(cancellationToken);
+            var evaluationContext = CreateRemoteEvaluationContext(out var generation);
+            var remoteEvaluation = TriggerRemoteEvaluationAsync(evaluationContext, generation, cancellationToken);
 
             Interlocked.Exchange(ref _pendingRemoteEvaluation, remoteEvaluation);
 
             return remoteEvaluation;
+        }
+
+        /// <summary>
+        /// Snapshots the state a remote evaluation request is built from and allocates the generation that
+        /// identifies that request.
+        /// </summary>
+        /// <remarks>
+        /// Both happen under the same lock on purpose. Requests are independent, so a slower earlier one can
+        /// complete after a newer one, and only the generation tells them apart. Allocating it while holding
+        /// the lock that publishes the state makes the generation order the same as the order the state was
+        /// read in, so the highest generation is always the one carrying the newest state. Allocating it
+        /// outside the lock would reintroduce the very race it exists to close.
+        /// </remarks>
+        /// <param name="generation">The generation identifying the request built from the returned state.</param>
+        /// <returns>The state the remote evaluation must run against.</returns>
+        private Context CreateRemoteEvaluationContext(out long generation)
+        {
+            lock (_attributesLock)
+            {
+                generation = Interlocked.Increment(ref _remoteEvaluationGeneration);
+
+                return CreateCurrentContext();
+            }
+        }
+
+        /// <summary>
+        /// Determines whether the remote evaluation identified by the provided generation is still the most
+        /// recent one, and may therefore publish its features.
+        /// </summary>
+        /// <param name="generation">The generation of the remote evaluation to check.</param>
+        /// <returns>True if no newer remote evaluation has been started since.</returns>
+        private bool IsLatestRemoteEvaluation(long generation)
+        {
+            return Interlocked.Read(ref _remoteEvaluationGeneration) == generation;
         }
 
         /// <summary>
@@ -1072,10 +1108,13 @@ namespace GrowthBook
                 }
 
                 // Use remote evaluation if enabled and configured
-                if (_context.RemoteEval && RemoteEvaluationUtilities.IsValidForRemoteEvaluation(_context))
+                var isRemoteEvaluation = _context.RemoteEval && RemoteEvaluationUtilities.IsValidForRemoteEvaluation(_context);
+                var generation = 0L;
+
+                if (isRemoteEvaluation)
                 {
-                    var currentContext = CreateCurrentContext();
-                    features = await _featureRepository.GetFeaturesWithContext(currentContext, options, cancellationToken).ConfigureAwait(false);
+                    var evaluationContext = CreateRemoteEvaluationContext(out generation);
+                    features = await _featureRepository.GetFeaturesWithContext(evaluationContext, options, cancellationToken).ConfigureAwait(false);
                 }
                 else
                 {
@@ -1087,6 +1126,16 @@ namespace GrowthBook
                     var errorMessage = "Feature repository returned null - no features were loaded";
                     _logger.LogWarning(errorMessage);
                     return FeatureLoadResult.CreateFailure(errorMessage);
+                }
+
+                // An attribute change during this fetch started a newer remote evaluation, so these features
+                // were evaluated for state that has already been replaced. The newer evaluation owns what gets
+                // applied; this load reports what is currently applied rather than overwriting it.
+                if (isRemoteEvaluation && !IsLatestRemoteEvaluation(generation))
+                {
+                    _logger.LogDebug("Discarding a superseded remote evaluation response received while loading features");
+
+                    return FeatureLoadResult.CreateSuccess(Features?.Count ?? 0);
                 }
 
                 Features = features;
@@ -1628,21 +1677,34 @@ namespace GrowthBook
         /// <summary>
         /// Triggers remote evaluation asynchronously when attribute changes are detected.
         /// </summary>
+        /// <param name="evaluationContext">The state to evaluate against, snapshotted when the generation was allocated.</param>
+        /// <param name="generation">The generation identifying this remote evaluation.</param>
         /// <param name="cancellationToken">Optional cancellation token.</param>
-        private async Task TriggerRemoteEvaluationAsync(CancellationToken? cancellationToken)
+        private async Task TriggerRemoteEvaluationAsync(Context evaluationContext, long generation, CancellationToken? cancellationToken)
         {
             try
             {
                 _logger?.LogDebug("Triggering remote evaluation due to attribute changes");
 
-                var currentContext = CreateCurrentContext();
-                var features = await _featureRepository.GetFeaturesWithContext(currentContext, cancellationToken: cancellationToken).ConfigureAwait(false);
+                var features = await _featureRepository.GetFeaturesWithContext(evaluationContext, cancellationToken: cancellationToken).ConfigureAwait(false);
 
-                if (features != null)
+                if (features == null)
                 {
-                    Features = features;
-                    _logger?.LogDebug("Remote evaluation completed, updated {Count} features", features.Count);
+                    return;
                 }
+
+                // The atomic swap keeps the attributes consistent, but the features derived from them are
+                // published here, and this response may well have overtaken a newer one. Publishing it would
+                // leave the caller on features evaluated for attributes they've already replaced, so a
+                // superseded response is dropped whole rather than applied.
+                if (!IsLatestRemoteEvaluation(generation))
+                {
+                    _logger?.LogDebug("Discarding a superseded remote evaluation response with {Count} features", features.Count);
+                    return;
+                }
+
+                Features = features;
+                _logger?.LogDebug("Remote evaluation completed, updated {Count} features", features.Count);
             }
             catch (Exception ex)
             {

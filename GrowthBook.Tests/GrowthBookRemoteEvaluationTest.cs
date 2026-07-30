@@ -187,5 +187,87 @@ namespace GrowthBook.Tests
 
             await mockRepository.Received(2).GetFeaturesWithContext(Arg.Any<Context>(), Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken?>());
         }
+
+        [Fact]
+        public async Task RemoteEvaluation_WhenAnOlderResponseLandsLast_ShouldNotOverwriteTheNewerOne()
+        {
+            // Arrange
+            var olderResponse = new TaskCompletionSource<IDictionary<string, Feature>>();
+            var newerResponse = new TaskCompletionSource<IDictionary<string, Feature>>();
+
+            var olderFeatures = new Dictionary<string, Feature> { { "older", new Feature { DefaultValue = true } } };
+            var newerFeatures = new Dictionary<string, Feature> { { "newer", new Feature { DefaultValue = true } } };
+
+            var mockRepository = Substitute.For<IGrowthBookFeatureRepository>();
+
+            mockRepository.GetFeaturesWithContext(Arg.Any<Context>(), Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken?>())
+                .Returns(olderResponse.Task, newerResponse.Task);
+
+            var context = new Context(new { userId = "123" })
+            {
+                RemoteEval = true,
+                ClientKey = "test-key",
+                ApiHost = "https://api.example.com",
+                FeatureRepository = mockRepository
+            };
+
+            using var growthBook = new GrowthBook(context);
+
+            // Act - two attribute changes in a row leave two independent evaluations in flight
+            var older = growthBook.MergeAttributesAsync(new { plan = "premium" });
+            var newer = growthBook.MergeAttributesAsync(new { plan = "enterprise" });
+
+            newerResponse.SetResult(newerFeatures);
+            await newer;
+
+            // The evaluation made for the attributes that have already been replaced completes last
+            olderResponse.SetResult(olderFeatures);
+            await older;
+
+            // Assert
+            growthBook.Features.Should().ContainKey("newer");
+            growthBook.Features.Should().NotContainKey("older");
+        }
+
+        [Fact]
+        public async Task LoadFeaturesWithResult_WhenAnAttributeChangeIsEvaluatedFirst_ShouldNotOverwriteIt()
+        {
+            // Arrange
+            var loadResponse = new TaskCompletionSource<IDictionary<string, Feature>>();
+            var mergeResponse = new TaskCompletionSource<IDictionary<string, Feature>>();
+
+            var olderFeatures = new Dictionary<string, Feature> { { "older", new Feature { DefaultValue = true } } };
+            var newerFeatures = new Dictionary<string, Feature> { { "newer", new Feature { DefaultValue = true } } };
+
+            var mockRepository = Substitute.For<IGrowthBookFeatureRepository>();
+
+            mockRepository.GetFeaturesWithContext(Arg.Any<Context>(), Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken?>())
+                .Returns(loadResponse.Task, mergeResponse.Task);
+
+            var context = new Context(new { userId = "123" })
+            {
+                RemoteEval = true,
+                ClientKey = "test-key",
+                ApiHost = "https://api.example.com",
+                FeatureRepository = mockRepository
+            };
+
+            using var growthBook = new GrowthBook(context);
+
+            // Act - the attributes change while the load is still waiting on its own evaluation
+            var load = growthBook.LoadFeaturesWithResult();
+            var merge = growthBook.MergeAttributesAsync(new { plan = "premium" });
+
+            mergeResponse.SetResult(newerFeatures);
+            await merge;
+
+            loadResponse.SetResult(olderFeatures);
+            var result = await load;
+
+            // Assert
+            result.Success.Should().BeTrue();
+            growthBook.Features.Should().ContainKey("newer");
+            growthBook.Features.Should().NotContainKey("older");
+        }
     }
 }
