@@ -45,5 +45,40 @@ namespace GrowthBook.Tests
             json.Should().Contain("\"attributes\":");
             json.Should().Contain("\"forcedVariations\":");
         }
+
+        [Fact]
+        public void FromContext_ShouldCarryTheForcedFeatureValues()
+        {
+            var context = new Context
+            {
+                ForcedFeatures = new Dictionary<string, object>
+                {
+                    { "dark-mode", true },
+                    { "banner-text", "hello" }
+                }
+            };
+
+            var request = RemoteEvaluationRequest.FromContext(context);
+
+            request.ForcedFeatures.Should().BeEquivalentTo(new[]
+            {
+                new List<object> { "dark-mode", true },
+                new List<object> { "banner-text", "hello" }
+            });
+        }
+
+        [Fact]
+        public void JsonSerialization_ShouldSendForcedFeaturesAsAnArrayOfPairs()
+        {
+            var request = new RemoteEvaluationRequest
+            {
+                ForcedFeatures = new List<List<object>> { new List<object> { "dark-mode", true } }
+            };
+
+            var json = Newtonsoft.Json.JsonConvert.SerializeObject(request);
+
+            // Sending an object rather than an array of pairs makes the API reject the request with 400
+            json.Should().Contain("\"forcedFeatures\":[[\"dark-mode\",true]]");
+        }
     }
 }
