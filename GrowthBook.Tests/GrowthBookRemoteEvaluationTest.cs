@@ -93,5 +93,36 @@ namespace GrowthBook.Tests
             growthBook.Attributes["userId"].ToString().Should().Be("123");
             growthBook.Attributes["plan"].ToString().Should().Be("premium");
         }
+
+        [Fact]
+        public async Task LoadFeaturesWithResult_ShouldSendTheForcedFeaturesForRemoteEvaluation()
+        {
+            // Arrange
+            var mockRepository = Substitute.For<IGrowthBookFeatureRepository>();
+            var features = new Dictionary<string, Feature> { { "test", new Feature { DefaultValue = true } } };
+
+            mockRepository.GetFeaturesWithContext(Arg.Any<Context>(), Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<System.Threading.CancellationToken?>())
+                .Returns(Task.FromResult<IDictionary<string, Feature>>(features));
+
+            var context = new Context
+            {
+                RemoteEval = true,
+                ClientKey = "test-key",
+                ApiHost = "https://api.example.com",
+                ForcedFeatures = new Dictionary<string, object> { { "dark-mode", true } },
+                FeatureRepository = mockRepository
+            };
+
+            var growthBook = new GrowthBook(context);
+
+            // Act
+            await growthBook.LoadFeaturesWithResult();
+
+            // Assert - the server can only apply forced features that actually reach the request
+            await mockRepository.Received(1).GetFeaturesWithContext(
+                Arg.Is<Context>(x => x.ForcedFeatures.ContainsKey("dark-mode") && (bool)x.ForcedFeatures["dark-mode"]),
+                Arg.Any<GrowthBookRetrievalOptions>(),
+                Arg.Any<System.Threading.CancellationToken?>());
+        }
     }
 }
