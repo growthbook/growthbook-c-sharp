@@ -63,7 +63,12 @@ namespace GrowthBook.Api
             var jsonPayload = JsonConvert.SerializeObject(request);
 
             _logger.LogInformation("Starting remote evaluation request to {Url}", url);
-            _logger.LogDebug("Remote evaluation request payload: {Payload}", jsonPayload);
+
+            // Deliberately not the payload: it is built from the user's attributes, which are personal data, and a
+            // debug log ends up in whatever sink the host has configured, with whatever retention it has. The shape of
+            // the request is enough to tell whether it was assembled as expected.
+            _logger.LogDebug("Remote evaluation payload carries {AttributeCount} attributes, {ForcedFeatureCount} forced features and {ForcedVariationCount} forced variations",
+                request.Attributes?.Count ?? 0, request.ForcedFeatures?.Count ?? 0, request.ForcedVariations?.Count ?? 0);
 
             var maxAttempts = Math.Max(1, _retryPolicy.MaxAttempts);
             var budget = _retryPolicy.MaxTotalDuration > TimeSpan.Zero ? _retryPolicy.MaxTotalDuration : (TimeSpan?)null;
@@ -171,8 +176,10 @@ namespace GrowthBook.Api
                     {
                         var responseContent = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
 
-                        _logger.LogDebug("Received response with status {StatusCode}: {Response}",
-                            response.StatusCode, responseContent);
+                        // Same reasoning as the request: an evaluated payload can carry saved groups, which are
+                        // typically lists of user identifiers.
+                        _logger.LogDebug("Received response with status {StatusCode} and {CharacterCount} characters of content",
+                            response.StatusCode, responseContent?.Length ?? 0);
 
                         if (response.IsSuccessStatusCode)
                         {
