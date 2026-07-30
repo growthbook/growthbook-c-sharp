@@ -797,6 +797,13 @@ namespace GrowthBook
         /// <param name="attributes">The attributes that are now current.</param>
         private void SnapshotRemoteEvaluationState(JObject attributes)
         {
+            // Only ShouldTriggerRemoteEvaluation reads these, and it answers false outright without remote evaluation.
+            // Skipping the clone keeps assigning attributes as cheap as it was for everyone evaluating locally.
+            if (!_context.RemoteEval)
+            {
+                return;
+            }
+
             _previousAttributes = attributes?.DeepClone() as JObject;
             _previousForcedVariations = _forcedVariations?.ToDictionary(k => k.Key, v => v.Value);
         }

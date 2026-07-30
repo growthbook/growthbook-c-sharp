@@ -51,6 +51,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Attributes` directly triggers one as well, rather than only `UpdateAttributes`/`MergeAttributes` doing so.
 - Fixed the async API capturing the caller's synchronization context, which could deadlock an application that
   blocks on a `GrowthBook` task (including `EvalFeature(key, alwaysLoadFeatures: true)`, which blocks internally).
+  **Note:** as a consequence, a `TrackingCallback` or subscriber invoked by an async evaluation can now run on a
+  thread pool thread rather than on the caller's context. Callbacks that touch UI controls or other
+  context-affine state need to marshal back themselves.
 
 ## [1.2.0]
 
