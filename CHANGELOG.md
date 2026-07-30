@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+- Finished keeping the caller's synchronization context out of the async paths: `FeatureRepository`,
+  `FeatureRefreshWorker`, `HttpClientExtensions` and `SSEClient` no longer capture it either. An application on a
+  single-threaded context (classic ASP.NET on .NET Framework, WPF, WinForms) that blocks on an SDK task could
+  otherwise still deadlock on the innermost await, including through `EvalFeature(key, alwaysLoadFeatures: true)`
+  and `GetFeatureValue(key, fallback, alwaysLoadFeatures: true)`, which block internally.
+
 ## [1.2.0]
 
 - Added custom fields support for experiments.
