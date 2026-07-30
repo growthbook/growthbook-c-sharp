@@ -53,7 +53,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   leaves a remote-eval consumer on the previously evaluated features until something else triggers a refresh.
   Transport errors, timeouts, 408, 429 and 5xx are retried (honouring `Retry-After`); other 4xx are not, since
   repeating a rejected request only fails the same way. Configurable through `RemoteEvaluationRetryPolicy`;
-  defaults to 3 attempts, 500ms initial backoff, capped at 5s.
+  defaults to 3 attempts, 500ms initial backoff, capped at 5s. The whole round is bounded by a 60s budget, so
+  retrying can't hold a waiting caller for longer than a single request already could.
 - Fixed the async API capturing the caller's synchronization context, which could deadlock an application that
   blocks on a `GrowthBook` task (including `EvalFeature(key, alwaysLoadFeatures: true)`, which blocks internally).
   **Note:** as a consequence, a `TrackingCallback` or subscriber invoked by an async evaluation can now run on a

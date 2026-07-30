@@ -36,6 +36,20 @@ namespace GrowthBook.Api
         public TimeSpan MaxDelay { get; set; } = TimeSpan.FromSeconds(5);
 
         /// <summary>
+        /// Upper bound on the round as a whole - every attempt and every wait together. Zero or less means no bound.
+        /// Defaults to 60s, matching the default per-request HTTP timeout.
+        /// </summary>
+        /// <remarks>
+        /// Attempts multiply the worst case rather than adding to it: three attempts against a server that accepts the
+        /// connection and then never answers would hold the caller for three times the HTTP timeout, and callers do
+        /// wait on this through <c>UpdateAttributesAsync</c> and <c>LoadFeatures</c>. The budget both keeps a new
+        /// attempt from starting once it is spent and cuts short one that would run past it, so retrying cannot stall a
+        /// caller for longer than a single request already could. A failure that returns quickly still gets its full
+        /// share of attempts, which is the case retrying actually helps.
+        /// </remarks>
+        public TimeSpan MaxTotalDuration { get; set; } = TimeSpan.FromSeconds(60);
+
+        /// <summary>
         /// How much to randomly spread each wait, as a fraction of its length. Defaults to 0.2, so a 500ms wait lands
         /// somewhere in 400-600ms.
         /// </summary>

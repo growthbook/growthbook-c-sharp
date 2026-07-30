@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -65,6 +66,10 @@ namespace GrowthBook.Api
             _logger.LogDebug("Remote evaluation request payload: {Payload}", jsonPayload);
 
             var maxAttempts = Math.Max(1, _retryPolicy.MaxAttempts);
+            var budget = _retryPolicy.MaxTotalDuration > TimeSpan.Zero ? _retryPolicy.MaxTotalDuration : (TimeSpan?)null;
+            var elapsed = Stopwatch.StartNew();
+
+            AttemptOutcome outcome = null;
 
             using (var httpClient = _httpClientFactory.CreateClient(ConfiguredClients.DefaultApiClient))
             {
@@ -74,9 +79,17 @@ namespace GrowthBook.Api
                     httpClient.Timeout = TimeSpan.FromSeconds(30);
                 }
 
-                for (var attempt = 1; ; attempt++)
+                for (var attempt = 1; attempt <= maxAttempts; attempt++)
                 {
-                    var outcome = await SendAttemptAsync(httpClient, url, jsonPayload, headers, cancellationToken).ConfigureAwait(false);
+                    var remaining = budget - elapsed.Elapsed;
+
+                    if (attempt > 1 && remaining.HasValue && remaining.Value <= TimeSpan.Zero)
+                    {
+                        // The time this round was allowed is gone, so there's nothing left to try with.
+                        break;
+                    }
+
+                    outcome = await SendAttemptAsync(httpClient, url, jsonPayload, headers, remaining, cancellationToken).ConfigureAwait(false);
 
                     if (!outcome.IsRetryable)
                     {
@@ -85,14 +98,20 @@ namespace GrowthBook.Api
 
                     if (attempt >= maxAttempts)
                     {
-                        // Out of attempts: report exactly what a single failed request used to report, so callers
-                        // see no new failure shape - only that the SDK tried harder before giving up.
-                        _logger.LogError("Remote evaluation failed after {Attempts} attempt(s): {Reason}", attempt, outcome.Reason);
-
-                        return outcome.Complete();
+                        break;
                     }
 
                     var delay = _retryPolicy.GetRetryDelay(attempt, outcome.RetryAfter);
+                    var remainingAfterAttempt = budget - elapsed.Elapsed;
+
+                    // If the backoff doesn't fit in what's left of the budget, the attempt it exists to space out
+                    // can't happen either. Stop now rather than sleeping out the budget first and failing anyway -
+                    // it reports sooner, and it keeps the decision off the boundary where sleeping until the budget
+                    // is exactly spent leaves the next check at the mercy of timer precision.
+                    if (remainingAfterAttempt.HasValue && delay >= remainingAfterAttempt.Value)
+                    {
+                        break;
+                    }
 
                     _logger.LogWarning("Remote evaluation attempt {Attempt} of {MaxAttempts} failed ({Reason}), retrying in {DelayMilliseconds}ms",
                         attempt, maxAttempts, outcome.Reason, (long)delay.TotalMilliseconds);
@@ -103,6 +122,13 @@ namespace GrowthBook.Api
                     }
                 }
             }
+
+            // Out of attempts or out of time: report exactly what a single failed request used to report, so callers
+            // see no new failure shape - only that the SDK tried harder before giving up.
+            _logger.LogError("Remote evaluation failed after {ElapsedMilliseconds}ms: {Reason}",
+                (long)elapsed.Elapsed.TotalMilliseconds, outcome.Reason);
+
+            return outcome.Complete();
         }
 
         /// <summary>
@@ -114,11 +140,17 @@ namespace GrowthBook.Api
             string url,
             string jsonPayload,
             IDictionary<string, string> headers,
+            TimeSpan? remainingBudget,
             CancellationToken cancellationToken)
         {
+            // Cut the attempt off if it would run past what's left of the round's budget. The caller's token stays the
+            // one the catch filters test, so a budget cut is classified as a timeout rather than as the caller giving up.
+            using (var attemptCancellation = CreateAttemptCancellation(remainingBudget, cancellationToken))
             // A request message and its content can each only be sent once, so every attempt builds its own.
             using (var httpRequest = new HttpRequestMessage(HttpMethod.Post, url))
             {
+                var attemptToken = attemptCancellation?.Token ?? cancellationToken;
+
                 // Add custom headers
                 if (headers != null)
                 {
@@ -135,7 +167,7 @@ namespace GrowthBook.Api
                 {
                     _logger.LogDebug("Sending POST request to remote evaluation endpoint");
 
-                    using (var response = await httpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false))
+                    using (var response = await httpClient.SendAsync(httpRequest, attemptToken).ConfigureAwait(false))
                     {
                         var responseContent = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
 
@@ -204,6 +236,24 @@ namespace GrowthBook.Api
                     return AttemptOutcome.Final(new RemoteEvaluationException(errorMessage, null, ex));
                 }
             }
+        }
+
+        /// <summary>
+        /// Builds the cancellation that bounds a single attempt to what's left of the round's budget, or nothing when
+        /// the budget is unlimited.
+        /// </summary>
+        private static CancellationTokenSource CreateAttemptCancellation(TimeSpan? remainingBudget, CancellationToken cancellationToken)
+        {
+            if (!remainingBudget.HasValue)
+            {
+                return null;
+            }
+
+            var cancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+
+            cancellation.CancelAfter(remainingBudget.Value > TimeSpan.Zero ? remainingBudget.Value : TimeSpan.Zero);
+
+            return cancellation;
         }
 
         /// <summary>

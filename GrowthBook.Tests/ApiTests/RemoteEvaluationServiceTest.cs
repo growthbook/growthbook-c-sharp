@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Diagnostics;
 using System.Net;
 using System.Net.Http;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using GrowthBook;
@@ -237,8 +239,76 @@ namespace GrowthBook.Tests.ApiTests
             policy.GetRetryDelay(1, TimeSpan.FromMinutes(10)).Should().Be(TimeSpan.FromSeconds(5));
         }
 
+        [Fact]
+        public async Task EvaluateAsync_ShouldStopRetryingOnceTheTimeBudgetIsSpent()
+        {
+            var attempts = 0;
+
+            var httpClient = CreateHttpClient((request, cancellationToken) =>
+            {
+                attempts++;
+
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+                {
+                    Content = new StringContent(string.Empty, Encoding.UTF8, "application/json")
+                });
+            });
+
+            // Three attempts are allowed, but the backoff before the second one is longer than the whole round is
+            // allowed to take. The wait is clamped to what's left of the budget, and then there is nothing left.
+            // Deliberately spending the budget between attempts rather than during one: a budget small enough to
+            // expire mid-request makes the first attempt's outcome a race against its own cancellation.
+            var service = CreateService(httpClient, new RemoteEvaluationRetryPolicy
+            {
+                MaxAttempts = 3,
+                InitialDelay = TimeSpan.FromSeconds(1),
+                MaxDelay = TimeSpan.FromSeconds(1),
+                MaxTotalDuration = TimeSpan.FromMilliseconds(100)
+            });
+
+            var result = await service.EvaluateAsync("https://api.example.com", "clientKey", new RemoteEvaluationRequest());
+
+            attempts.Should().Be(1);
+            result.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+        }
+
+        [Fact]
+        public async Task EvaluateAsync_ShouldNotLetASlowAttemptRunPastTheTimeBudget()
+        {
+            var httpClient = CreateHttpClient(async (request, cancellationToken) =>
+            {
+                // A server that accepts the connection and then never answers
+                await Task.Delay(Timeout.Infinite, cancellationToken);
+
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            });
+
+            var service = CreateService(httpClient, new RemoteEvaluationRetryPolicy
+            {
+                MaxAttempts = 3,
+                MaxDelay = TimeSpan.Zero,
+                MaxTotalDuration = TimeSpan.FromMilliseconds(200)
+            });
+
+            var stopwatch = Stopwatch.StartNew();
+
+            await Assert.ThrowsAsync<RemoteEvaluationException>(
+                () => service.EvaluateAsync("https://api.example.com", "clientKey", new RemoteEvaluationRequest()));
+
+            stopwatch.Stop();
+
+            // Without the budget this would hang until the HTTP timeout, three times over
+            stopwatch.Elapsed.Should().BeLessThan(TimeSpan.FromSeconds(5));
+        }
+
         private static RemoteEvaluationRetryPolicy NoWaitPolicy(int maxAttempts) =>
-            new RemoteEvaluationRetryPolicy { MaxAttempts = maxAttempts, MaxDelay = TimeSpan.Zero };
+            new RemoteEvaluationRetryPolicy
+            {
+                MaxAttempts = maxAttempts,
+                MaxDelay = TimeSpan.Zero,
+                // Unlimited, so a slow machine can't cut a run short and make these tests flaky
+                MaxTotalDuration = TimeSpan.Zero
+            };
 
         private static RemoteEvaluationService CreateService(HttpClient httpClient, RemoteEvaluationRetryPolicy retryPolicy)
         {
