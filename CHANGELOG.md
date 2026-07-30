@@ -45,6 +45,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed a superseded remote evaluation overwriting a newer one. Each evaluation is now tagged with a generation
   allocated together with the state it sends, and only the most recent one publishes its features, so a response
   built for attributes that have already been replaced is dropped instead of applied.
+- Fixed changes to `ForcedVariations` not refreshing remotely evaluated features. They're part of the remote
+  evaluation payload, so assigning the property now triggers an evaluation the same way attribute changes do, and
+  `SetForcedVariations`/`SetForcedVariationsAsync` were added for callers that need to wait for it. Assigning
+  `Attributes` directly triggers one as well, rather than only `UpdateAttributes`/`MergeAttributes` doing so.
+- Fixed the async API capturing the caller's synchronization context, which could deadlock an application that
+  blocks on a `GrowthBook` task (including `EvalFeature(key, alwaysLoadFeatures: true)`, which blocks internally).
 
 ## [1.2.0]
 

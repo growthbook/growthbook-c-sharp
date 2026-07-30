@@ -199,6 +199,19 @@ about have changed, since attributes are part of the evaluation payload.
   ```
   The synchronous methods start that evaluation in the background instead, and the next feature load waits for it.
 
+- **Force experiment variations**:
+  ```csharp
+  await growthBook.SetForcedVariationsAsync(new Dictionary<string, int> { ["my-experiment"] = 1 });
+  // Or start the evaluation in the background: growthBook.ForcedVariations = ...;
+  ```
+  Forced variations are part of the remote evaluation payload too, so changing them refreshes the features the same
+  way an attribute change does.
+
+Assigning the `Attributes` or `ForcedVariations` properties directly behaves like the corresponding method, except
+that the object you pass is shared with the SDK rather than copied. Only the most recent remote evaluation is ever
+applied: if several changes happen in quick succession, a response built for state that has already been replaced is
+discarded instead of overwriting a newer one.
+
 ---
 
 ### 4. **Lifecycle Management**

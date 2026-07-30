@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using GrowthBook;
 using GrowthBook.Api;
+using Newtonsoft.Json.Linq;
 using NSubstitute;
 using Xunit;
 
@@ -268,6 +269,92 @@ namespace GrowthBook.Tests
             result.Success.Should().BeTrue();
             growthBook.Features.Should().ContainKey("newer");
             growthBook.Features.Should().NotContainKey("older");
+        }
+
+        [Fact]
+        public async Task SetForcedVariationsAsync_ShouldWaitForTheRemoteEvaluationOfTheNewForcedVariations()
+        {
+            // Arrange
+            var mockRepository = Substitute.For<IGrowthBookFeatureRepository>();
+            var features = new Dictionary<string, Feature> { { "test", new Feature { DefaultValue = true } } };
+
+            mockRepository.GetFeaturesWithContext(Arg.Any<Context>(), Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken?>())
+                .Returns(Task.FromResult<IDictionary<string, Feature>>(features));
+
+            var context = new Context(new { userId = "123" })
+            {
+                RemoteEval = true,
+                ClientKey = "test-key",
+                ApiHost = "https://api.example.com",
+                FeatureRepository = mockRepository
+            };
+
+            using var growthBook = new GrowthBook(context);
+
+            // Act
+            await growthBook.SetForcedVariationsAsync(new Dictionary<string, int> { { "my-experiment", 1 } });
+
+            // Assert - forced variations are part of the payload, so the change has to be evaluated again
+            await mockRepository.Received(1).GetFeaturesWithContext(
+                Arg.Is<Context>(x => x.ForcedVariations["my-experiment"] == 1),
+                Arg.Any<GrowthBookRetrievalOptions>(),
+                Arg.Any<CancellationToken?>());
+
+            growthBook.Features.Should().ContainKey("test");
+        }
+
+        [Fact]
+        public async Task SetForcedVariationsAsync_WithoutAnActualChange_ShouldNotTriggerRemoteEvaluation()
+        {
+            // Arrange
+            var mockRepository = Substitute.For<IGrowthBookFeatureRepository>();
+
+            var context = new Context(new { userId = "123" })
+            {
+                RemoteEval = true,
+                ClientKey = "test-key",
+                ApiHost = "https://api.example.com",
+                ForcedVariations = new Dictionary<string, int> { { "my-experiment", 1 } },
+                FeatureRepository = mockRepository
+            };
+
+            using var growthBook = new GrowthBook(context);
+
+            // Act
+            await growthBook.SetForcedVariationsAsync(new Dictionary<string, int> { { "my-experiment", 1 } });
+
+            // Assert
+            await mockRepository.DidNotReceive().GetFeaturesWithContext(Arg.Any<Context>(), Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken?>());
+        }
+
+        [Fact]
+        public async Task Attributes_WhenAssignedDirectly_ShouldStartARemoteEvaluation()
+        {
+            // Arrange
+            var mockRepository = Substitute.For<IGrowthBookFeatureRepository>();
+            var features = new Dictionary<string, Feature> { { "test", new Feature { DefaultValue = true } } };
+
+            mockRepository.GetFeaturesWithContext(Arg.Any<Context>(), Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken?>())
+                .Returns(Task.FromResult<IDictionary<string, Feature>>(features));
+
+            var context = new Context(new { userId = "123" })
+            {
+                RemoteEval = true,
+                ClientKey = "test-key",
+                ApiHost = "https://api.example.com",
+                FeatureRepository = mockRepository
+            };
+
+            using var growthBook = new GrowthBook(context);
+
+            // Act - assigning the property replaces the attributes, the same as UpdateAttributes
+            growthBook.Attributes = JObject.FromObject(new { userId = "456" });
+
+            // Assert
+            await mockRepository.Received(1).GetFeaturesWithContext(
+                Arg.Is<Context>(x => x.Attributes["userId"].ToString() == "456"),
+                Arg.Any<GrowthBookRetrievalOptions>(),
+                Arg.Any<CancellationToken?>());
         }
     }
 }

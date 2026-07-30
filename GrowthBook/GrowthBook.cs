@@ -55,6 +55,8 @@ namespace GrowthBook
         private readonly bool _canFetchFeatures;
 
         private readonly object _attributesLock = new object();
+        private JObject _attributes;
+        private IDictionary<string, int> _forcedVariations;
         private JObject _previousAttributes;
         private IDictionary<string, int> _previousForcedVariations;
         private Task _pendingRemoteEvaluation;
@@ -76,11 +78,14 @@ namespace GrowthBook
             _context = context;
             _canFetchFeatures = context.FeatureRepository != null || !string.IsNullOrWhiteSpace(context.ClientKey);
             Enabled = context.Enabled;
-            Attributes = context.Attributes;
             Url = context.Url;
             Features = context.Features?.ToDictionary(k => k.Key, v => v.Value) ?? new Dictionary<string, Feature>();
             Experiments = context.Experiments ?? new List<Experiment>();
-            ForcedVariations = context.ForcedVariations;
+
+            // Assigned through the backing fields rather than the properties: the property setters start a remote
+            // evaluation on change, and there is nothing to refresh yet while the instance is still being built.
+            _attributes = context.Attributes;
+            _forcedVariations = context.ForcedVariations;
 
             _qaMode = context.QaMode;
             _trackingCallback = context.TrackingCallback;
@@ -316,7 +321,17 @@ namespace GrowthBook
         /// <summary>
         /// Arbitrary JSON object containing user and request attributes.
         /// </summary>
-        public JObject Attributes { get; set; }
+        /// <remarks>
+        /// Assigning replaces the attributes entirely and starts a remote evaluation in the background when the
+        /// change requires one. Use <see cref="UpdateAttributesAsync(object, CancellationToken?)"/> to wait for that
+        /// evaluation instead, or <see cref="UpdateAttributes(object)"/> to hand over attributes that this instance
+        /// should take a private copy of rather than share with the caller.
+        /// </remarks>
+        public JObject Attributes
+        {
+            get => _attributes;
+            set => ApplyAttributes(value, isMerge: false);
+        }
 
         /// <summary>
         /// Dictionary of the currently loaded feature objects.
@@ -331,7 +346,17 @@ namespace GrowthBook
         /// <summary>
         /// Listing of specific experiments to always assign a specific variation (used for QA).
         /// </summary>
-        public IDictionary<string, int> ForcedVariations { get; set; }
+        /// <remarks>
+        /// Forced variations are part of the remote evaluation payload, so assigning starts a remote evaluation in
+        /// the background when the change requires one. Use
+        /// <see cref="SetForcedVariationsAsync(IDictionary{string, int}, CancellationToken?)"/> to wait for that
+        /// evaluation instead.
+        /// </remarks>
+        public IDictionary<string, int> ForcedVariations
+        {
+            get => _forcedVariations;
+            set => ApplyForcedVariations(value);
+        }
 
         /// <summary>
         /// The URL of the current page.
@@ -353,10 +378,11 @@ namespace GrowthBook
             {
                 if (disposing)
                 {
-                    Attributes = null;
+                    // Through the backing fields: tearing the instance down must not start a remote evaluation.
+                    _attributes = null;
+                    _forcedVariations = null;
                     _pendingRemoteEvaluation = null;
                     Features.Clear();
-                    ForcedVariations = null;
                     _trackingCallback = null;
                     _forcedFeatures.Clear();
                     _assigned.Clear();
@@ -555,6 +581,59 @@ namespace GrowthBook
         }
 
         /// <summary>
+        /// Replaces the forced variations with the ones provided.
+        /// </summary>
+        /// <remarks>
+        /// Forced variations are part of the remote evaluation payload, so this starts a remote evaluation in the
+        /// background when the change requires one. Equivalent to assigning <see cref="ForcedVariations"/>.
+        /// </remarks>
+        /// <param name="forcedVariations">The experiment keys to force to a specific variation, or null to clear them.</param>
+        public void SetForcedVariations(IDictionary<string, int> forcedVariations)
+        {
+            _logger?.LogDebug("Replaced forced variations with {Count} entries", forcedVariations?.Count ?? 0);
+
+            ApplyForcedVariations(forcedVariations);
+        }
+
+        /// <summary>
+        /// Replaces the forced variations with the ones provided and, in remote evaluation mode, waits for the
+        /// features to be evaluated again against them.
+        /// </summary>
+        /// <remarks>
+        /// Behaves like <see cref="SetForcedVariations(IDictionary{string, int})"/>, except that the returned task
+        /// only completes once any triggered remote evaluation has finished.
+        /// </remarks>
+        /// <param name="forcedVariations">The experiment keys to force to a specific variation, or null to clear them.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A <see cref="Task"/> that represents the update and any remote evaluation it triggered.</returns>
+        public Task SetForcedVariationsAsync(IDictionary<string, int> forcedVariations, CancellationToken? cancellationToken = null)
+        {
+            _logger?.LogDebug("Replaced forced variations with {Count} entries", forcedVariations?.Count ?? 0);
+
+            if (!SwapInForcedVariations(forcedVariations))
+            {
+                return Task.CompletedTask;
+            }
+
+            return StartRemoteEvaluation(cancellationToken);
+        }
+
+        /// <summary>
+        /// Publishes the provided forced variations and starts a remote evaluation in the background if the change
+        /// requires one.
+        /// </summary>
+        /// <param name="forcedVariations">The forced variations to apply.</param>
+        private void ApplyForcedVariations(IDictionary<string, int> forcedVariations)
+        {
+            if (SwapInForcedVariations(forcedVariations))
+            {
+                // The caller has no way to wait for this, so the task is kept around for the next feature load
+                // to await. Callers that need the refreshed features can use SetForcedVariationsAsync.
+                StartRemoteEvaluation(null);
+            }
+        }
+
+        /// <summary>
         /// Applies the provided attributes, either replacing the existing ones entirely or merging into them,
         /// and starts a remote evaluation in the background if the change requires one.
         /// </summary>
@@ -606,8 +685,8 @@ namespace GrowthBook
         /// <returns>A <see cref="Task"/> that represents the remote evaluation.</returns>
         private Task StartRemoteEvaluation(CancellationToken? cancellationToken)
         {
-            // Attributes are part of the remote evaluation payload, so changing them makes the previously
-            // evaluated features stale. This runs after the swap so the request uses the new attributes.
+            // Attributes and forced variations are part of the remote evaluation payload, so changing them makes
+            // the previously evaluated features stale. This runs after the swap so the request uses the new state.
             var evaluationContext = CreateRemoteEvaluationContext(out var generation);
             var remoteEvaluation = TriggerRemoteEvaluationAsync(evaluationContext, generation, cancellationToken);
 
@@ -664,7 +743,7 @@ namespace GrowthBook
 
                 if (isMerge)
                 {
-                    updatedAttributes = Attributes?.DeepClone() as JObject ?? new JObject();
+                    updatedAttributes = _attributes?.DeepClone() as JObject ?? new JObject();
 
                     foreach (var property in attributes.Properties())
                     {
@@ -672,21 +751,54 @@ namespace GrowthBook
                     }
                 }
 
-                var shouldTriggerRemoteEvaluation = _context.RemoteEval && ShouldTriggerRemoteEvaluation(updatedAttributes);
+                var shouldTriggerRemoteEvaluation = ShouldTriggerRemoteEvaluation(updatedAttributes);
 
                 // The updated attributes are built off to the side and swapped in with a single reference assignment
                 // so that a concurrent evaluation sees either the previous attributes or the fully updated ones,
                 // but never a partially merged state.
-                Attributes = updatedAttributes;
-                _previousAttributes = updatedAttributes.DeepClone() as JObject;
+                _attributes = updatedAttributes;
 
-                // Snapshot the forced variations as well, since they're part of the same comparison. Without this
-                // they would stay different from the previous ones forever once they've been changed, and every
-                // later attribute change would trigger a remote evaluation whether or not it needed one.
-                _previousForcedVariations = ForcedVariations?.ToDictionary(k => k.Key, v => v.Value);
+                SnapshotRemoteEvaluationState(updatedAttributes);
 
                 return shouldTriggerRemoteEvaluation;
             }
+        }
+
+        /// <summary>
+        /// Publishes the provided forced variations as the current ones.
+        /// </summary>
+        /// <param name="forcedVariations">The forced variations to apply.</param>
+        /// <returns>True if the change requires a remote evaluation.</returns>
+        private bool SwapInForcedVariations(IDictionary<string, int> forcedVariations)
+        {
+            lock (_attributesLock)
+            {
+                // Published before the comparison so that ShouldTriggerRemoteEvaluation sees the new forced
+                // variations against the previous snapshot, the same way the attributes path works.
+                _forcedVariations = forcedVariations;
+
+                var shouldTriggerRemoteEvaluation = ShouldTriggerRemoteEvaluation(_attributes);
+
+                SnapshotRemoteEvaluationState(_attributes);
+
+                return shouldTriggerRemoteEvaluation;
+            }
+        }
+
+        /// <summary>
+        /// Records the current attributes and forced variations as the state the last remote evaluation was made for.
+        /// </summary>
+        /// <remarks>
+        /// Callers must hold <see cref="_attributesLock"/>. Both are snapshotted together because they're compared
+        /// together: snapshotting only the attributes would leave the forced variations permanently different from
+        /// the previous ones once they've been changed, so every later change would trigger a remote evaluation
+        /// whether or not it needed one.
+        /// </remarks>
+        /// <param name="attributes">The attributes that are now current.</param>
+        private void SnapshotRemoteEvaluationState(JObject attributes)
+        {
+            _previousAttributes = attributes?.DeepClone() as JObject;
+            _previousForcedVariations = _forcedVariations?.ToDictionary(k => k.Key, v => v.Value);
         }
 
         /// <summary>
@@ -1658,6 +1770,12 @@ namespace GrowthBook
         /// <returns>True if remote evaluation should be triggered</returns>
         private bool ShouldTriggerRemoteEvaluation(JObject newAttributes)
         {
+            // Nothing is evaluated remotely, so no change can make a remote evaluation stale.
+            if (!_context.RemoteEval)
+            {
+                return false;
+            }
+
             // Check if attributes changed
             var attributesChanged = RemoteEvaluationUtilities.ShouldTriggerRemoteEvaluation(
                 _previousAttributes,
@@ -1668,14 +1786,14 @@ namespace GrowthBook
             // Check if forced variations changed
             var forcedVariationsChanged = RemoteEvaluationUtilities.ShouldTriggerRemoteEvaluationForForcedVariations(
                 _previousForcedVariations,
-                ForcedVariations
+                _forcedVariations
             );
 
             return attributesChanged || forcedVariationsChanged;
         }
 
         /// <summary>
-        /// Triggers remote evaluation asynchronously when attribute changes are detected.
+        /// Triggers remote evaluation asynchronously when a change to the evaluated state is detected.
         /// </summary>
         /// <param name="evaluationContext">The state to evaluate against, snapshotted when the generation was allocated.</param>
         /// <param name="generation">The generation identifying this remote evaluation.</param>
@@ -1684,7 +1802,7 @@ namespace GrowthBook
         {
             try
             {
-                _logger?.LogDebug("Triggering remote evaluation due to attribute changes");
+                _logger?.LogDebug("Triggering remote evaluation due to attribute or forced variation changes");
 
                 var features = await _featureRepository.GetFeaturesWithContext(evaluationContext, cancellationToken: cancellationToken).ConfigureAwait(false);
 
@@ -1693,10 +1811,10 @@ namespace GrowthBook
                     return;
                 }
 
-                // The atomic swap keeps the attributes consistent, but the features derived from them are
-                // published here, and this response may well have overtaken a newer one. Publishing it would
-                // leave the caller on features evaluated for attributes they've already replaced, so a
-                // superseded response is dropped whole rather than applied.
+                // The atomic swap keeps the state consistent, but the features derived from it are published here,
+                // and this response may well have overtaken a newer one. Publishing it would leave the caller on
+                // features evaluated for state they've already replaced, so a superseded response is dropped whole
+                // rather than applied.
                 if (!IsLatestRemoteEvaluation(generation))
                 {
                     _logger?.LogDebug("Discarding a superseded remote evaluation response with {Count} features", features.Count);

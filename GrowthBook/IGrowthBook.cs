@@ -191,6 +191,25 @@ namespace GrowthBook
         Task MergeAttributesAsync(object additionalAttributes, CancellationToken? cancellationToken = null);
 
         /// <summary>
+        /// Replaces the forced variations with the ones provided.
+        /// </summary>
+        /// <remarks>
+        /// Forced variations are part of the remote evaluation payload, so this starts a remote evaluation in the
+        /// background when the change requires one.
+        /// </remarks>
+        /// <param name="forcedVariations">The experiment keys to force to a specific variation, or null to clear them.</param>
+        void SetForcedVariations(IDictionary<string, int> forcedVariations);
+
+        /// <summary>
+        /// Replaces the forced variations with the ones provided and, in remote evaluation mode, waits for the
+        /// features to be evaluated again against them.
+        /// </summary>
+        /// <param name="forcedVariations">The experiment keys to force to a specific variation, or null to clear them.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A <see cref="Task"/> that represents the update and any remote evaluation it triggered.</returns>
+        Task SetForcedVariationsAsync(IDictionary<string, int> forcedVariations, CancellationToken? cancellationToken = null);
+
+        /// <summary>
         /// Loads all available features from the API and caches them for faster retrieval.
         /// </summary>
         /// <param name="options">An optional set of choices that affect how the features will be loaded.</param>
