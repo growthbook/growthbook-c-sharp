@@ -49,6 +49,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   evaluation payload, so assigning the property now triggers an evaluation the same way attribute changes do, and
   `SetForcedVariations`/`SetForcedVariationsAsync` were added for callers that need to wait for it. Assigning
   `Attributes` directly triggers one as well, rather than only `UpdateAttributes`/`MergeAttributes` doing so.
+- Added retries with exponential backoff to remote evaluation requests, so a single transient failure no longer
+  leaves a remote-eval consumer on the previously evaluated features until something else triggers a refresh.
+  Transport errors, timeouts, 408, 429 and 5xx are retried (honouring `Retry-After`); other 4xx are not, since
+  repeating a rejected request only fails the same way. Configurable through `RemoteEvaluationRetryPolicy`;
+  defaults to 3 attempts, 500ms initial backoff, capped at 5s.
 - Fixed the async API capturing the caller's synchronization context, which could deadlock an application that
   blocks on a `GrowthBook` task (including `EvalFeature(key, alwaysLoadFeatures: true)`, which blocks internally).
   **Note:** as a consequence, a `TrackingCallback` or subscriber invoked by an async evaluation can now run on a

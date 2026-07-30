@@ -19,18 +19,22 @@ namespace GrowthBook.Api
     {
         private readonly ILogger<RemoteEvaluationService> _logger;
         private readonly IHttpClientFactory _httpClientFactory;
+        private readonly RemoteEvaluationRetryPolicy _retryPolicy;
 
         /// <summary>
         /// Creates a new RemoteEvaluationService instance.
         /// </summary>
         /// <param name="logger">Logger for diagnostic information</param>
         /// <param name="httpClientFactory">Factory for creating HTTP clients</param>
+        /// <param name="retryPolicy">How to retry a failed request. Uses <see cref="RemoteEvaluationRetryPolicy"/> defaults when omitted.</param>
         public RemoteEvaluationService(
             ILogger<RemoteEvaluationService> logger,
-            IHttpClientFactory httpClientFactory)
+            IHttpClientFactory httpClientFactory,
+            RemoteEvaluationRetryPolicy retryPolicy = null)
         {
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
             _httpClientFactory = httpClientFactory ?? throw new ArgumentNullException(nameof(httpClientFactory));
+            _retryPolicy = retryPolicy ?? new RemoteEvaluationRetryPolicy();
         }
 
         /// <inheritdoc />
@@ -52,95 +56,244 @@ namespace GrowthBook.Api
 
             var url = GetRemoteEvaluationUrl(apiHost, clientKey);
 
-            _logger.LogInformation("Starting remote evaluation request to {Url}", url);
-            _logger.LogDebug("Remote evaluation request payload: {Payload}", JsonConvert.SerializeObject(request));
+            // Serialized once, before the first attempt, so every retry sends the payload this round started with.
+            // Re-reading the request in between could ship attributes the caller has changed since, and the response
+            // would then be applied as though it had been evaluated against them.
+            var jsonPayload = JsonConvert.SerializeObject(request);
 
-            try
+            _logger.LogInformation("Starting remote evaluation request to {Url}", url);
+            _logger.LogDebug("Remote evaluation request payload: {Payload}", jsonPayload);
+
+            var maxAttempts = Math.Max(1, _retryPolicy.MaxAttempts);
+
+            using (var httpClient = _httpClientFactory.CreateClient(ConfiguredClients.DefaultApiClient))
             {
-                using (var httpClient = _httpClientFactory.CreateClient(ConfiguredClients.DefaultApiClient))
+                // Set default timeout if not configured
+                if (httpClient.Timeout == Timeout.InfiniteTimeSpan)
                 {
-                    // Set default timeout if not configured
-                    if (httpClient.Timeout == Timeout.InfiniteTimeSpan)
+                    httpClient.Timeout = TimeSpan.FromSeconds(30);
+                }
+
+                for (var attempt = 1; ; attempt++)
+                {
+                    var outcome = await SendAttemptAsync(httpClient, url, jsonPayload, headers, cancellationToken).ConfigureAwait(false);
+
+                    if (!outcome.IsRetryable)
                     {
-                        httpClient.Timeout = TimeSpan.FromSeconds(30);
+                        return outcome.Complete();
                     }
 
-                    // Prepare the request
-                    using (var httpRequest = new HttpRequestMessage(HttpMethod.Post, url))
+                    if (attempt >= maxAttempts)
                     {
-                        // Add custom headers
-                        if (headers != null)
-                        {
-                            foreach (var header in headers)
-                            {
-                                httpRequest.Headers.TryAddWithoutValidation(header.Key, header.Value);
-                            }
-                        }
+                        // Out of attempts: report exactly what a single failed request used to report, so callers
+                        // see no new failure shape - only that the SDK tried harder before giving up.
+                        _logger.LogError("Remote evaluation failed after {Attempts} attempt(s): {Reason}", attempt, outcome.Reason);
 
-                        // Set content type
-                        var jsonPayload = JsonConvert.SerializeObject(request);
-                        httpRequest.Content = new StringContent(jsonPayload, Encoding.UTF8, "application/json");
+                        return outcome.Complete();
+                    }
 
-                        _logger.LogDebug("Sending POST request to remote evaluation endpoint");
+                    var delay = _retryPolicy.GetRetryDelay(attempt, outcome.RetryAfter);
 
-                        // Make the request
-                        using (var response = await httpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false))
-                        {
-                            var responseContent = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+                    _logger.LogWarning("Remote evaluation attempt {Attempt} of {MaxAttempts} failed ({Reason}), retrying in {DelayMilliseconds}ms",
+                        attempt, maxAttempts, outcome.Reason, (long)delay.TotalMilliseconds);
 
-                            _logger.LogDebug("Received response with status {StatusCode}: {Response}",
-                                response.StatusCode, responseContent);
-
-                            if (response.IsSuccessStatusCode)
-                            {
-                                var apiResponse = JsonConvert.DeserializeObject<RemoteEvaluationResponse>(responseContent);
-                                var featuresResponse = apiResponse.Features;
-
-                                _logger.LogInformation("Remote evaluation successful, received {Count} features",
-                                    featuresResponse?.Count ?? 0);
-
-                                return RemoteEvaluationResponse.CreateSuccess(featuresResponse);
-                            }
-                            else
-                            {
-                                var errorMessage = $"Remote evaluation failed with status {response.StatusCode}: {responseContent}";
-                                _logger.LogError(errorMessage);
-
-                                return RemoteEvaluationResponse.CreateError(response.StatusCode, errorMessage);
-                            }
-                        }
+                    if (delay > TimeSpan.Zero)
+                    {
+                        await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
                     }
                 }
             }
-            catch (TaskCanceledException ex) when (ex.InnerException is TimeoutException)
+        }
+
+        /// <summary>
+        /// Performs a single POST to the remote evaluation endpoint.
+        /// </summary>
+        /// <returns>What the attempt produced, and whether another attempt could plausibly do better.</returns>
+        private async Task<AttemptOutcome> SendAttemptAsync(
+            HttpClient httpClient,
+            string url,
+            string jsonPayload,
+            IDictionary<string, string> headers,
+            CancellationToken cancellationToken)
+        {
+            // A request message and its content can each only be sent once, so every attempt builds its own.
+            using (var httpRequest = new HttpRequestMessage(HttpMethod.Post, url))
             {
-                var errorMessage = "Remote evaluation request timed out";
-                _logger.LogError(ex, errorMessage);
-                throw new RemoteEvaluationException(errorMessage, (int)HttpStatusCode.RequestTimeout, ex);
+                // Add custom headers
+                if (headers != null)
+                {
+                    foreach (var header in headers)
+                    {
+                        httpRequest.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                    }
+                }
+
+                // Set content type
+                httpRequest.Content = new StringContent(jsonPayload, Encoding.UTF8, "application/json");
+
+                try
+                {
+                    _logger.LogDebug("Sending POST request to remote evaluation endpoint");
+
+                    using (var response = await httpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false))
+                    {
+                        var responseContent = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+
+                        _logger.LogDebug("Received response with status {StatusCode}: {Response}",
+                            response.StatusCode, responseContent);
+
+                        if (response.IsSuccessStatusCode)
+                        {
+                            var apiResponse = JsonConvert.DeserializeObject<RemoteEvaluationResponse>(responseContent);
+                            var featuresResponse = apiResponse.Features;
+
+                            _logger.LogInformation("Remote evaluation successful, received {Count} features",
+                                featuresResponse?.Count ?? 0);
+
+                            return AttemptOutcome.Final(RemoteEvaluationResponse.CreateSuccess(featuresResponse));
+                        }
+
+                        var errorMessage = $"Remote evaluation failed with status {response.StatusCode}: {responseContent}";
+                        var errorResponse = RemoteEvaluationResponse.CreateError(response.StatusCode, errorMessage);
+
+                        if (IsRetryableStatusCode(response.StatusCode))
+                        {
+                            return AttemptOutcome.Retryable(errorResponse, $"status {(int)response.StatusCode}", GetRetryAfter(response));
+                        }
+
+                        // A 4xx that isn't 408 or 429 means this request is wrong rather than unlucky - a malformed
+                        // payload or a bad client key - so repeating it would only fail the same way.
+                        _logger.LogError(errorMessage);
+
+                        return AttemptOutcome.Final(errorResponse);
+                    }
+                }
+                catch (OperationCanceledException ex) when (cancellationToken.IsCancellationRequested)
+                {
+                    // The caller asked to stop, which is not a failure to retry.
+                    var errorMessage = "Remote evaluation request was cancelled";
+                    _logger.LogWarning(ex, errorMessage);
+                    throw new OperationCanceledException(errorMessage, ex, cancellationToken);
+                }
+                catch (TaskCanceledException ex)
+                {
+                    // HttpClient reports its own timeout as a cancellation, and only some platforms attach the
+                    // TimeoutException. Since the caller's token isn't the one that fired, this is a timeout.
+                    var errorMessage = "Remote evaluation request timed out";
+
+                    return AttemptOutcome.Retryable(new RemoteEvaluationException(errorMessage, (int)HttpStatusCode.RequestTimeout, ex), "timed out");
+                }
+                catch (HttpRequestException ex)
+                {
+                    var errorMessage = $"HTTP error during remote evaluation: {ex.Message}";
+
+                    return AttemptOutcome.Retryable(new RemoteEvaluationException(errorMessage, null, ex), ex.Message);
+                }
+                catch (JsonException ex)
+                {
+                    var errorMessage = $"Failed to parse remote evaluation response: {ex.Message}";
+                    _logger.LogError(ex, errorMessage);
+
+                    return AttemptOutcome.Final(new RemoteEvaluationException(errorMessage, 422, ex)); // 422 Unprocessable Entity
+                }
+                catch (Exception ex)
+                {
+                    var errorMessage = $"Unexpected error during remote evaluation: {ex.Message}";
+                    _logger.LogError(ex, errorMessage);
+
+                    return AttemptOutcome.Final(new RemoteEvaluationException(errorMessage, null, ex));
+                }
             }
-            catch (TaskCanceledException ex) when (cancellationToken.IsCancellationRequested)
+        }
+
+        /// <summary>
+        /// Determines whether a response status is worth another attempt.
+        /// </summary>
+        private static bool IsRetryableStatusCode(HttpStatusCode statusCode)
+        {
+            var code = (int)statusCode;
+
+            // 429 is TooManyRequests, which netstandard2.0 has no enum member for.
+            return code >= 500 || code == 429 || statusCode == HttpStatusCode.RequestTimeout;
+        }
+
+        /// <summary>
+        /// Reads the delay a server asked for through a <c>Retry-After</c> header, in either of its two forms.
+        /// </summary>
+        private static TimeSpan? GetRetryAfter(HttpResponseMessage response)
+        {
+            var retryAfter = response.Headers.RetryAfter;
+
+            if (retryAfter == null)
             {
-                var errorMessage = "Remote evaluation request was cancelled";
-                _logger.LogWarning(ex, errorMessage);
-                throw new OperationCanceledException(errorMessage, ex, cancellationToken);
+                return null;
             }
-            catch (HttpRequestException ex)
+
+            if (retryAfter.Delta.HasValue)
             {
-                var errorMessage = $"HTTP error during remote evaluation: {ex.Message}";
-                _logger.LogError(ex, errorMessage);
-                throw new RemoteEvaluationException(errorMessage, null, ex);
+                return retryAfter.Delta;
             }
-            catch (JsonException ex)
+
+            if (retryAfter.Date.HasValue)
             {
-                var errorMessage = $"Failed to parse remote evaluation response: {ex.Message}";
-                _logger.LogError(ex, errorMessage);
-                throw new RemoteEvaluationException(errorMessage, 422, ex); // 422 Unprocessable Entity
+                var delay = retryAfter.Date.Value - DateTimeOffset.UtcNow;
+
+                return delay > TimeSpan.Zero ? delay : TimeSpan.Zero;
             }
-            catch (Exception ex)
+
+            return null;
+        }
+
+        /// <summary>
+        /// What a single attempt produced: a response to hand back or a failure to raise, plus whether retrying it
+        /// could plausibly help and any delay the server asked for.
+        /// </summary>
+        private class AttemptOutcome
+        {
+            private readonly RemoteEvaluationResponse _response;
+            private readonly Exception _failure;
+
+            private AttemptOutcome(RemoteEvaluationResponse response, Exception failure, bool isRetryable, string reason, TimeSpan? retryAfter)
             {
-                var errorMessage = $"Unexpected error during remote evaluation: {ex.Message}";
-                _logger.LogError(ex, errorMessage);
-                throw new RemoteEvaluationException(errorMessage, null, ex);
+                _response = response;
+                _failure = failure;
+                IsRetryable = isRetryable;
+                Reason = reason;
+                RetryAfter = retryAfter;
+            }
+
+            /// <summary>Whether another attempt could plausibly succeed where this one didn't.</summary>
+            public bool IsRetryable { get; }
+
+            /// <summary>Short description of the failure, for logging.</summary>
+            public string Reason { get; }
+
+            /// <summary>The delay the server asked for, when it sent one.</summary>
+            public TimeSpan? RetryAfter { get; }
+
+            public static AttemptOutcome Final(RemoteEvaluationResponse response) =>
+                new AttemptOutcome(response, null, isRetryable: false, reason: null, retryAfter: null);
+
+            public static AttemptOutcome Final(Exception failure) =>
+                new AttemptOutcome(null, failure, isRetryable: false, reason: failure?.Message, retryAfter: null);
+
+            public static AttemptOutcome Retryable(RemoteEvaluationResponse response, string reason, TimeSpan? retryAfter) =>
+                new AttemptOutcome(response, null, isRetryable: true, reason, retryAfter);
+
+            public static AttemptOutcome Retryable(Exception failure, string reason) =>
+                new AttemptOutcome(null, failure, isRetryable: true, reason, retryAfter: null);
+
+            /// <summary>
+            /// Hands back the response this attempt produced, or raises the failure it recorded.
+            /// </summary>
+            public RemoteEvaluationResponse Complete()
+            {
+                if (_failure != null)
+                {
+                    throw _failure;
+                }
+
+                return _response;
             }
         }
 

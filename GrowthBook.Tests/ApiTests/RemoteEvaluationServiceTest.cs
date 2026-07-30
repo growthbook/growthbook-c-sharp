@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -7,6 +8,7 @@ using System.Threading.Tasks;
 using FluentAssertions;
 using GrowthBook;
 using GrowthBook.Api;
+using GrowthBook.Exceptions;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -76,6 +78,185 @@ namespace GrowthBook.Tests.ApiTests
             var invalidContext = new Context { RemoteEval = true, ClientKey = "key", DecryptionKey = "key", ApiHost = "https://api.example.com" };
             Assert.Throws<ArgumentException>(() => service.ValidateRemoteEvaluationConfiguration(invalidContext));
         }
+
+        [Fact]
+        public async Task EvaluateAsync_ShouldRetryATransientFailureAndSucceed()
+        {
+            var attempts = 0;
+
+            var httpClient = CreateHttpClient((request, cancellationToken) =>
+            {
+                attempts++;
+
+                if (attempts < 3)
+                {
+                    return Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+                    {
+                        Content = new StringContent(string.Empty, Encoding.UTF8, "application/json")
+                    });
+                }
+
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(SuccessResponseJson(), Encoding.UTF8, "application/json")
+                });
+            });
+
+            var service = CreateService(httpClient, NoWaitPolicy(maxAttempts: 3));
+
+            var result = await service.EvaluateAsync("https://api.example.com", "clientKey", new RemoteEvaluationRequest());
+
+            attempts.Should().Be(3);
+            result.IsSuccess.Should().BeTrue();
+            result.Features.Should().ContainKey("test");
+        }
+
+        [Fact]
+        public async Task EvaluateAsync_ShouldStopAtTheAttemptLimitAndReportTheLastFailure()
+        {
+            var attempts = 0;
+
+            var httpClient = CreateHttpClient((request, cancellationToken) =>
+            {
+                attempts++;
+
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadGateway)
+                {
+                    Content = new StringContent("upstream is down", Encoding.UTF8, "application/json")
+                });
+            });
+
+            var service = CreateService(httpClient, NoWaitPolicy(maxAttempts: 3));
+
+            var result = await service.EvaluateAsync("https://api.example.com", "clientKey", new RemoteEvaluationRequest());
+
+            attempts.Should().Be(3);
+            result.IsSuccess.Should().BeFalse();
+            result.StatusCode.Should().Be(HttpStatusCode.BadGateway);
+        }
+
+        [Fact]
+        public async Task EvaluateAsync_ShouldNotRetryAStatusThatAnotherAttemptCannotFix()
+        {
+            var attempts = 0;
+
+            var httpClient = CreateHttpClient((request, cancellationToken) =>
+            {
+                attempts++;
+
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.BadRequest)
+                {
+                    Content = new StringContent("malformed payload", Encoding.UTF8, "application/json")
+                });
+            });
+
+            var service = CreateService(httpClient, NoWaitPolicy(maxAttempts: 3));
+
+            var result = await service.EvaluateAsync("https://api.example.com", "clientKey", new RemoteEvaluationRequest());
+
+            // Repeating a rejected request would only produce the same rejection
+            attempts.Should().Be(1);
+            result.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        }
+
+        [Fact]
+        public async Task EvaluateAsync_ShouldRetryATransportErrorAndThrowWhenAttemptsRunOut()
+        {
+            var attempts = 0;
+
+            var httpClient = CreateHttpClient((request, cancellationToken) =>
+            {
+                attempts++;
+
+                throw new HttpRequestException("connection reset");
+            });
+
+            var service = CreateService(httpClient, NoWaitPolicy(maxAttempts: 2));
+
+            await Assert.ThrowsAsync<RemoteEvaluationException>(
+                () => service.EvaluateAsync("https://api.example.com", "clientKey", new RemoteEvaluationRequest()));
+
+            attempts.Should().Be(2);
+        }
+
+        [Fact]
+        public async Task EvaluateAsync_ShouldSendTheSamePayloadOnEveryAttempt()
+        {
+            var bodies = new List<string>();
+
+            var httpClient = CreateHttpClient(async (request, cancellationToken) =>
+            {
+                bodies.Add(await request.Content.ReadAsStringAsync());
+
+                return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
+                {
+                    Content = new StringContent(string.Empty, Encoding.UTF8, "application/json")
+                };
+            });
+
+            var service = CreateService(httpClient, NoWaitPolicy(maxAttempts: 3));
+            var evaluationRequest = new RemoteEvaluationRequest { Attributes = new JObject { ["id"] = "user_123" } };
+
+            await service.EvaluateAsync("https://api.example.com", "clientKey", evaluationRequest);
+
+            // A retry must not ship state the caller changed in the meantime, so the payload is fixed up front
+            bodies.Should().HaveCount(3);
+            bodies.Distinct().Should().HaveCount(1);
+            bodies[0].Should().Contain("user_123");
+        }
+
+        [Fact]
+        public void GetRetryDelay_ShouldBackOffExponentiallyAndRespectTheCap()
+        {
+            var policy = new RemoteEvaluationRetryPolicy
+            {
+                InitialDelay = TimeSpan.FromMilliseconds(500),
+                MaxDelay = TimeSpan.FromSeconds(5),
+                JitterRatio = 0
+            };
+
+            policy.GetRetryDelay(1).Should().Be(TimeSpan.FromMilliseconds(500));
+            policy.GetRetryDelay(2).Should().Be(TimeSpan.FromSeconds(1));
+            policy.GetRetryDelay(3).Should().Be(TimeSpan.FromSeconds(2));
+
+            // Doubling would reach 8s, which would keep an awaiting caller waiting longer than the cap allows
+            policy.GetRetryDelay(5).Should().Be(TimeSpan.FromSeconds(5));
+        }
+
+        [Fact]
+        public void GetRetryDelay_ShouldPreferTheServersRetryAfterWithinTheCap()
+        {
+            var policy = new RemoteEvaluationRetryPolicy
+            {
+                InitialDelay = TimeSpan.FromMilliseconds(500),
+                MaxDelay = TimeSpan.FromSeconds(5),
+                JitterRatio = 0
+            };
+
+            policy.GetRetryDelay(1, TimeSpan.FromSeconds(2)).Should().Be(TimeSpan.FromSeconds(2));
+            policy.GetRetryDelay(1, TimeSpan.FromMinutes(10)).Should().Be(TimeSpan.FromSeconds(5));
+        }
+
+        private static RemoteEvaluationRetryPolicy NoWaitPolicy(int maxAttempts) =>
+            new RemoteEvaluationRetryPolicy { MaxAttempts = maxAttempts, MaxDelay = TimeSpan.Zero };
+
+        private static RemoteEvaluationService CreateService(HttpClient httpClient, RemoteEvaluationRetryPolicy retryPolicy)
+        {
+            var httpClientFactory = Substitute.For<IHttpClientFactory>();
+            httpClientFactory.CreateClient(Arg.Is(ConfiguredClients.DefaultApiClient)).Returns(httpClient);
+
+            return new RemoteEvaluationService(Substitute.For<ILogger<RemoteEvaluationService>>(), httpClientFactory, retryPolicy);
+        }
+
+        private static string SuccessResponseJson() =>
+            JsonConvert.SerializeObject(new RemoteEvaluationResponse
+            {
+                Features = new Dictionary<string, Feature> { { "test", new Feature { DefaultValue = true } } },
+                DateUpdated = DateTimeOffset.UtcNow
+            });
+
+        private HttpClient CreateHttpClient(Func<HttpRequestMessage, System.Threading.CancellationToken, Task<HttpResponseMessage>> handler) =>
+            new HttpClient(new TestHttpMessageHandler(handler));
 
         private HttpClient CreateHttpClientWithResponse(HttpStatusCode statusCode, string content)
         {
