@@ -14,6 +14,7 @@ public class StandardCasesMetadataTests
     private static readonly HashSet<string> TestedCategories = new HashSet<string>
     {
         "chooseVariation",
+        "contextualBandit",
         "decrypt",
         "evalCondition",
         "feature",
@@ -36,7 +37,7 @@ public class StandardCasesMetadataTests
     {
         var standardCases = LoadStandardCases();
 
-        standardCases["specVersion"]?.ToString().Should().Be("0.7.1");
+        standardCases["specVersion"]?.ToString().Should().Be("0.8.0");
     }
 
     [Fact]
