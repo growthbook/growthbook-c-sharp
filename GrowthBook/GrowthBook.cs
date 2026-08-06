@@ -36,7 +36,7 @@ namespace GrowthBook
         private readonly IDictionary<string, StickyAssignmentsDocument> _stickyBucketAssignmentDocs;
         private readonly ILogger<GrowthBook> _logger;
         private readonly JObject _savedGroups;
-        private readonly IDictionary<string, ContextualBanditDefinition> _contextualBandits;
+        private IDictionary<string, ContextualBanditDefinition> _contextualBandits;
         private readonly ILoggerFactory _loggerFactory;
         private readonly bool _ownsLoggerFactory;
         private readonly Context _context;
@@ -774,6 +774,18 @@ namespace GrowthBook
                 }
 
                 Features = features;
+
+                // Bandit definitions travel in the same payload as the features they belong to, so they're adopted
+                // together: applying new features while still bucketing against the previous weights would attribute
+                // exposures to a weight generation that no longer exists. Definitions supplied through the context
+                // stand until a payload actually carries some.
+                var payloadContextualBandits = (_featureRepository as IGrowthBookContextualBanditSource)?.ContextualBandits;
+
+                if (payloadContextualBandits != null)
+                {
+                    _contextualBandits = payloadContextualBandits;
+                }
+
                 var featureCount = Features.Count;
 
                 _logger.LogInformation($"Loading features has completed, retrieved '{featureCount}' features");

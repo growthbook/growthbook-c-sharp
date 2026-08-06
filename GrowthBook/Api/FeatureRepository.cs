@@ -13,8 +13,10 @@ using Newtonsoft.Json.Linq;
 
 namespace GrowthBook.Api
 {
-    public class FeatureRepository : IGrowthBookFeatureRepository
+    public class FeatureRepository : IGrowthBookFeatureRepository, IGrowthBookContextualBanditSource
     {
+        private IDictionary<string, ContextualBanditDefinition> _remotelyEvaluatedContextualBandits;
+
         private readonly ILogger<FeatureRepository> _logger;
         private readonly IGrowthBookFeatureCache _cache;
         private readonly IGrowthBookFeatureRefreshWorker _backgroundRefreshWorker;
@@ -31,6 +33,16 @@ namespace GrowthBook.Api
             _tracked = new ConcurrentDictionary<string, byte>();
             _remoteEvaluationService = remoteEvaluationService;
         }
+
+        /// <inheritdoc/>
+        /// <remarks>
+        /// Remote evaluation returns its own definitions and never populates the cache, so its results take
+        /// precedence when it is the mode in use; otherwise the definitions come from whatever the refresh worker
+        /// last fetched. A worker that doesn't implement the interface simply supplies none.
+        /// </remarks>
+        public IDictionary<string, ContextualBanditDefinition> ContextualBandits =>
+            Volatile.Read(ref _remotelyEvaluatedContextualBandits)
+            ?? (_backgroundRefreshWorker as IGrowthBookContextualBanditSource)?.ContextualBandits;
 
         /// <inheritdoc/>
         public void Cancel() => _backgroundRefreshWorker.Cancel();
@@ -165,6 +177,9 @@ namespace GrowthBook.Api
                 if (response.IsSuccess)
                 {
                     _logger.LogInformation("Remote evaluation successful, received {Count} features", response.Features.Count);
+
+                    Volatile.Write(ref _remotelyEvaluatedContextualBandits, response.ContextualBandits);
+
                     return response.Features;
                 }
                 else

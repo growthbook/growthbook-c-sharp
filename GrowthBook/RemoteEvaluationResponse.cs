@@ -21,6 +21,13 @@ namespace GrowthBook
         public IDictionary<string, Feature> Features { get; set; } = new Dictionary<string, Feature>();
 
         /// <summary>
+        /// Contextual bandit definitions the evaluation was made against, keyed by the reference a feature rule
+        /// points at. Present only when the payload carried any.
+        /// </summary>
+        [JsonProperty("contextualBandits")]
+        public IDictionary<string, ContextualBanditDefinition> ContextualBandits { get; set; }
+
+        /// <summary>
         /// Timestamp indicating when the features were last updated.
         /// Used for cache invalidation and freshness checks.
         /// </summary>
@@ -61,12 +68,14 @@ namespace GrowthBook
         /// <returns>A successful response</returns>
         public static RemoteEvaluationResponse CreateSuccess(
             IDictionary<string, Feature> features,
-            DateTimeOffset? dateUpdated = null)
+            DateTimeOffset? dateUpdated = null,
+            IDictionary<string, ContextualBanditDefinition> contextualBandits = null)
         {
             return new RemoteEvaluationResponse
             {
                 Features = features ?? new Dictionary<string, Feature>(),
                 DateUpdated = dateUpdated ?? DateTimeOffset.UtcNow,
+                ContextualBandits = contextualBandits,
                 StatusCode = HttpStatusCode.OK
             };
         }
