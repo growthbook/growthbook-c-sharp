@@ -10,6 +10,7 @@ namespace GrowthBook.Evaluation
     {
         public IDictionary<string, Feature> Features { get; set; } = new Dictionary<string, Feature>();
         public JObject SavedGroups { get; set; }
+        public IDictionary<string, ContextualBanditDefinition> ContextualBandits { get; set; }
         public IList<Experiment> Experiments { get; set; } = new List<Experiment>();
         public bool Enabled { get; set; } = true;
         public bool QaMode { get; set; }

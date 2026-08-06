@@ -39,6 +39,7 @@ namespace GrowthBook
         private readonly IDictionary<string, StickyAssignmentsDocument> _stickyBucketAssignmentDocs;
         private readonly ILogger<GrowthBook> _logger;
         private readonly JObject _savedGroups;
+        private readonly IDictionary<string, ContextualBanditDefinition> _contextualBandits;
         private readonly ILoggerFactory _loggerFactory;
         private readonly bool _ownsLoggerFactory;
         private readonly Context _context;
@@ -80,6 +81,7 @@ namespace GrowthBook
                 ? new ConcurrentDictionary<string, StickyAssignmentsDocument>()
                 : new ConcurrentDictionary<string, StickyAssignmentsDocument>(context.StickyBucketAssignmentDocs);
             _savedGroups = context.SavedGroups;
+            _contextualBandits = context.ContextualBandits;
             _previousAttributes = context.Attributes?.DeepClone() as JObject;
             _previousForcedVariations = context.ForcedVariations?.ToDictionary(k => k.Key, v => v.Value);
 
@@ -701,6 +703,7 @@ namespace GrowthBook
             {
                 Features = Features,
                 SavedGroups = _savedGroups,
+                ContextualBandits = _contextualBandits,
                 Experiments = Experiments,
                 Enabled = Enabled,
                 QaMode = _qaMode,
