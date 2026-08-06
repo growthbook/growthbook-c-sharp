@@ -18,7 +18,7 @@ using GrowthBook.Api.SSE;
 
 namespace GrowthBook.Api
 {
-    public class FeatureRefreshWorker : IGrowthBookFeatureRefreshWorker, IDisposable
+    public class FeatureRefreshWorker : IGrowthBookFeatureRefreshWorker, IGrowthBookContextualBanditSource, IDisposable
     {
         private sealed class FeaturesResponse
         {
@@ -36,6 +36,7 @@ namespace GrowthBook.Api
         private readonly string _serverSentEventsApiEndpoint;
         private volatile bool _isServerSentEventsEnabled;
         private readonly object _sseClientLock = new object();
+        private IDictionary<string, ContextualBanditDefinition> _contextualBandits;
         private SSEClient _sseClient;
         private bool _isDisposed;
         private readonly Func<Func<Task>, Task> _startConnection = work => Task.Run(work);
@@ -61,6 +62,14 @@ namespace GrowthBook.Api
             _logger.LogDebug("Features GrowthBook API endpoint: \'{FeaturesApiEndpoint}\'", _featuresApiEndpoint);
             _logger.LogDebug("Features GrowthBook API endpoint (Server Sent Events): \'{FeaturesApiEndpoint}\'", _featuresApiEndpoint);
         }
+
+        /// <inheritdoc/>
+        /// <remarks>
+        /// Read on the evaluation path while a refresh may be replacing it, so the reference is swapped rather than
+        /// mutated and read through <see cref="Volatile"/> - an evaluation sees either the previous payload's
+        /// definitions or the new ones, never a half-populated dictionary.
+        /// </remarks>
+        public IDictionary<string, ContextualBanditDefinition> ContextualBandits => Volatile.Read(ref _contextualBandits);
 
         public void Cancel()
         {
@@ -97,7 +106,7 @@ namespace GrowthBook.Api
                 return null;
             }
 
-            if (!await WriteCacheInOrder(response.Features, response.ETag, sequence, cancellationToken ?? _refreshWorkerCancellation.Token).ConfigureAwait(false))
+            if (!await WriteCacheInOrder(response.Features, response.ETag, response.ContextualBandits, sequence, cancellationToken ?? _refreshWorkerCancellation.Token).ConfigureAwait(false))
             {
                 return await _cache.GetFeatures(cancellationToken).ConfigureAwait(false);
             }
@@ -115,7 +124,7 @@ namespace GrowthBook.Api
             return response.Features;
         }
 
-        private async Task<bool> WriteCacheInOrder(IDictionary<string, Feature> features, string etag, long sequence, CancellationToken cancellationToken)
+        private async Task<bool> WriteCacheInOrder(IDictionary<string, Feature> features, string etag, IDictionary<string, ContextualBanditDefinition> contextualBandits, long sequence, CancellationToken cancellationToken)
         {
             await _cacheWriteLock.WaitAsync(cancellationToken).ConfigureAwait(false);
 
@@ -125,6 +134,11 @@ namespace GrowthBook.Api
                 {
                     return false;
                 }
+
+                // Published before the features so that an evaluation seeing the new features can't be bucketed against
+                // the previous payload's weights, and only by the write that wins, so a response overtaken by a newer
+                // one can't replace its weights either.
+                Volatile.Write(ref _contextualBandits, contextualBandits);
 
                 await _cache.RefreshWith(features, cancellationToken).ConfigureAwait(false);
                 _cachedSequence = sequence;
@@ -211,9 +225,14 @@ namespace GrowthBook.Api
                         _logger.LogDebug("Received SSE event: {Data}", sseEvent.Data?.Substring(0, Math.Min(sseEvent.Data?.Length ?? 0, 100)));
                         
                         var sequence = Interlocked.Increment(ref _cacheWriteSequence);
-                        var features = GetFeaturesFrom(sseEvent.Data);
 
-                        if (features != null && await WriteCacheInOrder(features, null, sequence, _refreshWorkerCancellation.Token).ConfigureAwait(false))
+                        // A streamed payload carries contextual bandits like any other, so the definitions have to be
+                        // refreshed here too - otherwise a bandit's weights would freeze at whatever the last polled
+                        // payload had while its features kept updating.
+                        var payload = Extensions.HttpClientExtensions.ParsePayloadFrom(sseEvent.Data, _logger, _config);
+                        var features = payload.Features;
+
+                        if (features != null && await WriteCacheInOrder(features, null, payload.ContextualBandits, sequence, _refreshWorkerCancellation.Token).ConfigureAwait(false))
                         {
                             NotifyFeaturesStreamed(features);
 
