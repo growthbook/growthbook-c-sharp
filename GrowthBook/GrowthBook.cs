@@ -36,6 +36,7 @@ namespace GrowthBook
         private readonly IDictionary<string, StickyAssignmentsDocument> _stickyBucketAssignmentDocs;
         private readonly ILogger<GrowthBook> _logger;
         private readonly JObject _savedGroups;
+        private readonly IDictionary<string, ContextualBanditDefinition> _contextualBandits;
         private readonly ILoggerFactory _loggerFactory;
         private readonly bool _ownsLoggerFactory;
         private readonly Context _context;
@@ -75,6 +76,7 @@ namespace GrowthBook
             _stickyBucketService = context.StickyBucketService;
             _stickyBucketAssignmentDocs = context.StickyBucketAssignmentDocs ?? new Dictionary<string, StickyAssignmentsDocument>();
             _savedGroups = context.SavedGroups;
+            _contextualBandits = context.ContextualBandits;
             _previousAttributes = context.Attributes?.DeepClone() as JObject;
             _previousForcedVariations = context.ForcedVariations?.ToDictionary(k => k.Key, v => v.Value);
 
@@ -635,9 +637,12 @@ namespace GrowthBook
                         return GetFeatureResult(rule.Force, FeatureResult.SourceId.Force);
                     }
 
+                    // A contextual bandit rule carries its variations under ContextualVariations so that an SDK
+                    // without bandit support skips the rule outright. Read them first, whether or not the rule's
+                    // reference resolves to a definition we have.
                     var experiment = new Experiment
                     {
-                        Variations = rule.Variations,
+                        Variations = rule.ContextualVariations ?? rule.Variations,
                         Key = rule.Key ?? featureId,
                         Coverage = rule.Coverage,
                         Weights = rule.Weights,
@@ -657,7 +662,30 @@ namespace GrowthBook
                         Condition = rule.Condition
                     };
 
+                    // Resolved before bucketing, since it replaces the weights the user is bucketed against.
+                    if (!string.IsNullOrEmpty(rule.ContextualBanditRef))
+                    {
+                        ApplyContextualBandit(experiment, rule.ContextualBanditRef, featureId);
+                    }
+
                     var result = RunExperiment(experiment, featureId);
+
+                    // The bandit is attached before evaluation, so it has to be withdrawn from anything that wasn't a
+                    // real exposure - a forced variation, QA mode, or being filtered out. Those assignments owe
+                    // nothing to the bandit's weights and must not be attributed to them.
+                    if (experiment.ContextualBandit != null)
+                    {
+                        if (result.HashUsed && result.InExperiment)
+                        {
+                            result.LeafId = experiment.ContextualBandit.LeafId;
+                            result.VariationWeights = experiment.ContextualBandit.VariationWeights;
+                            result.BanditVersion = experiment.ContextualBandit.BanditVersion;
+                        }
+                        else
+                        {
+                            experiment.ContextualBandit = null;
+                        }
+                    }
 
                     TryAssignExperimentResult(experiment, result);
 
@@ -768,6 +796,91 @@ namespace GrowthBook
                 // Keep Features as is (don't set to null) to avoid NullReferenceExceptions
                 return FeatureLoadResult.CreateFailure(errorMessage, ex);
             }
+        }
+
+        /// <summary>
+        /// Replaces an experiment's weights with those of the contextual bandit leaf that matches the current user.
+        /// </summary>
+        /// <remarks>
+        /// All the optimisation happens on the GrowthBook backend; this only picks the segment and applies the weights
+        /// it was given, then buckets through the ordinary hashing mechanism.
+        /// </remarks>
+        /// <param name="experiment">The experiment built from the rule, modified in place.</param>
+        /// <param name="contextualBanditRef">The definition key the rule points at.</param>
+        /// <param name="featureId">The feature being evaluated, for logging.</param>
+        private void ApplyContextualBandit(Experiment experiment, string contextualBanditRef, string featureId)
+        {
+            if (_contextualBandits == null
+                || !_contextualBandits.TryGetValue(contextualBanditRef, out var definition)
+                || definition is null)
+            {
+                // Nothing to apply, so the rule runs on its own marginal weights and reports no bandit metadata.
+                // That way a reference the payload hasn't caught up with degrades to an ordinary experiment.
+                _logger.LogDebug("Contextual bandit '{ContextualBanditRef}' is not in the payload for feature '{FeatureId}', using the rule's own weights", contextualBanditRef, featureId);
+                return;
+            }
+
+            var leaf = SelectContextualBanditLeaf(definition.Contexts);
+
+            if (leaf?.Weights != null)
+            {
+                experiment.Weights = leaf.Weights;
+                experiment.ContextualBandit = new ContextualBandit
+                {
+                    LeafId = leaf.LeafId,
+                    VariationWeights = leaf.Weights,
+                    BanditVersion = definition.BanditVersion
+                };
+
+                return;
+            }
+
+            // A definition whose leaves all miss is still a bandit exposure, just on the fallback: keep the rule's own
+            // weights and record the sentinel leaf, so tracking can tell "no segment matched" from "no bandit here".
+            var fallbackWeights = experiment.Weights
+                ?? ExperimentUtilities.GetEqualWeights(experiment.Variations?.Count ?? 0).ToList();
+
+            experiment.Weights = fallbackWeights;
+            experiment.ContextualBandit = new ContextualBandit
+            {
+                LeafId = ContextualBandit.FallbackLeafId,
+                VariationWeights = fallbackWeights,
+                BanditVersion = definition.BanditVersion
+            };
+
+            _logger.LogDebug("No contextual bandit leaf matched for feature '{FeatureId}', falling back to the rule's own weights", featureId);
+        }
+
+        /// <summary>
+        /// Returns the first leaf whose condition matches the current user's attributes.
+        /// </summary>
+        /// <param name="contexts">The definition's leaves, in the order the backend supplied them.</param>
+        /// <returns>The matching leaf, or null when none match.</returns>
+        private ContextualBanditContext SelectContextualBanditLeaf(IList<ContextualBanditContext> contexts)
+        {
+            if (contexts is null)
+            {
+                return null;
+            }
+
+            foreach (var leaf in contexts)
+            {
+                try
+                {
+                    // An absent or empty condition matches everyone, which is how a catch-all leaf is expressed.
+                    if (_conditionEvaluator.EvalCondition(Attributes, leaf.Condition ?? new JObject(), _savedGroups))
+                    {
+                        return leaf;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // One malformed leaf shouldn't cost the user the leaves after it.
+                    _logger.LogWarning(ex, "Contextual bandit leaf {LeafId} could not be evaluated, treating it as not matching", leaf.LeafId);
+                }
+            }
+
+            return null;
         }
 
         private void TryAssignExperimentResult(Experiment experiment, ExperimentResult result)
