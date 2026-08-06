@@ -14,6 +14,7 @@ public class StandardCasesMetadataTests
     private static readonly HashSet<string> TestedCategories = new HashSet<string>
     {
         "chooseVariation",
+        "contextualBandit",
         "decrypt",
         "evalCondition",
         "feature",
