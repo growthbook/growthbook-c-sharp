@@ -23,6 +23,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   where those logs are retained or shipped elsewhere.
 - Stopped logging feature payload bodies, both the raw API response and the decrypted one. A payload carries saved
   groups, which are typically lists of user identifiers, so it is personal data. Character counts are logged instead.
+- Added consumption of the contextual bandit payload, so a feature rule referencing a contextual bandit is bucketed
+  with the backend-computed weights of whichever segment the user falls into, instead of being skipped. Supply the
+  definitions through `Context.ContextualBandits`, the same way `SavedGroups` are supplied; reading them from the
+  feature API payload is not part of this change. `ExperimentResult` reports `LeafId`, `VariationWeights` and
+  `BanditVersion` for a real exposure, and nothing for a forced, QA-mode or filtered-out assignment.
+- Updated the vendored spec suite to 0.8.0 and wired its new `contextualBandit` section (35 cases). The nine
+  condition cases this fork had added to that file moved to `custom-cases.json`, where a future spec bump can't
+  delete them.
 
 ## [1.2.0]
 

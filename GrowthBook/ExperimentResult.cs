@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -70,6 +71,26 @@ namespace GrowthBook
         /// If sticky bucketing was used to assign a variation.
         /// </summary>
         public bool StickyBucketUsed { get; set; }
+
+        /// <summary>
+        /// The contextual bandit leaf whose weights produced this assignment, or
+        /// <see cref="ContextualBandit.FallbackLeafId"/> when a definition was found but no leaf matched.
+        /// </summary>
+        /// <remarks>
+        /// Null unless this was a real bandit exposure: the rule referenced a definition that exists and the user
+        /// was hash-bucketed into the experiment. Forced, QA-mode and filtered-out assignments report nothing.
+        /// </remarks>
+        public int? LeafId { get; set; }
+
+        /// <summary>
+        /// The variation weights that were applied when bucketing this user.
+        /// </summary>
+        public IList<double> VariationWeights { get; set; }
+
+        /// <summary>
+        /// The version of the backend-computed weights behind this assignment.
+        /// </summary>
+        public int? BanditVersion { get; set; }
 
         /// <summary>
         /// Returns the value of the assigned variation cast to the specified type.
