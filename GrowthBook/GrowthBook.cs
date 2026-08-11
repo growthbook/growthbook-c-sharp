@@ -29,6 +29,7 @@ namespace GrowthBook
         private readonly Dictionary<string, ExperimentAssignment> _assigned;
         private readonly ConcurrentDictionary<string, byte> _tracked;
         private Action<Experiment, ExperimentResult> _trackingCallback;
+        private IDictionary<string, JToken> _forcedFeatures;
         private bool _disposedValue;
         private readonly IConditionEvaluationProvider _conditionEvaluator;
         private readonly IGrowthBookFeatureRepository _featureRepository;
@@ -70,6 +71,14 @@ namespace GrowthBook
 
             _qaMode = context.QaMode;
             _trackingCallback = context.TrackingCallback;
+            if (context.ForcedFeatures != null)
+            {
+                _forcedFeatures = new Dictionary<string, JToken>(context.ForcedFeatures);
+            }
+            else
+            {
+                _forcedFeatures = new Dictionary<string, JToken>();
+            }
             _assigned = new Dictionary<string, ExperimentAssignment>();
             _tracked = new ConcurrentDictionary<string, byte>();
             _stickyBucketService = context.StickyBucketService;
@@ -208,6 +217,7 @@ namespace GrowthBook
                     Features.Clear();
                     ForcedVariations = null;
                     _trackingCallback = null;
+                    _forcedFeatures.Clear();
                     _assigned.Clear();
                     _tracked.Clear();
                     _subscribers.Clear();
@@ -345,6 +355,23 @@ namespace GrowthBook
             _previousAttributes = Attributes?.DeepClone() as JObject;
 
             _logger?.LogDebug("Merged additional attributes from object");
+        }
+
+        /// <summary>
+        /// Replaces the forced feature value overrides for this instance.
+        /// </summary>
+        public void SetForcedFeatures(IDictionary<string, JToken> forcedFeatures)
+        {
+            if (forcedFeatures != null)
+            {
+                _forcedFeatures = new Dictionary<string, JToken>(forcedFeatures);
+            }
+            else
+            {
+                _forcedFeatures = new Dictionary<string, JToken>();
+            }
+
+            _logger?.LogDebug("Set {Count} forced feature override(s)", _forcedFeatures.Count);
         }
 
         /// <inheritdoc />
@@ -535,6 +562,12 @@ namespace GrowthBook
                 }
 
                 evaluatedFeatures.Add(featureId);
+
+                if (_forcedFeatures.TryGetValue(featureId, out JToken forcedValue))
+                {
+                    _logger.LogDebug("Feature '{FeatureId}' has a forced override, returning it without evaluating rules", featureId);
+                    return GetFeatureResult(forcedValue ?? JValue.CreateNull(), FeatureResult.SourceId.Override);
+                }
 
                 if (!Features.TryGetValue(featureId, out Feature feature))
                 {

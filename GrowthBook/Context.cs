@@ -75,10 +75,13 @@ namespace GrowthBook
         /// </summary>
         public IDictionary<string, Feature> Features { get; set; } = new Dictionary<string, Feature>();
 
-                /// <summary>
-        /// Feature definitions (usually pulled from an API or cache).
+        /// <summary>
+        /// Values to force specific features to resolve to, keyed by feature key (used for QA/debugging).
+        /// These are the values a feature should evaluate to, not feature definitions: an entry of
+        /// <c>["dark-mode"] = true</c> forces that feature to <c>true</c> regardless of its rules, and even if
+        /// the feature isn't otherwise defined.
         /// </summary>
-        public IDictionary<string, Feature> ForcedFeatures { get; set; } = new Dictionary<string, Feature>();
+        public IDictionary<string, JToken> ForcedFeatures { get; set; } = new Dictionary<string, JToken>();
 
 
         /// <summary>
@@ -200,7 +203,7 @@ namespace GrowthBook
                 CachePath = this.CachePath,
                 RemoteEval = this.RemoteEval,
                 CacheKeyAttributes = this.CacheKeyAttributes?.ToArray(),
-                ForcedFeatures = this.ForcedFeatures
+                ForcedFeatures = new Dictionary<string, JToken>(this.ForcedFeatures ?? new Dictionary<string, JToken>())
             };
             return cloned;
         }
