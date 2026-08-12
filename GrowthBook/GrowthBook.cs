@@ -848,9 +848,9 @@ namespace GrowthBook
                 return null;
             }
 
-            foreach (var leaf in contexts)
+            try
             {
-                try
+                foreach (var leaf in contexts)
                 {
                     // An absent or empty condition matches everyone, which is how a catch-all leaf is expressed.
                     if (_conditionEvaluator.EvalCondition(Attributes, leaf.Condition ?? new JObject(), _savedGroups))
@@ -858,11 +858,13 @@ namespace GrowthBook
                         return leaf;
                     }
                 }
-                catch (Exception ex)
-                {
-                    // One malformed leaf shouldn't cost the user the leaves after it.
-                    _logger.LogWarning(ex, "Contextual bandit leaf {LeafId} could not be evaluated, treating it as not matching", leaf.LeafId);
-                }
+            }
+            catch (Exception ex)
+            {
+                // The whole selection is abandoned rather than the offending leaf skipped. Skipping would let a later
+                // leaf win that the reference SDKs never reach, so the same user would be bucketed on different
+                // weights depending on which SDK evaluated them. Falling back is the one answer they all agree on.
+                _logger.LogWarning(ex, "Contextual bandit leaf selection failed, falling back to the rule's own weights");
             }
 
             return null;
