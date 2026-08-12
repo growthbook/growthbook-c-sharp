@@ -19,13 +19,6 @@ namespace GrowthBook.Api
 {
     public class FeatureRefreshWorker : IGrowthBookFeatureRefreshWorker, IGrowthBookContextualBanditSource, IDisposable
     {
-        private sealed class FeaturesResponse
-        {
-            public int FeatureCount => Features?.Count ?? 0;
-            public Dictionary<string, Feature> Features { get; set; }
-            public string EncryptedFeatures { get; set; }
-        }
-
         private readonly ILogger<FeatureRefreshWorker> _logger;
         private readonly IHttpClientFactory _httpClientFactory;
         private readonly GrowthBookConfigurationOptions _config;
@@ -191,28 +184,6 @@ namespace GrowthBook.Api
             {
                 _logger.LogError(ex, "Error initializing SSE client");
             }
-        }
-
-
-        private IDictionary<string, Feature> GetFeaturesFrom(string json)
-        {
-            var featuresResponse = JsonConvert.DeserializeObject<FeaturesResponse>(json);
-
-            if (featuresResponse.EncryptedFeatures.IsNullOrWhitespace())
-            {
-                _logger.LogInformation("API response JSON contained no encrypted features, returning \'{FeaturesResponseFeatureCount}\' unencrypted features", featuresResponse.FeatureCount);
-                return featuresResponse.Features;
-            }
-
-            _logger.LogInformation("API response JSON contained encrypted features, decrypting them now");
-
-            var decryptedFeaturesJson = featuresResponse.EncryptedFeatures.DecryptWith(_config.DecryptionKey);
-
-            _logger.LogDebug("Decrypted the features payload into \'{CharacterCount}\' characters of JSON", decryptedFeaturesJson?.Length ?? 0);
-
-            var jsonObject = JObject.Parse(decryptedFeaturesJson);
-
-            return jsonObject.ToObject<Dictionary<string, Feature>>();
         }
 
         public void Dispose()
