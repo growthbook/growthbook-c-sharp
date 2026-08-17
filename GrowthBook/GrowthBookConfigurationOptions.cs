@@ -48,5 +48,20 @@ namespace GrowthBook
         /// <see cref="MultiUser.GrowthBookClient"/> on the repository it builds.
         /// </summary>
         internal Action<IDictionary<string, Feature>> OnFeaturesStreamed { get; set; }
+
+        /// <summary>
+        /// Headers to attach to the Features GET request and the Remote Evaluation POST request. Optional.
+        /// </summary>
+        public IDictionary<string, string> ApiHostRequestHeaders { get; set; }
+
+        /// <summary>
+        /// A separate host for the SSE streaming connection. Optional. Falls back to <see cref="ApiHost"/> when null or empty.
+        /// </summary>
+        public string StreamingHost { get; set; }
+
+        /// <summary>
+        /// Headers to attach to the SSE streaming connection. Optional.
+        /// </summary>
+        public IDictionary<string, string> StreamingHostRequestHeaders { get; set; }
     }
 }

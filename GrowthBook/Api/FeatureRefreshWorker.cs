@@ -52,14 +52,30 @@ namespace GrowthBook.Api
             _cache = cache;
             _etagCache = new LruETagCache(config.EtagCacheSize);
 
-            var hostEndpoint = config.ApiHost;
-            var trimmedHostEndpoint = new string(hostEndpoint?.Reverse().SkipWhile(x => x == '/').Reverse().ToArray());
+            var trimmedHostEndpoint = TrimTrailingSlashes(config.ApiHost);
 
             _featuresApiEndpoint = $"{trimmedHostEndpoint}/api/features/{config.ClientKey}";
-            _serverSentEventsApiEndpoint = $"{trimmedHostEndpoint}/sub/{config.ClientKey}";
+
+            string streamingHostEndpoint;
+
+            if (string.IsNullOrWhiteSpace(config.StreamingHost))
+            {
+                streamingHostEndpoint = trimmedHostEndpoint;
+            }
+            else
+            {
+                streamingHostEndpoint = TrimTrailingSlashes(config.StreamingHost);
+            }
+
+            _serverSentEventsApiEndpoint = $"{streamingHostEndpoint}/sub/{config.ClientKey}";
 
             _logger.LogDebug("Features GrowthBook API endpoint: \'{FeaturesApiEndpoint}\'", _featuresApiEndpoint);
-            _logger.LogDebug("Features GrowthBook API endpoint (Server Sent Events): \'{FeaturesApiEndpoint}\'", _featuresApiEndpoint);
+            _logger.LogDebug("Features GrowthBook API endpoint (Server Sent Events): \'{ServerSentEventsApiEndpoint}\'", _serverSentEventsApiEndpoint);
+        }
+
+        private static string TrimTrailingSlashes(string host)
+        {
+            return new string(host?.Reverse().SkipWhile(x => x == '/').Reverse().ToArray());
         }
 
         public void Cancel()
@@ -198,7 +214,11 @@ namespace GrowthBook.Api
                 var sseLogger = _logger as ILogger<SSEClient> ?? 
                     new Microsoft.Extensions.Logging.Abstractions.NullLogger<SSEClient>();
                 
-                var client = new SSEClient(sseLogger, _httpClientFactory, _serverSentEventsApiEndpoint, null, ConfiguredClients.ServerSentEventsApiClient);
+                var streamingHeaders = _config.StreamingHostRequestHeaders is null
+                    ? null
+                    : new Dictionary<string, string>(_config.StreamingHostRequestHeaders);
+
+                var client = new SSEClient(sseLogger, _httpClientFactory, _serverSentEventsApiEndpoint, streamingHeaders, ConfiguredClients.ServerSentEventsApiClient);
 
                 var token = _refreshWorkerCancellation.Token;
 
