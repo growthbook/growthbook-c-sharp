@@ -57,6 +57,11 @@ namespace GrowthBook
         public string Source { get; set; }
 
         /// <summary>
+        /// The id of the matched rule, when source is "force" or "experiment". Empty string otherwise.
+        /// </summary>
+        public string RuleId { get; set; } = string.Empty;
+
+        /// <summary>
         /// When source is "experiment", this will be an Experiment object.
         /// </summary>
         public Experiment Experiment { get; set; }
@@ -86,6 +91,7 @@ namespace GrowthBook
                     && Off == objResult.Off
                     && On == objResult.On
                     && Source == objResult.Source
+                    && RuleId == objResult.RuleId
                     && JToken.DeepEquals(Value ?? JValue.CreateNull(), objResult.Value ?? JValue.CreateNull());
             }
             return false;

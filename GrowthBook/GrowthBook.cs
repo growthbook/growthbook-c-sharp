@@ -142,6 +142,77 @@ namespace GrowthBook
 
                 _featureRepository = new FeatureRepository(featureRepositoryLogger, featureCache, featureRefreshWorker, remoteEvaluationService);
             }
+
+            HydrateStickyBucketServiceFromContext(context.StickyBucketAssignmentDocs);
+
+            RefreshStickyBucketAssignments();
+        }
+
+        /// <summary>
+        /// Replaces this instance's sticky bucket assignment docs with what the configured
+        /// <see cref="IStickyBucketService"/> currently holds for every hash/fallback attribute in use
+        /// across the loaded features and experiments. A no-op when no sticky bucket service is
+        /// configured. Called after construction and whenever Features or Attributes change.
+        /// </summary>
+        private void RefreshStickyBucketAssignments()
+        {
+            if (_stickyBucketService == null)
+            {
+                return;
+            }
+
+            var identifierAttributes = ExperimentUtilities.DeriveStickyBucketIdentifierAttributes(Features, Experiments);
+            var formattedKeys = new List<string>();
+
+            foreach (var attributeName in identifierAttributes)
+            {
+                (_, string hashValue) = Attributes.GetHashAttributeAndValue(attributeName);
+
+                if (!hashValue.IsNullOrWhitespace())
+                {
+                    formattedKeys.Add(new StickyAssignmentsDocument(attributeName, hashValue).FormattedAttribute);
+                }
+            }
+
+            var refreshedDocuments = _stickyBucketService.GetAllAssignments(formattedKeys);
+
+            _stickyBucketAssignmentDocs.Clear();
+
+            foreach (var entry in refreshedDocuments)
+            {
+                _stickyBucketAssignmentDocs[entry.Key] = entry.Value;
+            }
+        }
+
+        /// <summary>
+        /// Writes assignment docs supplied on the Context into the sticky bucket service, so they survive
+        /// the full replace done by <see cref="RefreshStickyBucketAssignments"/>. The reference SDK does the
+        /// same in its constructor; without it, docs handed in directly would be dropped by the first
+        /// refresh unless the caller had separately written them to the store themselves.
+        /// </summary>
+        private void HydrateStickyBucketServiceFromContext(IDictionary<string, StickyAssignmentsDocument> providedDocuments)
+        {
+            if (_stickyBucketService == null || providedDocuments == null)
+            {
+                return;
+            }
+
+            foreach (var document in providedDocuments.Values)
+            {
+                if (document == null)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    _stickyBucketService.SaveAssignments(document);
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogWarning(ex, "Failed to hydrate sticky bucket service with the assignment doc for '{FormattedAttribute}'", document.FormattedAttribute);
+                }
+            }
         }
 
         private void ApplyEncryptedFeatures(Context context)
@@ -276,6 +347,8 @@ namespace GrowthBook
                 Attributes = new JObject();
                 _logger?.LogDebug("Cleared attributes");
             }
+
+            RefreshStickyBucketAssignments();
         }
 
         /// <summary>
@@ -304,6 +377,8 @@ namespace GrowthBook
                 Attributes = new JObject();
                 _logger?.LogDebug("Cleared attributes");
             }
+
+            RefreshStickyBucketAssignments();
         }
 
         /// <summary>
@@ -329,6 +404,8 @@ namespace GrowthBook
             _previousAttributes = Attributes?.DeepClone() as JObject;
 
             _logger?.LogDebug("Merged {Count} additional attributes", additionalAttributes.Count);
+
+            RefreshStickyBucketAssignments();
         }
 
         /// <summary>
@@ -355,6 +432,8 @@ namespace GrowthBook
             _previousAttributes = Attributes?.DeepClone() as JObject;
 
             _logger?.LogDebug("Merged additional attributes from object");
+
+            RefreshStickyBucketAssignments();
         }
 
         /// <summary>
@@ -665,7 +744,7 @@ namespace GrowthBook
                         });
 
                         _logger.LogDebug("Rule {RuleIndex}: returning forced value for feature '{FeatureId}'", ruleIndex, featureId);
-                        return GetFeatureResult(rule.Force, FeatureResult.SourceId.Force);
+                        return GetFeatureResult(rule.Force, FeatureResult.SourceId.Force, ruleId: rule.Id);
                     }
 
                     var experiment = new Experiment
@@ -701,7 +780,7 @@ namespace GrowthBook
 
                     NotifySubscribers(experiment, result);
 
-                    return GetFeatureResult(result.Value, FeatureResult.SourceId.Experiment, experiment, result);
+                    return GetFeatureResult(result.Value, FeatureResult.SourceId.Experiment, experiment, result, ruleId: rule.Id);
                 }
 
                 _logger.LogDebug("No rules matched for feature '{FeatureId}', returning default value", featureId);
@@ -782,6 +861,8 @@ namespace GrowthBook
                 var featureCount = Features.Count;
 
                 _logger.LogInformation($"Loading features has completed, retrieved '{featureCount}' features");
+
+                RefreshStickyBucketAssignments();
 
                 return FeatureLoadResult.CreateSuccess(featureCount);
             }
@@ -1057,6 +1138,7 @@ namespace GrowthBook
 
                 if (isChanged)
                 {
+                    _stickyBucketAssignmentDocs[document.FormattedAttribute] = document;
                     _stickyBucketService.SaveAssignments(document);
                 }
             }
@@ -1066,14 +1148,15 @@ namespace GrowthBook
             return result;
         }
 
-        private FeatureResult GetFeatureResult(JToken value, string source, Experiment experiment = null, ExperimentResult experimentResult = null)
+        private FeatureResult GetFeatureResult(JToken value, string source, Experiment experiment = null, ExperimentResult experimentResult = null, string ruleId = null)
         {
             return new FeatureResult
             {
                 Value = value,
                 Source = source,
                 Experiment = experiment,
-                ExperimentResult = experimentResult
+                ExperimentResult = experimentResult,
+                RuleId = ruleId ?? string.Empty
             };
         }
 
