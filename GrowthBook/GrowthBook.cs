@@ -34,6 +34,14 @@ namespace GrowthBook
         private readonly IConditionEvaluationProvider _conditionEvaluator;
         private readonly IGrowthBookFeatureRepository _featureRepository;
         private readonly IStickyBucketService _stickyBucketService;
+        private readonly IAsyncStickyBucketService _asyncStickyBucketService;
+
+        /// <summary>
+        /// Whether sticky bucketing is available at all, regardless of which of the two service flavors
+        /// was configured. Reads always come from <see cref="_stickyBucketAssignmentDocs"/>, so the read
+        /// path doesn't care which store filled them.
+        /// </summary>
+        private bool IsStickyBucketingEnabled => _stickyBucketService != null || _asyncStickyBucketService != null;
         private readonly IDictionary<string, StickyAssignmentsDocument> _stickyBucketAssignmentDocs;
         private readonly ILogger<GrowthBook> _logger;
         private readonly JObject _savedGroups;
@@ -59,6 +67,7 @@ namespace GrowthBook
         public GrowthBook(Context context)
         {
             ValidateRemoteEvaluationConfiguration(context);
+            ValidateStickyBucketConfiguration(context);
 
             _context = context;
             _canFetchFeatures = context.FeatureRepository != null || !string.IsNullOrWhiteSpace(context.ClientKey);
@@ -82,6 +91,7 @@ namespace GrowthBook
             _assigned = new Dictionary<string, ExperimentAssignment>();
             _tracked = new ConcurrentDictionary<string, byte>();
             _stickyBucketService = context.StickyBucketService;
+            _asyncStickyBucketService = context.AsyncStickyBucketService;
             _stickyBucketAssignmentDocs = context.StickyBucketAssignmentDocs ?? new Dictionary<string, StickyAssignmentsDocument>();
             _savedGroups = context.SavedGroups;
             _previousAttributes = context.Attributes?.DeepClone() as JObject;
@@ -161,6 +171,36 @@ namespace GrowthBook
                 return;
             }
 
+            MergeStickyBucketAssignments(_stickyBucketService.GetAllAssignments(GetStickyBucketAttributeKeys()));
+        }
+
+        /// <summary>
+        /// Pulls fresh sticky bucket assignment docs from the configured
+        /// <see cref="IAsyncStickyBucketService"/>. A no-op when no async sticky bucket service is
+        /// configured. <see cref="LoadFeatures"/> calls this automatically; call it directly after
+        /// changing attributes on a long-lived instance, since the synchronous attribute-change
+        /// methods can't await an async store.
+        /// </summary>
+        /// <param name="cancellationToken">Used for monitoring the need to cancel the retrieval.</param>
+        public async Task LoadStickyBucketAssignmentsAsync(CancellationToken? cancellationToken = null)
+        {
+            if (_asyncStickyBucketService == null)
+            {
+                return;
+            }
+
+            var refreshedDocuments = await _asyncStickyBucketService
+                .GetAllAssignmentsAsync(GetStickyBucketAttributeKeys(), cancellationToken ?? CancellationToken.None);
+
+            MergeStickyBucketAssignments(refreshedDocuments);
+        }
+
+        /// <summary>
+        /// Builds the formatted attribute keys ("name||value") that a sticky bucket store needs documents
+        /// for, based on the hash/fallback attributes used across the loaded features and experiments.
+        /// </summary>
+        private IList<string> GetStickyBucketAttributeKeys()
+        {
             var identifierAttributes = ExperimentUtilities.DeriveStickyBucketIdentifierAttributes(Features, Experiments);
             var formattedKeys = new List<string>();
 
@@ -174,7 +214,32 @@ namespace GrowthBook
                 }
             }
 
-            var refreshedDocuments = _stickyBucketService.GetAllAssignments(formattedKeys);
+            return formattedKeys;
+        }
+
+        /// <summary>
+        /// Persists an assignment to the asynchronous store. Exceptions are caught and logged rather than
+        /// propagated, because this is dispatched without being awaited - an unhandled failure here would
+        /// otherwise surface as an unobserved task exception far from its cause.
+        /// </summary>
+        private async Task SaveStickyBucketAssignmentAsync(StickyAssignmentsDocument document)
+        {
+            try
+            {
+                await _asyncStickyBucketService.SaveAssignmentsAsync(document).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to save sticky bucket assignments for attribute '{FormattedAttribute}'", document.FormattedAttribute);
+            }
+        }
+
+        private void MergeStickyBucketAssignments(IDictionary<string, StickyAssignmentsDocument> refreshedDocuments)
+        {
+            if (refreshedDocuments == null)
+            {
+                return;
+            }
 
             _stickyBucketAssignmentDocs.Clear();
 
@@ -863,6 +928,7 @@ namespace GrowthBook
                 _logger.LogInformation($"Loading features has completed, retrieved '{featureCount}' features");
 
                 RefreshStickyBucketAssignments();
+                await LoadStickyBucketAssignmentsAsync(cancellationToken);
 
                 return FeatureLoadResult.CreateSuccess(featureCount);
             }
@@ -1000,7 +1066,7 @@ namespace GrowthBook
             var foundStickyBucket = false;
             var stickyBucketVersionIsBlocked = false;
 
-            if (_stickyBucketService != null && !experiment.DisableStickyBucketing)
+            if (IsStickyBucketingEnabled && !experiment.DisableStickyBucketing)
             {
                 var bucketVersion = experiment.BucketVersion;
                 var minBucketVersion = experiment.MinBucketVersion;
@@ -1125,7 +1191,7 @@ namespace GrowthBook
 
             // 13.5 Store the value for later if sticky bucketing is enabled.
 
-            if (_stickyBucketService != null && !experiment.DisableStickyBucketing)
+            if (IsStickyBucketingEnabled && !experiment.DisableStickyBucketing)
             {
                 var experimentKey = ExperimentUtilities.GetStickyBucketExperimentKey(experiment.Key, experiment.BucketVersion);
 
@@ -1134,12 +1200,33 @@ namespace GrowthBook
                     [experimentKey] = result.Key
                 };
 
-                (var document, var isChanged) = ExperimentUtilities.GenerateStickyBucketAssignment(_stickyBucketService, hashAttribute, hashValue, assignments);
+                StickyAssignmentsDocument document;
+                bool isChanged;
+
+                if (_stickyBucketService != null)
+                {
+                    (document, isChanged) = ExperimentUtilities.GenerateStickyBucketAssignment(_stickyBucketService, hashAttribute, hashValue, assignments);
+                }
+                else
+                {
+                    var formattedAttribute = new StickyAssignmentsDocument(hashAttribute, hashValue).FormattedAttribute;
+                    _stickyBucketAssignmentDocs.TryGetValue(formattedAttribute, out var existingDocument);
+
+                    (document, isChanged) = ExperimentUtilities.GenerateStickyBucketAssignment(existingDocument, hashAttribute, hashValue, assignments);
+                }
 
                 if (isChanged)
                 {
                     _stickyBucketAssignmentDocs[document.FormattedAttribute] = document;
-                    _stickyBucketService.SaveAssignments(document);
+
+                    if (_stickyBucketService != null)
+                    {
+                        _stickyBucketService.SaveAssignments(document);
+                    }
+                    else
+                    {
+                        _ = SaveStickyBucketAssignmentAsync(document);
+                    }
                 }
             }
 
@@ -1240,7 +1327,7 @@ namespace GrowthBook
                 inExperiment = false;
             }
 
-            var canUseStickyBucketing = _stickyBucketService != null && !experiment.DisableStickyBucketing;
+            var canUseStickyBucketing = IsStickyBucketingEnabled && !experiment.DisableStickyBucketing;
             var fallbackAttribute = canUseStickyBucketing ? experiment.FallbackAttribute : default;
 
             (var hashAttribute, var hashValue) = Attributes.GetHashAttributeAndValue(experiment.HashAttribute, fallbackAttributeKey: fallbackAttribute);
@@ -1332,6 +1419,19 @@ namespace GrowthBook
             if (!string.IsNullOrWhiteSpace(context.DecryptionKey))
             {
                 throw new ArgumentException("RemoteEval cannot be used with DecryptionKey - features are evaluated server-side", nameof(context));
+            }
+        }
+
+        /// <summary>
+        /// Validates that only one sticky bucket service is configured. Allowing both would leave it
+        /// ambiguous which store owns an assignment, and writes would silently go to only one of them.
+        /// </summary>
+        /// <param name="context">The context to validate</param>
+        private static void ValidateStickyBucketConfiguration(Context context)
+        {
+            if (context.StickyBucketService != null && context.AsyncStickyBucketService != null)
+            {
+                throw new ArgumentException("StickyBucketService and AsyncStickyBucketService cannot both be set - choose the one that matches your backing store", nameof(context));
             }
         }
 

@@ -296,6 +296,17 @@ namespace GrowthBook.Utilities
         public static (StickyAssignmentsDocument Document, bool IsChanged) GenerateStickyBucketAssignment(IStickyBucketService stickyBucketService, string attributeName, string attributeValue, IDictionary<string, string> assignments)
         {
             var existingDocument = stickyBucketService is null ? new StickyAssignmentsDocument(attributeName, attributeValue) : stickyBucketService.GetAssignments(attributeName, attributeValue);
+
+            return GenerateStickyBucketAssignment(existingDocument, attributeName, attributeValue, assignments);
+        }
+
+        /// <summary>
+        /// Merges new assignments into an already-retrieved document rather than asking a service for it.
+        /// Used by the asynchronous sticky bucket path, which can't do a blocking read mid-evaluation, and
+        /// so merges against the assignment docs already held in memory.
+        /// </summary>
+        public static (StickyAssignmentsDocument Document, bool IsChanged) GenerateStickyBucketAssignment(StickyAssignmentsDocument existingDocument, string attributeName, string attributeValue, IDictionary<string, string> assignments)
+        {
             var newAssignments = new Dictionary<string, string>(existingDocument?.Assignments ?? new Dictionary<string, string>());
 
             newAssignments.MergeWith(new[] { assignments });

@@ -95,6 +95,18 @@ namespace GrowthBook
         public IStickyBucketService StickyBucketService { get; set; }
 
         /// <summary>
+        /// Service for using sticky buckets backed by an asynchronous store (Redis, SQL, an HTTP API).
+        /// Mutually exclusive with <see cref="StickyBucketService"/> - setting both throws at construction.
+        /// </summary>
+        /// <remarks>
+        /// Assignments are read up front by <c>GrowthBook.LoadStickyBucketAssignmentsAsync</c>, which
+        /// <c>LoadFeatures</c> also calls, so feature evaluation itself stays synchronous. Because the
+        /// synchronous attribute-change methods can't await, call
+        /// <c>LoadStickyBucketAssignmentsAsync</c> again after changing attributes on a long-lived instance.
+        /// </remarks>
+        public IAsyncStickyBucketService AsyncStickyBucketService { get; set; }
+
+        /// <summary>
         /// The assignment docs for sticky bucket usage. Optional.
         /// </summary>
         public IDictionary<string, StickyAssignmentsDocument> StickyBucketAssignmentDocs { get; set; } = new Dictionary<string, StickyAssignmentsDocument>();
@@ -179,7 +191,21 @@ namespace GrowthBook
         /// Creates a deep copy of this Context instance.
         /// </summary>
         /// <returns>A new Context instance with copied values</returns>
-        public Context Clone()
+        public Context Clone() => Clone(copyFeatures: true);
+
+        /// <summary>
+        /// Creates a copy intended to be handed straight to the <see cref="GrowthBook"/> constructor, which
+        /// copies <see cref="Features"/> itself. Skipping the copy here avoids allocating the whole feature
+        /// dictionary twice per instance, which is the hot path for <see cref="GrowthBookFactory"/>.
+        /// </summary>
+        /// <remarks>
+        /// Only safe when the result goes directly into the <see cref="GrowthBook"/> constructor. The returned
+        /// context shares its <see cref="Features"/> dictionary with this one, so mutating it would affect
+        /// both. Use the public <see cref="Clone"/> if you need a fully independent copy.
+        /// </remarks>
+        internal Context CloneForGrowthBookConstruction() => Clone(copyFeatures: false);
+
+        private Context Clone(bool copyFeatures)
         {
             var cloned = new Context
             {
@@ -189,9 +215,12 @@ namespace GrowthBook
                 DecryptionKey = this.DecryptionKey,
                 Attributes = this.Attributes?.DeepClone() as JObject ?? new JObject(),
                 Url = this.Url,
-                Features = new Dictionary<string, Feature>(this.Features ?? new Dictionary<string, Feature>()),
+                Features = copyFeatures
+                    ? new Dictionary<string, Feature>(this.Features ?? new Dictionary<string, Feature>())
+                    : this.Features ?? new Dictionary<string, Feature>(),
                 Experiments = this.Experiments?.ToList(),
                 StickyBucketService = this.StickyBucketService,
+                AsyncStickyBucketService = this.AsyncStickyBucketService,
                 StickyBucketAssignmentDocs = new Dictionary<string, StickyAssignmentsDocument>(this.StickyBucketAssignmentDocs ?? new Dictionary<string, StickyAssignmentsDocument>()),
                 EncryptedFeatures = this.EncryptedFeatures,
                 ForcedVariations = new Dictionary<string, int>(this.ForcedVariations ?? new Dictionary<string, int>()),

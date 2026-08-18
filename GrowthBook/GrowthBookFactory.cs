@@ -34,7 +34,7 @@ namespace GrowthBook
         {
             if (_disposed) throw new ObjectDisposedException(nameof(GrowthBookFactory));
             
-            var context = _baseContext.Clone();
+            var context = _baseContext.CloneForGrowthBookConstruction();
             
             if (userAttributes != null)
             {
@@ -64,7 +64,7 @@ namespace GrowthBook
         {
             if (_disposed) throw new ObjectDisposedException(nameof(GrowthBookFactory));
             
-            var context = _baseContext.Clone();
+            var context = _baseContext.CloneForGrowthBookConstruction();
             
             if (userAttributes != null)
             {
