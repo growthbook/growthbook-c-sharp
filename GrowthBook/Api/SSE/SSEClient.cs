@@ -135,14 +135,24 @@ namespace GrowthBook.Api.SSE
                         }
 
                         SetConnectionStatus(SSEConnectionStatus.Connected);
-                        _currentRetryAttempt = 0; // Reset retry counter on successful connection
-                        
+
                         using (var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
                         using (var reader = new StreamReader(stream))
                         {
                             await ProcessStreamAsync(reader, cancellationToken).ConfigureAwait(false);
                         }
                     }
+
+                    if (cancellationToken.IsCancellationRequested)
+                    {
+                        SetConnectionStatus(SSEConnectionStatus.Disconnected);
+                        break;
+                    }
+
+                    // The server ended the stream without an error. This still needs to go through the
+                    // backoff below - looping straight back into a reconnect here would spin as fast as the
+                    // server can accept and close, hammering the API.
+                    _logger.LogInformation("SSE stream was closed by the server, will attempt to reconnect");
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -153,39 +163,46 @@ namespace GrowthBook.Api.SSE
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "SSE connection error (attempt {Attempt}/{MaxAttempts})", _currentRetryAttempt + 1, _maxRetryAttempts);
-                    
+
                     ConnectionError?.Invoke(ex);
-                    
-                    _currentRetryAttempt++;
-                    
-                    if (_currentRetryAttempt < _maxRetryAttempts)
-                    {
-                        SetConnectionStatus(SSEConnectionStatus.Reconnecting);
-                        var delay = CalculateRetryDelay();
-                        _logger.LogInformation("Retrying SSE connection in {Delay}ms", delay);
-                        
-                        try
-                        {
-                            await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
-                        }
-                        catch (OperationCanceledException)
-                        {
-                            break;
-                        }
-                    }
-                    else
-                    {
-                        SetConnectionStatus(SSEConnectionStatus.Failed);
-                        break;
-                    }
+                }
+
+                // The counter is only reset by ProcessStreamAsync, on data actually arriving. Resetting
+                // merely because the socket opened would let a server that accepts and immediately closes
+                // keep it at zero forever, so neither the growing delay nor the retry limit would apply.
+                _currentRetryAttempt++;
+
+                if (_currentRetryAttempt >= _maxRetryAttempts)
+                {
+                    _logger.LogWarning("SSE connection gave up after {MaxAttempts} attempts", _maxRetryAttempts);
+                    SetConnectionStatus(SSEConnectionStatus.Failed);
+                    break;
+                }
+
+                SetConnectionStatus(SSEConnectionStatus.Reconnecting);
+
+                var retryDelay = CalculateRetryDelay();
+                _logger.LogInformation("Retrying SSE connection in {Delay}ms", retryDelay);
+
+                try
+                {
+                    await Task.Delay(retryDelay, cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    SetConnectionStatus(SSEConnectionStatus.Disconnected);
+                    break;
                 }
             }
         }
 
+        /// <summary>
+        /// Reads the stream until it ends or the token is cancelled.
+        /// </summary>
         private async Task ProcessStreamAsync(StreamReader reader, CancellationToken cancellationToken)
         {
             var buffer = new char[4096];
-            
+
             while (!cancellationToken.IsCancellationRequested)
             {
                 var bytesRead = await reader.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false);
@@ -194,6 +211,14 @@ namespace GrowthBook.Api.SSE
                     _logger.LogDebug("SSE stream ended");
                     break;
                 }
+
+                // Delivered data means this connection is productive, so the reconnect backoff starts
+                // over. This has to happen here rather than after the read loop finishes: a connection
+                // that streams fine for hours and then drops with an exception never reaches code below
+                // the loop, so the attempt counter would keep climbing across unrelated drops until the
+                // client hit _maxRetryAttempts and gave up permanently. Mirrors the reference SDK, which
+                // resets its error count on every message received.
+                _currentRetryAttempt = 0;
 
                 var data = new string(buffer, 0, bytesRead);
                 var events = _parser.AppendData(data);
