@@ -20,13 +20,15 @@ namespace GrowthBook.Api.SSE
         private readonly string _httpClientName;
         private readonly Dictionary<string, Func<SSEEvent, Task>> _eventListeners;
         private readonly SSEEventParser _parser;
+        
+        private const int MaxRetryDelayMs = 5 * 60 * 1000;
+        private static readonly Random JitterSource = new Random();
 
         private SSEConnectionStatus _connectionStatus;
         private CancellationTokenSource _cancellationTokenSource;
         private Task _connectionTask;
         private string _lastEventId;
         private int _retryTimeMs = 3000; // Default retry time
-        private int _maxRetryAttempts = 10;
         private int _currentRetryAttempt = 0;
 
         public SSEConnectionStatus ConnectionStatus => _connectionStatus;
@@ -100,7 +102,7 @@ namespace GrowthBook.Api.SSE
 
         private async Task ConnectInternalAsync(CancellationToken cancellationToken)
         {
-            while (!cancellationToken.IsCancellationRequested && _currentRetryAttempt < _maxRetryAttempts)
+            while (!cancellationToken.IsCancellationRequested)
             {
                 try
                 {
@@ -162,22 +164,17 @@ namespace GrowthBook.Api.SSE
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(ex, "SSE connection error (attempt {Attempt}/{MaxAttempts})", _currentRetryAttempt + 1, _maxRetryAttempts);
+                    _logger.LogError(ex, "SSE connection error (consecutive failure {Attempt})", _currentRetryAttempt + 1);
 
                     ConnectionError?.Invoke(ex);
                 }
 
                 // The counter is only reset by ProcessStreamAsync, on data actually arriving. Resetting
                 // merely because the socket opened would let a server that accepts and immediately closes
-                // keep it at zero forever, so neither the growing delay nor the retry limit would apply.
+                // keep it at zero forever, so the growing delay would never apply. It exists solely to grow
+                // the delay - there is deliberately no attempt limit, so a long outage degrades to one
+                // attempt per MaxRetryDelayMs rather than stopping the client for the process lifetime.
                 _currentRetryAttempt++;
-
-                if (_currentRetryAttempt >= _maxRetryAttempts)
-                {
-                    _logger.LogWarning("SSE connection gave up after {MaxAttempts} attempts", _maxRetryAttempts);
-                    SetConnectionStatus(SSEConnectionStatus.Failed);
-                    break;
-                }
 
                 SetConnectionStatus(SSEConnectionStatus.Reconnecting);
 
@@ -281,10 +278,16 @@ namespace GrowthBook.Api.SSE
 
         private int CalculateRetryDelay()
         {
-            // Exponential backoff with jitter
-            var baseDelay = Math.Min(_retryTimeMs * Math.Pow(2, _currentRetryAttempt), 30000); // Max 30 seconds
-            var jitter = new Random().Next(0, 1000); // Add up to 1 second jitter
-            return (int)baseDelay + jitter;
+            double jitterFactor;
+
+            lock (JitterSource)
+            {
+                jitterFactor = 1d + JitterSource.NextDouble();
+            }
+
+            var delay = _retryTimeMs * Math.Pow(2, _currentRetryAttempt - 1) * jitterFactor;
+
+            return (int)Math.Min(delay, MaxRetryDelayMs);
         }
 
         private void SetConnectionStatus(SSEConnectionStatus status)

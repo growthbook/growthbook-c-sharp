@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -142,8 +143,8 @@ public class SSELifecycleTests
     {
         // The regression the reviewer caught: the retry counter used to be reset only when
         // ProcessStreamAsync *returned*, so a connection that streamed successfully and then threw never
-        // reset it. Ordinary network drops would then accumulate - even days apart - until the client hit
-        // _maxRetryAttempts and stopped streaming for good.
+        // reset it. Ordinary network drops would then accumulate - even days apart - and each reconnect
+        // would wait longer than the one before it despite every connection having worked.
         //
         // `retry: 1` shrinks the backoff so several cycles fit inside the test.
         var handler = new DataThenErrorHandler("retry: 1\ndata: {\"features\":{}}\n\n");
@@ -172,7 +173,7 @@ public class SSELifecycleTests
 
         handler.AttemptCount.Should().BeGreaterThanOrEqualTo(4, "because each productive-then-dropped connection should be retried");
         retryAttemptAfterSeveralDrops.Should().Be(1,
-            "because every connection delivered data, so the counter must be reset each time instead of climbing towards the give-up limit");
+            "because every connection delivered data, so the counter must be reset each time instead of climbing and stretching the delay");
         client.ConnectionStatus.Should().NotBe(SSEConnectionStatus.Failed, "because the client must not give up on connections that are actually working");
     }
 
@@ -301,5 +302,95 @@ public class SSELifecycleTests
 
         received.Should().ContainSingle();
         received[0].Should().Contain("features");
+    }
+
+    private static int InvokeCalculateRetryDelay(SSEClient client, int currentRetryAttempt, int retryTimeMs)
+    {
+        var type = typeof(SSEClient);
+        var flags = System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance;
+
+        type.GetField("_currentRetryAttempt", flags).SetValue(client, currentRetryAttempt);
+        type.GetField("_retryTimeMs", flags).SetValue(client, retryTimeMs);
+
+        return (int)type.GetMethod("CalculateRetryDelay", flags).Invoke(client, null);
+    }
+
+    [Fact]
+    public void TheReconnectDelayNeverExceedsTheCeilingNoMatterHowLongTheOutageLasts()
+    {
+        // The reference SDK caps its backoff at 5 minutes and has no attempt limit, so the delay must
+        // saturate rather than grow without bound - otherwise a long outage would push the next attempt
+        // years out and the missing attempt limit would be meaningless.
+        const int Ceiling = 5 * 60 * 1000;
+
+        using var client = CreateClient(new ScriptedSseHandler(_ => null));
+
+        foreach (var attempt in new[] { 1, 5, 10, 25, 100, 1000, int.MaxValue })
+        {
+            var delay = InvokeCalculateRetryDelay(client, attempt, 3000);
+
+            delay.Should().BePositive($"because attempt {attempt} still has to schedule a retry");
+            delay.Should().BeLessThanOrEqualTo(Ceiling, $"because attempt {attempt} must be capped, not extrapolated");
+        }
+    }
+
+    [Fact]
+    public void TheReconnectDelayIsJitteredSoClientsDoNotRetryInLockstep()
+    {
+        // Jitter is proportional in the reference SDK rather than a flat offset, so the spread stays
+        // meaningful as the delay grows. A flat offset on top of a multi-minute wait would let every client
+        // pointed at the same host reconnect in one burst.
+        using var client = CreateClient(new ScriptedSseHandler(_ => null));
+
+        var delays = new HashSet<int>();
+
+        for (var i = 0; i < 40; i++)
+        {
+            delays.Add(InvokeCalculateRetryDelay(client, 6, 3000));
+        }
+
+        delays.Should().HaveCountGreaterThan(1, "because a fixed delay would make every client reconnect at the same moment");
+        delays.Min().Should().BeGreaterThanOrEqualTo(3000 * 32, "because the jitter multiplies the backoff rather than replacing it");
+    }
+
+    [Fact]
+    public async Task TheClientKeepsRetryingPastTheAttemptCountThatUsedToMakeItGiveUp()
+    {
+        const int OldGiveUpLimit = 10;
+
+        var handler = new ScriptedSseHandler(_ => null);
+        using var client = CreateClient(handler);
+        using var cancellation = new CancellationTokenSource();
+
+        // A 1ms base keeps the exponential curve small enough to fit many attempts into the test.
+        typeof(SSEClient)
+            .GetField("_retryTimeMs", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
+            .SetValue(client, 1);
+
+        var connectTask = client.ConnectAsync(cancellation.Token);
+
+        var deadline = DateTime.UtcNow.AddSeconds(20);
+        while (handler.AttemptCount <= OldGiveUpLimit && DateTime.UtcNow < deadline)
+        {
+            await Task.Delay(25);
+        }
+
+        var attemptsBeforeCancelling = handler.AttemptCount;
+        var statusWhileDown = client.ConnectionStatus;
+
+        cancellation.Cancel();
+
+        try
+        {
+            await connectTask;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+
+        attemptsBeforeCancelling.Should().BeGreaterThan(OldGiveUpLimit,
+            "because there is no attempt limit - a client that stops after a fixed number of failures never recovers from an outage that outlasts it");
+        statusWhileDown.Should().NotBe(SSEConnectionStatus.Failed,
+            "because a connection that is down is Reconnecting; Failed was a terminal state nothing could leave");
     }
 }
