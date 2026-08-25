@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using FluentAssertions;
 using GrowthBook.Api;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
@@ -75,13 +76,14 @@ public class FeatureRepositoryTests : ApiUnitTest<FeatureRepository>
         };
 
         var features = await _featureRepository.GetFeatures(options);
-        await Task.Delay(50);
+        _ = _cache.Received(1).IsCacheExpired;
+        _ = _cache.Received(1).FeatureCount;
 
-        _ = _cache.Received(2).IsCacheExpired;
-        _ = _cache.Received(2).FeatureCount;
-        // Remove this line - cache.GetFeatures is not called when WaitForCompletion = true
-        // _ = _cache.Received(1).GetFeatures(Arg.Any<CancellationToken?>());
-        _ = _backgroundWorker.Received(1).RefreshCacheFromApi(Arg.Any<CancellationToken?>());
+        await _backgroundWorker.Received(1).RefreshCacheFromApi(Arg.Any<CancellationToken?>());
+
+        await _cache.DidNotReceive().GetFeatures(Arg.Any<CancellationToken?>());
+
+        features.Should().BeEquivalentTo(_availableFeatures);
     }
 
     [Theory]
@@ -107,8 +109,32 @@ public class FeatureRepositoryTests : ApiUnitTest<FeatureRepository>
 
         var features = await _featureRepository.GetFeatures(options);
 
-        _ = _cache.Received(2).IsCacheExpired;
-        _ = _cache.Received(2).FeatureCount;
-        _ = _backgroundWorker.Received(1).RefreshCacheFromApi(Arg.Any<CancellationToken?>());
+        _ = _cache.Received(1).IsCacheExpired;
+        _ = _cache.Received(1).FeatureCount;
+
+        await _backgroundWorker.Received(1).RefreshCacheFromApi(Arg.Any<CancellationToken?>());
+
+        features.Should().BeEquivalentTo(_availableFeatures);
+    }
+
+    [Fact]
+    public async Task AFreshCacheIsConsultedExactlyOnceAndTheWorkerIsLeftAlone()
+    {
+        _cache.IsCacheExpired.Returns(false);
+        _cache.FeatureCount.Returns(_availableFeatures.Count);
+        _cache
+            .GetFeatures(Arg.Any<CancellationToken?>())
+            .Returns(_availableFeatures);
+
+        var features = await _featureRepository.GetFeatures();
+
+
+        _ = _cache.Received(1).IsCacheExpired;
+        _ = _cache.DidNotReceive().FeatureCount;
+
+        await _cache.Received(1).GetFeatures(Arg.Any<CancellationToken?>());
+        await _backgroundWorker.DidNotReceive().RefreshCacheFromApi(Arg.Any<CancellationToken?>());
+
+        features.Should().BeEquivalentTo(_availableFeatures);
     }
 }
