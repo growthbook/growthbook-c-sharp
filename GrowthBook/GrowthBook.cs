@@ -41,6 +41,7 @@ namespace GrowthBook
         private readonly JObject _savedGroups;
         private readonly ILoggerFactory _loggerFactory;
         private readonly bool _ownsLoggerFactory;
+        private readonly IDisposable _refreshSubscription;
         private readonly Context _context;
 
         /// <summary>
@@ -147,6 +148,23 @@ namespace GrowthBook
 
                 _featureRepository = new FeatureRepository(featureRepositoryLogger, featureCache, featureRefreshWorker, remoteEvaluationService);
             }
+
+            if (_featureRepository is IFeatureRefreshSource refreshSource)
+            {
+                _refreshSubscription = refreshSource.SubscribeToRefresh(OnFeaturesRefreshed);
+            }
+        }
+
+        private void OnFeaturesRefreshed(IDictionary<string, Feature> features)
+        {
+            if (_disposedValue || features is null)
+            {
+                return;
+            }
+
+            Features = features;
+
+            _logger.LogDebug("Adopted '{FeatureCount}' refreshed feature(s) pushed from the repository", features.Count);
         }
 
         private void ApplyEncryptedFeatures(Context context)
@@ -226,6 +244,7 @@ namespace GrowthBook
                     _tracked.Clear();
                     _subscribers.Clear();
                     _asyncSubscribers.Clear();
+                    _refreshSubscription?.Dispose();
                     _featureRepository.Cancel();
 
                     if (_ownsLoggerFactory && _loggerFactory is IDisposable disposableFactory)

@@ -11,7 +11,7 @@ namespace GrowthBook.Api
     /// <summary>
     /// Represents a simple in-memory cache for GrowthBook features.
     /// </summary>
-    public class InMemoryFeatureCache : IGrowthBookFeatureCache
+    public class InMemoryFeatureCache : IGrowthBookFeatureCache, IFeatureRefreshSource
     {
         // We're providing a lock and locking around every operation within this cache
         // because this is an in-memory cache and may be accessed by multiple threads
@@ -22,6 +22,7 @@ namespace GrowthBook.Api
         // and would like to avoid confusion by mixing paradigms unnecessarily.
 
         private readonly object _cacheLock = new object();
+        private readonly FeatureRefreshSubscriptions _refreshSubscriptions = new FeatureRefreshSubscriptions();
         private IDictionary<string, Feature> _cachedFeatures = new Dictionary<string, Feature>();
         private readonly int _cacheExpirationInSeconds;
         private readonly Func<DateTime> _utcNow;
@@ -78,15 +79,24 @@ namespace GrowthBook.Api
             }
         }
 
+        /// <inheritdoc/>
+        public IDisposable SubscribeToRefresh(Action<IDictionary<string, Feature>> handler) => _refreshSubscriptions.Add(handler);
+
         public Task RefreshWith(IDictionary<string, Feature> features, CancellationToken? cancellationToken = null)
         {
+            IDictionary<string, Feature> refreshed;
+
             lock(_cacheLock)
             {
                 _cachedFeatures = new Dictionary<string, Feature>(features);
                 _nextCacheExpiration = _utcNow().AddSeconds(_cacheExpirationInSeconds);
 
-                return Task.CompletedTask;
+                refreshed = new Dictionary<string, Feature>(_cachedFeatures);
             }
+
+            _refreshSubscriptions.Notify(refreshed, null);
+
+            return Task.CompletedTask;
         }
 
         internal Task RefreshExpiration(CancellationToken? cancellationToken = null)
