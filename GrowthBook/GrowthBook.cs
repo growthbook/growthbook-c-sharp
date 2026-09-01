@@ -636,6 +636,17 @@ namespace GrowthBook
             }
         }
 
+        /// <summary>
+        /// Refreshes the feature definitions from the API. With <paramref name="force"/> set the request is
+        /// made regardless of how fresh the cache is, and any configured refresh interval is ignored;
+        /// evaluation keeps using the cached values until the new ones arrive.
+        /// </summary>
+        /// <param name="force">Whether to bypass the cache freshness check.</param>
+        /// <param name="cancellationToken">The cancellation token for this operation.</param>
+        /// <returns>A <see cref="FeatureLoadResult"/> describing the outcome.</returns>
+        public Task<FeatureLoadResult> RefreshFeatures(bool force = true, CancellationToken? cancellationToken = null)
+            => LoadFeaturesWithResult(new GrowthBookRetrievalOptions { ForceRefresh = force }, cancellationToken);
+
         /// <inheritdoc />
         public async Task<FeatureLoadResult> LoadFeaturesWithResult(GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null)
         {

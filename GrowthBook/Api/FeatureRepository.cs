@@ -22,7 +22,27 @@ namespace GrowthBook.Api
         private readonly ConcurrentDictionary<string, ExperimentAssignment> _assigned;
         private readonly ConcurrentDictionary<string, byte> _tracked;
 
+        private const int MaxBackoffMilliseconds = 5 * 60 * 1000;
+        private const int BaseBackoffMilliseconds = 1000;
+
+        private static readonly Random JitterSource = new Random();
+
+        private readonly Func<DateTime> _utcNow;
+        private readonly object _backoffLock = new object();
+        private int _consecutiveFailures;
+        private DateTime _nextAttemptAllowedAt = DateTime.MinValue;
+        private Task<IDictionary<string, Feature>> _inFlightRefresh;
+
         public FeatureRepository(ILogger<FeatureRepository> logger, IGrowthBookFeatureCache cache, IGrowthBookFeatureRefreshWorker backgroundRefreshWorker, IRemoteEvaluationService remoteEvaluationService = null)
+            : this(logger, cache, backgroundRefreshWorker, remoteEvaluationService, () => DateTime.UtcNow)
+        {
+        }
+
+        /// <summary>
+        /// Creates a repository that reads the current time from <paramref name="utcNow"/> instead of the
+        /// system clock, so the retry backoff can be tested without waiting it out.
+        /// </summary>
+        internal FeatureRepository(ILogger<FeatureRepository> logger, IGrowthBookFeatureCache cache, IGrowthBookFeatureRefreshWorker backgroundRefreshWorker, IRemoteEvaluationService remoteEvaluationService, Func<DateTime> utcNow)
         {
             _logger = logger;
             _cache = cache;
@@ -30,6 +50,7 @@ namespace GrowthBook.Api
             _assigned = new ConcurrentDictionary<string, ExperimentAssignment>();
             _tracked = new ConcurrentDictionary<string, byte>();
             _remoteEvaluationService = remoteEvaluationService;
+            _utcNow = utcNow ?? throw new ArgumentNullException(nameof(utcNow));
         }
 
         /// <inheritdoc/>
@@ -49,41 +70,138 @@ namespace GrowthBook.Api
 
             if (isCacheExpired || options?.ForceRefresh == true)
             {
+                var featureCount = _cache.FeatureCount;
+                var mustWait = featureCount == 0 || options?.WaitForCompletion == true;
+
+                // Suppressed only while there is something cached to serve instead. With an empty cache
+                // there is no stale value to fall back on, so an attempt is always made.
+                if (featureCount > 0 && !IsRefreshAllowedNow())
+                {
+                    _logger.LogDebug("Skipping the refresh: the previous attempt failed and the backoff window has not elapsed");
+
+                    return await _cache.GetFeatures(cancellationToken);
+                }
+
                 _logger.LogInformation("Cache has expired or option to force refresh was set, refreshing the cache from the API");
                 _logger.LogDebug("Cache expired: \'{CacheIsCacheExpired}\' and option to force refresh: \'{OptionsForceRefresh}\'", isCacheExpired, options?.ForceRefresh);
 
                 // Use TaskFactory.StartNew to decouple from the current SynchronizationContext
                 // This prevents threading issues in .NET Framework MVC when the original HttpContext
                 // thread is no longer available after the HTTP request completes
-                var taskFactory = new TaskFactory(cancellationToken ?? CancellationToken.None);
-                var refreshTask = taskFactory.StartNew(async () => await _backgroundRefreshWorker.RefreshCacheFromApi(cancellationToken)).Unwrap();
+                var refreshTask = StartOrJoinRefresh(cancellationToken);
 
                 // When there aren't any features in the cache to begin with, we need to just wait until
                 // that has been officially refreshed to proceed (otherwise the caller gets nothing up front
                 // and has no way of determining when to check back). The other way to wait is if they explicitly
                 // have noted that this is something they'd like to do.
-                var featureCount = _cache.FeatureCount;
-
-                if (featureCount == 0 || options?.WaitForCompletion == true)
+                if (mustWait)
                 {
                     _logger.LogInformation("Either cache currently has no features or the option to wait for completion was set, waiting for cache to refresh");
                     _logger.LogDebug("Feature count: '{CacheFeatureCount}' and option to wait for completion: '{OptionsWaitForCompletion}'", featureCount, options?.WaitForCompletion);
-                    return await refreshTask;
-                }
-                else
-                {
-                    // Start the refresh but don't wait - fire and forget
-                    _ = refreshTask.ContinueWith(t =>
+
+                    try
                     {
-                        if (t.IsFaulted)
-                            _logger.LogError(t.Exception, "Background cache refresh failed");
-                    }, TaskContinuationOptions.OnlyOnFaulted);
+                        var features = await refreshTask;
+                        RecordRefreshOutcome(features != null);
+
+                        return features;
+                    }
+                    catch
+                    {
+                        RecordRefreshOutcome(false);
+                        throw;
+                    }
                 }
+
+                _ = refreshTask.ContinueWith(t =>
+                {
+                    RecordRefreshOutcome(!t.IsFaulted && t.Result != null);
+
+                    if (t.IsFaulted)
+                    {
+                        _logger.LogError(t.Exception, "Background cache refresh failed");
+                    }
+                });
             }
 
             _logger.LogInformation("Cache is not expired and the option to force refresh was not set, retrieving features from cache");
 
             return await _cache.GetFeatures(cancellationToken);
+        }
+
+
+        /// <summary>
+        /// Returns the refresh already in flight, or starts one. Concurrent callers share a single request
+        /// rather than each firing their own, which is also what lets the backoff work: without this, N
+        /// callers arriving together all start a fetch before the first failure has been recorded.
+        /// Mirrors the reference SDK's activeFetches map.
+        /// </summary>
+        private Task<IDictionary<string, Feature>> StartOrJoinRefresh(CancellationToken? cancellationToken)
+        {
+            lock (_backoffLock)
+            {
+                var inFlight = _inFlightRefresh;
+
+                if (inFlight != null && !inFlight.IsCompleted)
+                {
+                    return inFlight;
+                }
+
+                var taskFactory = new TaskFactory(cancellationToken ?? CancellationToken.None);
+                var started = taskFactory.StartNew(async () => await _backgroundRefreshWorker.RefreshCacheFromApi(cancellationToken)).Unwrap();
+
+                _inFlightRefresh = started;
+
+                return started;
+            }
+        }
+
+        /// <summary>
+        /// Whether a background refresh may start. After a failed attempt the next one is held off for an
+        /// exponentially growing window, so an unreachable API is not hit once per evaluation.
+        /// </summary>
+        /// <remarks>
+        /// There is deliberately no attempt limit: the window grows to <see cref="MaxBackoffMilliseconds"/>
+        /// and stays there, matching the reference SDK, which backs its poller off without ever giving up.
+        /// Giving up permanently would leave the caller on a stale cache with no way back.
+        /// </remarks>
+        private bool IsRefreshAllowedNow()
+        {
+            lock (_backoffLock)
+            {
+                return _consecutiveFailures == 0 || _utcNow() >= _nextAttemptAllowedAt;
+            }
+        }
+
+        private void RecordRefreshOutcome(bool succeeded)
+        {
+            lock (_backoffLock)
+            {
+                if (succeeded)
+                {
+                    _consecutiveFailures = 0;
+                    _nextAttemptAllowedAt = DateTime.MinValue;
+
+                    return;
+                }
+
+                _consecutiveFailures++;
+
+                double jitterFactor;
+
+                lock (JitterSource)
+                {
+                    jitterFactor = 1d + JitterSource.NextDouble();
+                }
+
+                var delay = Math.Min(
+                    BaseBackoffMilliseconds * Math.Pow(2, _consecutiveFailures - 1) * jitterFactor,
+                    MaxBackoffMilliseconds);
+
+                _nextAttemptAllowedAt = _utcNow().AddMilliseconds(delay);
+
+                _logger.LogWarning("Feature fetch failed. Consecutive failure {Attempt}, next attempt allowed in {Delay}ms", _consecutiveFailures, (int)delay);
+            }
         }
 
         /// <inheritdoc/>
