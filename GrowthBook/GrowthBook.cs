@@ -35,6 +35,7 @@ namespace GrowthBook
         private readonly FeatureEvaluationProvider _featureEvaluator;
         private readonly ExperimentEvaluationProvider _experimentEvaluator;
         private readonly IGrowthBookFeatureRepository _featureRepository;
+        private readonly bool _ownsFeatureRepository;
         private readonly IStickyBucketService _stickyBucketService;
         private readonly IDictionary<string, StickyAssignmentsDocument> _stickyBucketAssignmentDocs;
         private readonly ILogger<GrowthBook> _logger;
@@ -131,6 +132,8 @@ namespace GrowthBook
             }
             else
             {
+                _ownsFeatureRepository = true;
+
                 var featureCache = new InMemoryFeatureCache(cacheExpirationInSeconds: 60);
                 var httpClientFactory = new HttpClientFactory(requestTimeoutInSeconds: 60);
 
@@ -162,7 +165,10 @@ namespace GrowthBook
                 return;
             }
 
-            Features = features;
+            // Every subscriber is handed the same dictionary, and Dispose() clears Features. Adopting the
+            // pushed reference directly would let one instance being disposed empty the map for all the
+            // others still using it.
+            Features = new Dictionary<string, Feature>(features);
 
             _logger.LogDebug("Adopted '{FeatureCount}' refreshed feature(s) pushed from the repository", features.Count);
         }
@@ -246,6 +252,13 @@ namespace GrowthBook
                     _asyncSubscribers.Clear();
                     _refreshSubscription?.Dispose();
                     _featureRepository.Cancel();
+
+                    // A repository supplied on the Context belongs to the caller and may be shared with
+                    // other instances, so only one this instance built is disposed here.
+                    if (_ownsFeatureRepository && _featureRepository is IDisposable disposableRepository)
+                    {
+                        disposableRepository.Dispose();
+                    }
 
                     if (_ownsLoggerFactory && _loggerFactory is IDisposable disposableFactory)
                     {

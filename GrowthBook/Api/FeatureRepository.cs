@@ -13,7 +13,7 @@ using Newtonsoft.Json.Linq;
 
 namespace GrowthBook.Api
 {
-    public class FeatureRepository : IGrowthBookFeatureRepository, IFeatureRefreshSource
+    public class FeatureRepository : IGrowthBookFeatureRepository, IFeatureRefreshSource, IDisposable
     {
         private readonly ILogger<FeatureRepository> _logger;
         private readonly IGrowthBookFeatureCache _cache;
@@ -22,6 +22,7 @@ namespace GrowthBook.Api
         private readonly ConcurrentDictionary<string, ExperimentAssignment> _assigned;
         private readonly ConcurrentDictionary<string, byte> _tracked;
         private readonly FeatureRefreshSubscriptions _refreshSubscriptions = new FeatureRefreshSubscriptions();
+        private readonly IDisposable _cacheSubscription;
 
         public FeatureRepository(ILogger<FeatureRepository> logger, IGrowthBookFeatureCache cache, IGrowthBookFeatureRefreshWorker backgroundRefreshWorker, IRemoteEvaluationService remoteEvaluationService = null)
         {
@@ -34,12 +35,22 @@ namespace GrowthBook.Api
 
             if (cache is IFeatureRefreshSource refreshSource)
             {
-                refreshSource.SubscribeToRefresh(OnCacheRefreshed);
+                _cacheSubscription = refreshSource.SubscribeToRefresh(OnCacheRefreshed);
             }
         }
 
         /// <inheritdoc/>
         public IDisposable SubscribeToRefresh(Action<IDictionary<string, Feature>> handler) => _refreshSubscriptions.Add(handler);
+
+        /// <summary>
+        /// Detaches this repository from the cache it was listening to. A cache supplied on the
+        /// <see cref="Context"/> is owned by the caller and outlives the repository, so without this a
+        /// discarded repository stays subscribed and keeps fanning refreshes out to dead subscribers.
+        /// </summary>
+        public void Dispose()
+        {
+            _cacheSubscription?.Dispose();
+        }
 
         /// <inheritdoc/>
         private void OnCacheRefreshed(IDictionary<string, Feature> features)

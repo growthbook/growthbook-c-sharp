@@ -244,4 +244,59 @@ public class PushRefreshedFeaturesTests
         served.Should().ContainKey("flag");
         served["flag"].DefaultValue.Value<bool>().Should().BeTrue("because pushing to subscribers must not replace the cache's own job");
     }
+    [Fact]
+    public async Task DisposingOneInstanceLeavesTheFeaturesOfAnotherIntact()
+    {
+        var repository = CreateRepository(out var cache);
+
+        var context = new Context
+        {
+            Attributes = JObject.FromObject(new { id = "user-1" }),
+            Features = FeatureSet(false),
+            FeatureRepository = repository
+        };
+
+        using var survivor = new GrowthBook(context.Clone());
+        var doomed = new GrowthBook(context.Clone());
+
+        await cache.RefreshWith(FeatureSet(true));
+
+        survivor.IsOn("flag").Should().BeTrue();
+        doomed.IsOn("flag").Should().BeTrue();
+
+        doomed.Dispose();
+
+        survivor.Features.Should().ContainKey("flag",
+            "because Dispose() clears the disposing instance's own features - every subscriber is handed the same dictionary, so adopting that reference would let one instance empty the map for all the others");
+        survivor.IsOn("flag").Should().BeTrue();
+    }
+
+    [Fact]
+    public void DisposingARepositoryDetachesItFromTheCache()
+    {
+        var repository = CreateRepository(out var cache);
+
+        HandlerCount(cache).Should().Be(1, "because the repository subscribed to the cache at construction");
+
+        repository.Dispose();
+
+        HandlerCount(cache).Should().Be(0,
+            "because a cache supplied on the Context outlives the repository - staying subscribed would keep fanning refreshes out to dead subscribers");
+    }
+
+    [Fact]
+    public void DisposingAnInstanceDetachesTheRepositoryItOwnsFromItsCache()
+    {
+        var callerOwned = CreateRepository(out var callerOwnedCache);
+
+        using (new GrowthBook(new Context { Features = FeatureSet(false), FeatureRepository = callerOwned }))
+        {
+        }
+
+        HandlerCount(callerOwnedCache).Should().Be(1,
+            "because a repository supplied on the Context belongs to the caller and may be shared, so disposing one instance must not detach it");
+
+        callerOwned.Dispose();
+    }
+
 }
