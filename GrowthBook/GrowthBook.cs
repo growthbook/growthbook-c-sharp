@@ -454,6 +454,66 @@ namespace GrowthBook
         }
 
         /// <inheritdoc />
+        public JObject GetPayload()
+        {
+            var payload = new JObject();
+            var encryptedFeatures = _context?.EncryptedFeatures;
+
+            if (encryptedFeatures.IsNullOrWhitespace())
+            {
+                payload["features"] = JObject.FromObject(Features ?? new Dictionary<string, Feature>());
+            }
+            else
+            {
+                payload["encryptedFeatures"] = encryptedFeatures;
+            }
+
+            payload["experiments"] = JArray.FromObject(Experiments ?? new List<Experiment>());
+
+            if (_savedGroups != null)
+            {
+                payload["savedGroups"] = _savedGroups.DeepClone();
+            }
+
+            return payload;
+        }
+
+        /// <inheritdoc />
+        public JObject GetDecryptedPayload()
+        {
+            var encryptedFeatures = _context?.EncryptedFeatures;
+            var payload = GetPayload();
+
+            if (encryptedFeatures.IsNullOrWhitespace())
+            {
+                return payload;
+            }
+
+            // A wrong key does not fail the AES step, it yields garbage that fails to parse - and the
+            // parser puts a fragment of that garbage in its message. Both paths are wrapped so the caller
+            // gets one exception type and neither the key nor any decrypted bytes reach the message.
+            JObject features;
+
+            try
+            {
+                features = JObject.Parse(encryptedFeatures.DecryptWith(_context.DecryptionKey));
+            }
+            catch (DecryptionException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                throw new DecryptionException("The encrypted payload could not be decrypted with the configured decryption key", ex);
+            }
+
+            payload.Remove("encryptedFeatures");
+            payload["features"] = features;
+
+            return payload;
+        }
+
+        /// <inheritdoc />
         public IDictionary<string, ExperimentAssignment> GetAllResults()
         {
             return _assigned;
