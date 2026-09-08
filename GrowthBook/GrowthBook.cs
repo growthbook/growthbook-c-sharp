@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.ObjectModel;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
@@ -26,6 +27,10 @@ namespace GrowthBook
     /// </summary>
     public class GrowthBook : IGrowthBook, IDisposable
     {
+        private static readonly IReadOnlyDictionary<string, Feature> EmptyFeatures =
+            new ReadOnlyDictionary<string, Feature>(new Dictionary<string, Feature>());
+        private static readonly IReadOnlyList<Experiment> EmptyExperiments = new Experiment[0];
+
         private readonly bool _qaMode;
         private readonly Dictionary<string, ExperimentAssignment> _assigned;
         private readonly ConcurrentDictionary<string, byte> _tracked;
@@ -481,6 +486,24 @@ namespace GrowthBook
 
                 return fallback;
             }
+        }
+
+        /// <inheritdoc />
+        public IReadOnlyDictionary<string, Feature> GetFeatures()
+        {
+            var features = Features;
+
+            return features is null
+                ? EmptyFeatures
+                : new ReadOnlyDictionary<string, Feature>(new Dictionary<string, Feature>(features));
+        }
+
+        /// <inheritdoc />
+        public IReadOnlyList<Experiment> GetExperiments()
+        {
+            var experiments = Experiments;
+
+            return experiments is null ? EmptyExperiments : new List<Experiment>(experiments);
         }
 
         /// <inheritdoc />
