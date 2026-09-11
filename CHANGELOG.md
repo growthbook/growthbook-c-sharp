@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+- Fixed forced features never reaching the remote evaluation request, so the server evaluated as though nothing was
+  forced. **Breaking:** `Context.ForcedFeatures` is now `IDictionary<string, object>` and holds the values to force
+  features to, matching the TypeScript SDK's `forcedFeatureValues`. It was typed as `IDictionary<string, Feature>`,
+  which would have serialized feature definitions into a payload that expects values.
+
 ## [1.2.0]
 
 - Added custom fields support for experiments.

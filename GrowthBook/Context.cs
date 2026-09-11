@@ -75,10 +75,16 @@ namespace GrowthBook
         /// </summary>
         public IDictionary<string, Feature> Features { get; set; } = new Dictionary<string, Feature>();
 
-                /// <summary>
-        /// Feature definitions (usually pulled from an API or cache).
+        /// <summary>
+        /// Values to force specific features to, keyed by feature key (used for QA).
         /// </summary>
-        public IDictionary<string, Feature> ForcedFeatures { get; set; } = new Dictionary<string, Feature>();
+        /// <remarks>
+        /// These are the values a feature should evaluate to, not feature definitions: the entry
+        /// <c>["dark-mode"] = true</c> forces that feature to <c>true</c>. Forced features are part of the remote
+        /// evaluation payload, mirroring the TypeScript SDK's <c>forcedFeatureValues</c>, so the server applies them
+        /// when it evaluates. A null value forces the feature to a JSON null.
+        /// </remarks>
+        public IDictionary<string, object> ForcedFeatures { get; set; } = new Dictionary<string, object>();
 
 
         /// <summary>
@@ -200,7 +206,7 @@ namespace GrowthBook
                 CachePath = this.CachePath,
                 RemoteEval = this.RemoteEval,
                 CacheKeyAttributes = this.CacheKeyAttributes?.ToArray(),
-                ForcedFeatures = this.ForcedFeatures
+                ForcedFeatures = new Dictionary<string, object>(this.ForcedFeatures ?? new Dictionary<string, object>())
             };
             return cloned;
         }

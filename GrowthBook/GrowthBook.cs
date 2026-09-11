@@ -1198,6 +1198,10 @@ namespace GrowthBook
                 CacheKeyAttributes = _context.CacheKeyAttributes,
                 Attributes = Attributes,
                 ForcedVariations = ForcedVariations,
+                // Forced features can only be supplied through the context this instance was built from, so they're
+                // read from there rather than from a live property. Without this they never reached the payload and
+                // the server evaluated as though nothing was forced.
+                ForcedFeatures = _context.ForcedFeatures,
                 Url = Url
             };
         }
