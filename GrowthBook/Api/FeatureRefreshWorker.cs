@@ -17,15 +17,8 @@ using GrowthBook.Api.SSE;
 
 namespace GrowthBook.Api
 {
-    public class FeatureRefreshWorker : IGrowthBookFeatureRefreshWorker, IDisposable
+    public class FeatureRefreshWorker : IGrowthBookFeatureRefreshWorker, IGrowthBookContextualBanditSource, IDisposable
     {
-        private sealed class FeaturesResponse
-        {
-            public int FeatureCount => Features?.Count ?? 0;
-            public Dictionary<string, Feature> Features { get; set; }
-            public string EncryptedFeatures { get; set; }
-        }
-
         private readonly ILogger<FeatureRefreshWorker> _logger;
         private readonly IHttpClientFactory _httpClientFactory;
         private readonly GrowthBookConfigurationOptions _config;
@@ -34,6 +27,7 @@ namespace GrowthBook.Api
         private readonly string _featuresApiEndpoint;
         private readonly string _serverSentEventsApiEndpoint;
         private bool _isServerSentEventsEnabled;
+        private IDictionary<string, ContextualBanditDefinition> _contextualBandits;
         private SSEClient _sseClient;
         private CancellationTokenSource _refreshWorkerCancellation = new CancellationTokenSource();
 
@@ -54,6 +48,14 @@ namespace GrowthBook.Api
             _logger.LogDebug("Features GrowthBook API endpoint: \'{FeaturesApiEndpoint}\'", _featuresApiEndpoint);
             _logger.LogDebug("Features GrowthBook API endpoint (Server Sent Events): \'{FeaturesApiEndpoint}\'", _featuresApiEndpoint);
         }
+
+        /// <inheritdoc/>
+        /// <remarks>
+        /// Read on the evaluation path while a refresh may be replacing it, so the reference is swapped rather than
+        /// mutated and read through <see cref="Volatile"/> - an evaluation sees either the previous payload's
+        /// definitions or the new ones, never a half-populated dictionary.
+        /// </remarks>
+        public IDictionary<string, ContextualBanditDefinition> ContextualBandits => Volatile.Read(ref _contextualBandits);
 
         public void Cancel()
         {
@@ -83,6 +85,10 @@ namespace GrowthBook.Api
             {
                 return null;
             }
+
+            // Published before the features so that an evaluation seeing the new features can't be bucketed against
+            // the previous payload's weights.
+            Volatile.Write(ref _contextualBandits, response.ContextualBandits);
 
             await _cache.RefreshWith(response.Features, cancellationToken);
 
@@ -137,8 +143,14 @@ namespace GrowthBook.Api
                     {
                         _logger.LogDebug("Received SSE event: {Data}", sseEvent.Data?.Substring(0, Math.Min(sseEvent.Data?.Length ?? 0, 100)));
                         
-                        var features = GetFeaturesFrom(sseEvent.Data);
-                        await _cache.RefreshWith(features, _refreshWorkerCancellation.Token);
+                        // A streamed payload carries contextual bandits like any other, so the definitions have to be
+                        // refreshed here too - otherwise a bandit's weights would freeze at whatever the last polled
+                        // payload had while its features kept updating.
+                        var payload = Extensions.HttpClientExtensions.ParsePayloadFrom(sseEvent.Data, _logger, _config);
+
+                        Volatile.Write(ref _contextualBandits, payload.ContextualBandits);
+
+                        await _cache.RefreshWith(payload.Features, _refreshWorkerCancellation.Token);
                         
                         _logger.LogInformation("Cache has been refreshed with server sent event features");
                     }
@@ -172,29 +184,6 @@ namespace GrowthBook.Api
             {
                 _logger.LogError(ex, "Error initializing SSE client");
             }
-        }
-
-
-        private IDictionary<string, Feature> GetFeaturesFrom(string json)
-        {
-            var featuresResponse = JsonConvert.DeserializeObject<FeaturesResponse>(json);
-
-            if (featuresResponse.EncryptedFeatures.IsNullOrWhitespace())
-            {
-                _logger.LogInformation("API response JSON contained no encrypted features, returning \'{FeaturesResponseFeatureCount}\' unencrypted features", featuresResponse.FeatureCount);
-                return featuresResponse.Features;
-            }
-
-            _logger.LogInformation("API response JSON contained encrypted features, decrypting them now");
-            _logger.LogDebug("Attempting to decrypt features with the provided decryption key \'{ConfigDecryptionKey}\'", _config.DecryptionKey);
-
-            var decryptedFeaturesJson = featuresResponse.EncryptedFeatures.DecryptWith(_config.DecryptionKey);
-
-            _logger.LogDebug("Completed attempt to decrypt features which resulted in plaintext value of \'{DecryptedFeaturesJson}\'", decryptedFeaturesJson);
-
-            var jsonObject = JObject.Parse(decryptedFeaturesJson);
-
-            return jsonObject.ToObject<Dictionary<string, Feature>>();
         }
 
         public void Dispose()

@@ -22,6 +22,18 @@ namespace GrowthBook.Api.Extensions
             public int FeatureCount => Features?.Count ?? 0;
             public Dictionary<string, Feature> Features { get; set; }
             public string EncryptedFeatures { get; set; }
+            public Dictionary<string, ContextualBanditDefinition> ContextualBandits { get; set; }
+            public string EncryptedContextualBandits { get; set; }
+        }
+
+        /// <summary>
+        /// What a feature payload carried: the features themselves and, when the payload had any, the contextual
+        /// bandit definitions a feature rule can reference.
+        /// </summary>
+        internal sealed class ParsedPayload
+        {
+            public IDictionary<string, Feature> Features { get; set; }
+            public IDictionary<string, ContextualBanditDefinition> ContextualBandits { get; set; }
         }
 
         public static async Task<(IDictionary<string, Feature> Features, bool IsServerSentEventsEnabled)> GetFeaturesFrom(this HttpClient httpClient, string endpoint, ILogger logger, GrowthBookConfigurationOptions config, CancellationToken cancellationToken)
@@ -31,7 +43,7 @@ namespace GrowthBook.Api.Extensions
             return (response.Features, response.IsServerSentEventsEnabled);
         }
 
-        internal static async Task<(IDictionary<string, Feature> Features, bool IsServerSentEventsEnabled, bool IsNotModified)> GetFeaturesFrom(this HttpClient httpClient, string endpoint, ILogger logger, GrowthBookConfigurationOptions config, CancellationToken cancellationToken, LruETagCache etagCache)
+        internal static async Task<(IDictionary<string, Feature> Features, bool IsServerSentEventsEnabled, bool IsNotModified, IDictionary<string, ContextualBanditDefinition> ContextualBandits)> GetFeaturesFrom(this HttpClient httpClient, string endpoint, ILogger logger, GrowthBookConfigurationOptions config, CancellationToken cancellationToken, LruETagCache etagCache)
         {
             using (var request = new HttpRequestMessage(HttpMethod.Get, endpoint))
             {
@@ -56,7 +68,7 @@ namespace GrowthBook.Api.Extensions
                 if (response.StatusCode == HttpStatusCode.NotModified)
                 {
                     logger.LogInformation("Features API returned 304 Not Modified for endpoint '{Endpoint}'", endpoint);
-                    return (null, isServerSentEventsEnabled, true);
+                    return (null, isServerSentEventsEnabled, true, null);
                 }
 
                 if (!response.IsSuccessStatusCode)
@@ -87,14 +99,14 @@ namespace GrowthBook.Api.Extensions
 
                 logger.LogDebug($"{nameof(FeatureRefreshWorker)} is configured to prefer server sent events and enabled is now '{isServerSentEventsEnabled}'");
 
-                var features = ParseFeaturesFrom(json, logger, config);
+                var payload = ParsePayloadFrom(json, logger, config);
 
                 if (response.Headers.ETag != null)
                 {
                     etagCache?.Put(endpoint, response.Headers.ETag.ToString());
                 }
 
-                return (features, isServerSentEventsEnabled, false);
+                return (payload.Features, isServerSentEventsEnabled, false, payload.ContextualBandits);
             }
         }
 
@@ -135,6 +147,48 @@ namespace GrowthBook.Api.Extensions
 
                     await onFeaturesRetrieved(features);
                 }
+            }
+        }
+
+        /// <summary>
+        /// Reads a feature payload, decrypting whichever parts of it arrived encrypted.
+        /// </summary>
+        internal static ParsedPayload ParsePayloadFrom(string json, ILogger logger, GrowthBookConfigurationOptions config)
+        {
+            var featuresResponse = JsonConvert.DeserializeObject<FeaturesResponse>(json);
+
+            return new ParsedPayload
+            {
+                Features = ParseFeaturesFrom(json, logger, config),
+                ContextualBandits = ParseContextualBanditsFrom(featuresResponse, logger, config)
+            };
+        }
+
+        /// <summary>
+        /// Reads the contextual bandit definitions from a payload, from the encrypted field when that is the one
+        /// present.
+        /// </summary>
+        /// <returns>The definitions, or null when the payload carried none.</returns>
+        private static IDictionary<string, ContextualBanditDefinition> ParseContextualBanditsFrom(FeaturesResponse featuresResponse, ILogger logger, GrowthBookConfigurationOptions config)
+        {
+            if (featuresResponse.EncryptedContextualBandits.IsNullOrWhitespace())
+            {
+                return featuresResponse.ContextualBandits;
+            }
+
+            try
+            {
+                var decrypted = featuresResponse.EncryptedContextualBandits.DecryptWith(config.DecryptionKey);
+
+                return JsonConvert.DeserializeObject<Dictionary<string, ContextualBanditDefinition>>(decrypted);
+            }
+            catch (Exception ex)
+            {
+                // A payload we can't decrypt must not cost the caller their features, so the bandits are dropped and
+                // every rule referencing one falls back to its own marginal weights.
+                logger.LogError(ex, "Failed to decrypt the contextual bandits from the API response, continuing without them");
+
+                return null;
             }
         }
 

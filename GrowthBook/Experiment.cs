@@ -29,6 +29,16 @@ namespace GrowthBook
         public IList<double> Weights { get; set; }
 
         /// <summary>
+        /// The contextual bandit that supplied <see cref="Weights"/>, when this experiment came from a rule
+        /// referencing one and the user was actually bucketed into it.
+        /// </summary>
+        /// <remarks>
+        /// Null for every ordinary experiment, and also for a bandit rule whose assignment did not come from
+        /// hashing - a forced variation, QA mode, or being filtered out - so that it reports no bandit exposure.
+        /// </remarks>
+        public ContextualBandit ContextualBandit { get; set; }
+
+        /// <summary>
         /// If set to false, always return the control (first variation).
         /// </summary>
         public bool Active { get; set; } = true;
