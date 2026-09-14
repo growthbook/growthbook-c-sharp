@@ -56,6 +56,32 @@ public class ReadOnlyStateAccessorTests : UnitTest
     }
 
     [Fact]
+    public void TheReturnedExperimentListCannotBeMutated()
+    {
+        using var growthBook = NewInstance();
+
+        var experiments = growthBook.GetExperiments();
+
+        // Same reasoning as the feature map: IReadOnlyList has no mutators, so the only way in is a cast
+        // back, and the wrapper has to refuse it rather than quietly allow it.
+        Action clear = () => ((IList<Experiment>)experiments).Clear();
+        Action add = () => ((IList<Experiment>)experiments).Add(new Experiment { Key = "injected" });
+
+        clear.Should().Throw<NotSupportedException>();
+        add.Should().Throw<NotSupportedException>();
+    }
+
+    [Fact]
+    public void TheEmptyExperimentListCannotBeMutatedEither()
+    {
+        using var growthBook = new GrowthBook(new Context());
+
+        Action add = () => ((IList<Experiment>)growthBook.GetExperiments()).Add(new Experiment { Key = "injected" });
+
+        add.Should().Throw<NotSupportedException>("the before-load path returns the same kind of view as the loaded one");
+    }
+
+    [Fact]
     public void MutatingTheInstanceDoesNotChangeAnAlreadyReturnedSnapshot()
     {
         using var growthBook = NewInstance();
