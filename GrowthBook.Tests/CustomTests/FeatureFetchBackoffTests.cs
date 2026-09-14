@@ -83,7 +83,7 @@ public class FeatureFetchBackoffTests
     // A zero second time to live keeps the cache permanently stale while still holding features, which is
     // the state the backoff exists for. The cache reads the system clock on this branch, so the manual clock
     // drives the repository's backoff only.
-    private static FeatureRepository CreateRepository(ScriptedWorker worker, ManualClock clock, out InMemoryFeatureCache cache, int cacheExpirationInSeconds = 0)
+    private static FeatureRepository CreateRepository(IGrowthBookFeatureRefreshWorker worker, ManualClock clock, out InMemoryFeatureCache cache, int cacheExpirationInSeconds = 0)
     {
         cache = new InMemoryFeatureCache(cacheExpirationInSeconds);
 
@@ -372,5 +372,169 @@ public class FeatureFetchBackoffTests
 
         worker.Attempts.Should().Be(1,
             "because callers arriving together must join the fetch already in flight rather than each starting their own");
+    }
+
+    /// <summary>
+    /// A worker whose fetch ends the way HttpClient's Timeout does: an OperationCanceledException that
+    /// escapes an async method, which completes the task as Canceled rather than Faulted.
+    /// </summary>
+    private sealed class TimingOutWorker : IGrowthBookFeatureRefreshWorker
+    {
+        private readonly SemaphoreSlim _attemptSignal = new SemaphoreSlim(0);
+        private int _attempts;
+
+        public int Attempts => Volatile.Read(ref _attempts);
+
+        public void Cancel() { }
+
+        public bool WaitForAttempts(int count)
+        {
+            for (var i = 0; i < count; i++)
+            {
+                if (!_attemptSignal.Wait(TimeSpan.FromSeconds(5)))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        public void WaitForQuiet() => _attemptSignal.Wait(TimeSpan.FromMilliseconds(250));
+
+        private readonly SemaphoreSlim _finishedSignal = new SemaphoreSlim(0);
+
+        /// <summary>
+        /// Waits until a fetch has actually ended, not merely started. Without this a following call
+        /// joins the still-running task, so the test would be measuring fetch de-duplication rather
+        /// than how the finished task was classified.
+        /// </summary>
+        public bool WaitUntilFinished() => _finishedSignal.Wait(TimeSpan.FromSeconds(5));
+
+        public async Task<IDictionary<string, Feature>> RefreshCacheFromApi(CancellationToken? cancellationToken = null)
+        {
+            Interlocked.Increment(ref _attempts);
+            _attemptSignal.Release();
+
+            try
+            {
+                await Task.Yield();
+
+                throw new TaskCanceledException("the request timed out");
+            }
+            finally
+            {
+                _finishedSignal.Release();
+            }
+        }
+    }
+
+    [Fact]
+    public async Task ATimedOutFetchCountsAsAFailureAndOpensTheBackoffWindow()
+    {
+        var worker = new TimingOutWorker();
+        var clock = new ManualClock();
+        var repository = CreateRepository(worker, clock, out var cache);
+
+        await cache.RefreshWith(FeatureSet());
+
+        await repository.GetFeatures(Background);
+        worker.WaitForAttempts(1).Should().BeTrue();
+        worker.WaitUntilFinished().Should().BeTrue();
+
+        // The continuation that records the outcome runs after the task completes.
+        await Task.Delay(200);
+
+        // A cancelled task is not a faulted one, so classifying on IsFaulted alone read this as a success,
+        // left the failure count at zero, and let the very next call fire again.
+        await repository.GetFeatures(Background);
+        worker.WaitForQuiet();
+
+        worker.Attempts.Should().Be(1, "the timeout has to open the backoff window like any other failure");
+    }
+
+    [Fact]
+    public async Task AForcedRefreshIsNotSuppressedByTheBackoffWindow()
+    {
+        var worker = new ScriptedWorker(_ => null);
+        var clock = new ManualClock();
+        var repository = CreateRepository(worker, clock, out var cache);
+
+        await cache.RefreshWith(FeatureSet());
+
+        await repository.GetFeatures(Background);
+        worker.WaitForAttempts(1).Should().BeTrue();
+
+        await repository.GetFeatures(Background);
+        worker.WaitForQuiet();
+        worker.Attempts.Should().Be(1, "the automatic refresh is the one the window suppresses");
+
+        await repository.GetFeatures(new GrowthBookRetrievalOptions { ForceRefresh = true });
+        worker.WaitForAttempts(1).Should().BeTrue(
+            "a caller who asked for a refresh outright is owed an attempt - suppressing it still reported " +
+            "success, telling them a fetch happened when none did");
+    }
+
+    /// <summary>
+    /// Blocks until released and then fails, so several callers can be held on one in-flight fetch whose
+    /// outcome is a failure. <see cref="BlockingWorker"/> always succeeds, and a success would reset the
+    /// very counter this is about.
+    /// </summary>
+    private sealed class BlockingFailingWorker : IGrowthBookFeatureRefreshWorker
+    {
+        private readonly ManualResetEventSlim _release = new ManualResetEventSlim(false);
+        private readonly SemaphoreSlim _entered = new SemaphoreSlim(0);
+        private int _attempts;
+
+        public int Attempts => Volatile.Read(ref _attempts);
+
+        public void Cancel() { }
+
+        public bool WaitUntilEntered() => _entered.Wait(TimeSpan.FromSeconds(5));
+
+        public void Release() => _release.Set();
+
+        public Task<IDictionary<string, Feature>> RefreshCacheFromApi(CancellationToken? cancellationToken = null)
+        {
+            Interlocked.Increment(ref _attempts);
+            _entered.Release();
+            _release.Wait(TimeSpan.FromSeconds(5));
+
+            return Task.FromResult<IDictionary<string, Feature>>(null);
+        }
+    }
+
+    [Fact]
+    public async Task JoinersOfOneFailedFetchAdvanceTheWindowOnlyOnce()
+    {
+        var worker = new BlockingFailingWorker();
+        var clock = new ManualClock();
+        var repository = CreateRepository(worker, clock, out var cache);
+
+        await cache.RefreshWith(FeatureSet());
+
+        var callers = new List<Task<IDictionary<string, Feature>>>();
+
+        for (var i = 0; i < 8; i++)
+        {
+            callers.Add(Task.Run(() => repository.GetFeatures(Blocking)));
+        }
+
+        worker.WaitUntilEntered().Should().BeTrue();
+        worker.Release();
+
+        await Task.WhenAll(callers);
+
+        worker.Attempts.Should().Be(1, "the eight callers shared one fetch");
+
+        // One failed request must advance the window by one step, not eight. At eight the window is
+        // minutes long, so the difference is observable as a suppressed attempt after a short wait.
+        clock.Advance(TimeSpan.FromSeconds(5));
+
+        await repository.GetFeatures(Background);
+
+        worker.Attempts.Should().Be(2,
+            "one failure means a window of roughly a second or two, which five seconds clears - eight " +
+            "increments would have pushed it into minutes");
     }
 }

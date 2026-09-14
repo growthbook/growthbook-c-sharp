@@ -32,6 +32,7 @@ namespace GrowthBook.Api
         private int _consecutiveFailures;
         private DateTime _nextAttemptAllowedAt = DateTime.MinValue;
         private Task<IDictionary<string, Feature>> _inFlightRefresh;
+        private Task _lastRecordedRefresh;
 
         public FeatureRepository(ILogger<FeatureRepository> logger, IGrowthBookFeatureCache cache, IGrowthBookFeatureRefreshWorker backgroundRefreshWorker, IRemoteEvaluationService remoteEvaluationService = null)
             : this(logger, cache, backgroundRefreshWorker, remoteEvaluationService, () => DateTime.UtcNow)
@@ -68,14 +69,18 @@ namespace GrowthBook.Api
 
             var isCacheExpired = _cache.IsCacheExpired;
 
-            if (isCacheExpired || options?.ForceRefresh == true)
+            var isForced = options?.ForceRefresh == true;
+
+            if (isCacheExpired || isForced)
             {
                 var featureCount = _cache.FeatureCount;
                 var mustWait = featureCount == 0 || options?.WaitForCompletion == true;
 
-                // Suppressed only while there is something cached to serve instead. With an empty cache
-                // there is no stale value to fall back on, so an attempt is always made.
-                if (featureCount > 0 && !IsRefreshAllowedNow())
+                // Suppressed only for the automatic, expiry-driven refresh, and only while there is
+                // something cached to serve instead. A caller who asked for a refresh outright is owed an
+                // attempt: skipping it here would still report success, telling them a fetch happened when
+                // none did. An empty cache has no stale value to fall back on either.
+                if (!isForced && featureCount > 0 && !IsRefreshAllowedNow())
                 {
                     _logger.LogDebug("Skipping the refresh: the previous attempt failed and the backoff window has not elapsed");
 
@@ -102,24 +107,34 @@ namespace GrowthBook.Api
                     try
                     {
                         var features = await refreshTask;
-                        RecordRefreshOutcome(features != null);
+
+                        // Recorded synchronously, before returning: a following sequential call must not
+                        // reach the gate before this outcome is known, or it fires a second request.
+                        RecordRefreshOutcome(refreshTask, features != null);
 
                         return features;
                     }
                     catch
                     {
-                        RecordRefreshOutcome(false);
+                        RecordRefreshOutcome(refreshTask, false);
                         throw;
                     }
                 }
 
                 _ = refreshTask.ContinueWith(t =>
                 {
-                    RecordRefreshOutcome(!t.IsFaulted && t.Result != null);
+                    // Not !IsFaulted: an escaping OperationCanceledException completes the task as
+                    // Canceled, which is exactly what HttpClient raises when its Timeout elapses. Reading
+                    // Result then throws inside the continuation, whose exception nothing observes.
+                    RecordRefreshOutcome(t, t.Status == TaskStatus.RanToCompletion && t.Result != null);
 
                     if (t.IsFaulted)
                     {
                         _logger.LogError(t.Exception, "Background cache refresh failed");
+                    }
+                    else if (t.IsCanceled)
+                    {
+                        _logger.LogWarning("Background cache refresh was cancelled or timed out");
                     }
                 });
             }
@@ -173,10 +188,25 @@ namespace GrowthBook.Api
             }
         }
 
-        private void RecordRefreshOutcome(bool succeeded)
+        /// <summary>
+        /// Records how one fetch ended, at most once for that fetch.
+        /// </summary>
+        /// <remarks>
+        /// Every caller that joined an in-flight fetch reports its outcome, so without keying on the task
+        /// itself a single failed request would advance the failure count once per joiner and overshoot
+        /// the backoff window badly.
+        /// </remarks>
+        private void RecordRefreshOutcome(Task refresh, bool succeeded)
         {
             lock (_backoffLock)
             {
+                if (ReferenceEquals(_lastRecordedRefresh, refresh))
+                {
+                    return;
+                }
+
+                _lastRecordedRefresh = refresh;
+
                 if (succeeded)
                 {
                     _consecutiveFailures = 0;
