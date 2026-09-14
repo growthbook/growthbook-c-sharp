@@ -36,6 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Callbacks that touch context-affine state — UI controls on WPF/WinForms, `HttpContext.Current` on classic
   ASP.NET — have to marshal back themselves. The synchronous overloads are unaffected: they still invoke callbacks
   on the calling thread. `SubscribeAsync` was already dispatched off-context and is unchanged. No public API changed.
+- Added `GetFeatures()` and `GetExperiments()` on `IGrowthBook`, returning read-only snapshots of the
+  loaded state for debug, health and export use. Empty rather than null before the first load. The
+  mutable `Features` and `Experiments` properties are unchanged.
 
 ## [1.2.0]
 
