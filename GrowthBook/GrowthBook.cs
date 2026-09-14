@@ -28,7 +28,8 @@ namespace GrowthBook
     {
         private static readonly IReadOnlyDictionary<string, Feature> EmptyFeatures =
             new ReadOnlyDictionary<string, Feature>(new Dictionary<string, Feature>());
-        private static readonly IReadOnlyList<Experiment> EmptyExperiments = new Experiment[0];
+        private static readonly IReadOnlyList<Experiment> EmptyExperiments =
+            new ReadOnlyCollection<Experiment>(new List<Experiment>());
 
         private readonly bool _qaMode;
         private readonly Dictionary<string, ExperimentAssignment> _assigned;
@@ -473,7 +474,9 @@ namespace GrowthBook
         {
             var experiments = Experiments;
 
-            return experiments is null ? EmptyExperiments : new List<Experiment>(experiments);
+            return experiments is null
+                ? EmptyExperiments
+                : new ReadOnlyCollection<Experiment>(new List<Experiment>(experiments));
         }
 
         /// <inheritdoc />

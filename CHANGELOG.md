@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   where those logs are retained or shipped elsewhere.
 - Stopped logging feature payload bodies, both the raw API response and the decrypted one. A payload carries saved
   groups, which are typically lists of user identifiers, so it is personal data. Character counts are logged instead.
+- Added `GetFeatures()` and `GetExperiments()` on `IGrowthBook`, returning read-only snapshots of the
+  loaded state for debug, health and export use. Empty rather than null before the first load. The
+  mutable `Features` and `Experiments` properties are unchanged.
 
 ## [1.2.0]
 
