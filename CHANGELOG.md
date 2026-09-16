@@ -36,8 +36,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Callbacks that touch context-affine state — UI controls on WPF/WinForms, `HttpContext.Current` on classic
   ASP.NET — have to marshal back themselves. The synchronous overloads are unaffected: they still invoke callbacks
   on the calling thread. `SubscribeAsync` was already dispatched off-context and is unchanged. No public API changed.
+- Added forced features, via `Context.ForcedFeatures` and `GrowthBook.SetForcedFeatures(...)`. A forced value
+  short-circuits evaluation for that key and is reported with the `override` source, matching the reference SDKs.
+- Added `FeatureResult.RuleId`, carrying the id of the rule that produced the result, so a caller can tell which
+  rule matched rather than only what it returned. Set for the `force` and `experiment` sources, where the
+  reference SDK passes `rule.id`, and left empty everywhere else.
+- Added sticky bucket assignments being refreshed when the attributes they are keyed on change, instead of
+  staying on the identifier the instance was created with. Previously `IStickyBucketService.GetAllAssignments`
+  was declared but never called, so an instance only ever had whatever docs the caller pre-populated.
+- Added `IAsyncStickyBucketService` and `Context.AsyncStickyBucketService`, for backing stores that are async by
+  nature. Implementing the synchronous `IStickyBucketService` over such a store forces a blocking
+  `.GetAwaiter().GetResult()` inside evaluation, which deadlocks under a captured synchronization context.
+  Evaluation itself stays synchronous: assignments are read up front by
+  `GrowthBook.LoadStickyBucketAssignmentsAsync(...)`, which `LoadFeatures` also calls, and writes are dispatched
+  without being awaited. Setting both services throws at construction, since it would be ambiguous which store
+  owns an assignment.
+- Added `RedisStickyBucketService`, an `IAsyncStickyBucketService` backed by Redis. It talks to
+  `IRedisCompatibleClient` rather than to a specific client library, so no Redis dependency is added to the
+  package, and it reads a whole round of assignments in one batch call.
+- Added `Context.Clone()`.
+- Fixed the case-insensitive comparison operators degrading to plain equality when the condition value was an
+  operator object. They now evaluate the nested operator with the comparison applied, rather than testing the
+  attribute against the object itself.
 - Fixed `MergeAttributes` mutating the attributes in place, which could expose a partially merged state to a
-  concurrent evaluation, and fixed it throwing on null values.
+  concurrent evaluation, and fixed it throwing on null values. A null value is stored as a JSON null rather than
+  removing the key, matching the TypeScript, PHP, Ruby and Swift SDKs.
 - Added `UpdateAttributes`/`MergeAttributes` to `IGrowthBook`.
 - Added `UpdateAttributesAsync`/`MergeAttributesAsync`, which wait for the remote evaluation that an attribute
   change triggers. The synchronous versions no longer leave that evaluation unobserved: the next feature load
@@ -58,11 +81,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Stopped logging the remote evaluation request and response bodies at debug level. The request is built from the
   user's attributes, which are personal data, and an evaluated response can carry saved groups, which are typically
   lists of user identifiers. Counts are logged instead.
-- Fixed the async API capturing the caller's synchronization context, which could deadlock an application that
-  blocks on a `GrowthBook` task (including `EvalFeature(key, alwaysLoadFeatures: true)`, which blocks internally).
-  **Note:** as a consequence, a `TrackingCallback` or subscriber invoked by an async evaluation can now run on a
-  thread pool thread rather than on the caller's context. Callbacks that touch UI controls or other
-  context-affine state need to marshal back themselves.
 
 ## [1.2.0]
 
