@@ -85,7 +85,7 @@ namespace GrowthBook.Api
                 {
                     _logger.LogDebug("Skipping the refresh: the previous attempt failed and the backoff window has not elapsed");
 
-                    return await _cache.GetFeatures(cancellationToken);
+                    return await _cache.GetFeatures(cancellationToken).ConfigureAwait(false);
                 }
 
                 _logger.LogInformation("Cache has expired or option to force refresh was set, refreshing the cache from the API");
@@ -109,7 +109,7 @@ namespace GrowthBook.Api
 
                     try
                     {
-                        var features = await AwaitWithCancellation(refreshTask, callerToken);
+                        var features = await AwaitWithCancellation(refreshTask, callerToken).ConfigureAwait(false);
 
                         // Recorded synchronously, before returning: a following sequential call must not
                         // reach the gate before this outcome is known, or it fires a second request.
@@ -208,14 +208,14 @@ namespace GrowthBook.Api
         {
             if (!cancellationToken.CanBeCanceled)
             {
-                return await refresh;
+                return await refresh.ConfigureAwait(false);
             }
 
             var cancelled = new TaskCompletionSource<bool>();
 
             using (cancellationToken.Register(() => cancelled.TrySetResult(true)))
             {
-                var finished = await Task.WhenAny(refresh, cancelled.Task);
+                var finished = await Task.WhenAny(refresh, cancelled.Task).ConfigureAwait(false);
 
                 if (finished != refresh)
                 {
@@ -223,7 +223,7 @@ namespace GrowthBook.Api
                 }
             }
 
-            return await refresh;
+            return await refresh.ConfigureAwait(false);
         }
 
         /// <summary>
