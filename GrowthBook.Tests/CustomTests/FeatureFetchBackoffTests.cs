@@ -533,8 +533,12 @@ public class FeatureFetchBackoffTests
 
         await repository.GetFeatures(Background);
 
-        worker.Attempts.Should().Be(2,
+        // The background path returns before the fetch has even started, so the attempt has to be waited
+        // for rather than read straight away.
+        worker.WaitUntilEntered().Should().BeTrue(
             "one failure means a window of roughly a second or two, which five seconds clears - eight " +
             "increments would have pushed it into minutes");
+
+        worker.Attempts.Should().Be(2);
     }
 }
