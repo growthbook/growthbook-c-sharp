@@ -82,6 +82,20 @@ namespace GrowthBook
         Task<T> GetFeatureValueAsync<T>(string key, T fallback, CancellationToken? cancellationToken = null);
 
         /// <summary>
+        /// Returns the feature definitions currently loaded, keyed by feature key. Empty before the first
+        /// load, never null. The result is a read-only snapshot: it cannot be mutated and does not observe
+        /// a later refresh. Safe to call on a shared instance.
+        /// </summary>
+        IReadOnlyDictionary<string, Feature> GetFeatures();
+
+        /// <summary>
+        /// Returns the experiments currently loaded. Empty before the first load, never null. The result is
+        /// a read-only snapshot: it cannot be mutated and does not observe a later refresh. Safe to call on
+        /// a shared instance.
+        /// </summary>
+        IReadOnlyList<Experiment> GetExperiments();
+
+        /// <summary>
         /// Returns a map of the latest results indexed by experiment key.
         /// </summary>
         /// <returns></returns>
