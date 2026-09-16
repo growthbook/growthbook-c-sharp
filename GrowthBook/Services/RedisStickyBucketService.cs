@@ -145,7 +145,11 @@ namespace GrowthBook.Services
 
             try
             {
-                document = JsonConvert.DeserializeObject<StickyAssignmentsDocument>(value);
+                // The same settings the write side uses. Newtonsoft happens to match property names
+                // case-insensitively on the way in, so leaving them off worked by accident - but only until
+                // a property is renamed or given a [JsonProperty], at which point reads would start silently
+                // returning documents with empty fields.
+                document = JsonConvert.DeserializeObject<StickyAssignmentsDocument>(value, WireFormat);
             }
             catch (JsonException ex)
             {
