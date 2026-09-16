@@ -228,6 +228,37 @@ public class AsyncStickyBucketServiceTests : UnitTest
         growthBook.EvalFeature(FeatureName).ExperimentResult.StickyBucketUsed.Should().BeTrue();
     }
 
+    [Fact]
+    public async Task MergeAttributesAsyncRefreshesAssignmentsForTheNewIdentifier()
+    {
+        const string FeatureName = "test-feature";
+
+        var service = new FakeAsyncStickyBucketService();
+        await service.SaveAssignmentsAsync(new StickyAssignmentsDocument(
+            "id",
+            "user-2",
+            new Dictionary<string, string> { [$"{FeatureName}__0"] = "1" }));
+
+        var context = new Context
+        {
+            Attributes = JObject.FromObject(new { id = "user-1" }),
+            Features = new Dictionary<string, Feature> { [FeatureName] = CreateExperimentFeature() },
+            AsyncStickyBucketService = service
+        };
+
+        var growthBook = new GrowthBook(context);
+
+        // The reference SDK's setAttributes awaits refreshStickyBuckets, so the assignments for the new
+        // identifier must be in place by the time this returns - no separate load call.
+        await growthBook.MergeAttributesAsync(new { id = "user-2" });
+
+        var result = growthBook.EvalFeature(FeatureName);
+
+        result.ExperimentResult.StickyBucketUsed.Should().BeTrue(
+            "because rebinding to user-2 must pull that user's assignment without a separate LoadStickyBucketAssignmentsAsync call");
+        result.On.Should().BeTrue("because user-2's stored assignment points at variation index 1");
+    }
+
     private sealed class FakeFeatureRepository : IGrowthBookFeatureRepository
     {
         private readonly IDictionary<string, Feature> _features;

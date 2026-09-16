@@ -42,7 +42,13 @@ namespace GrowthBook
         /// path doesn't care which store filled them.
         /// </summary>
         private bool IsStickyBucketingEnabled => _stickyBucketService != null || _asyncStickyBucketService != null;
-        private readonly IDictionary<string, StickyAssignmentsDocument> _stickyBucketAssignmentDocs;
+        /// <summary>
+        /// Replaced wholesale on a refresh rather than mutated in place. A concurrent evaluation reads this
+        /// dictionary, so clearing it before repopulating would let that evaluation see an empty or half-filled
+        /// set - and <see cref="Dictionary{TKey, TValue}"/> is not safe for a concurrent read during a write at
+        /// all. The reference SDK publishes refreshed docs the same way, by assigning the whole collection.
+        /// </summary>
+        private volatile IDictionary<string, StickyAssignmentsDocument> _stickyBucketAssignmentDocs;
         private readonly ILogger<GrowthBook> _logger;
         private readonly JObject _savedGroups;
         private readonly ILoggerFactory _loggerFactory;
@@ -180,16 +186,20 @@ namespace GrowthBook
                 return;
             }
 
-            MergeStickyBucketAssignments(_stickyBucketService.GetAllAssignments(GetStickyBucketAttributeKeys()));
+            PublishStickyBucketAssignments(_stickyBucketService.GetAllAssignments(GetStickyBucketAttributeKeys()));
         }
 
         /// <summary>
         /// Pulls fresh sticky bucket assignment docs from the configured
         /// <see cref="IAsyncStickyBucketService"/>. A no-op when no async sticky bucket service is
-        /// configured. <see cref="LoadFeatures"/> calls this automatically; call it directly after
-        /// changing attributes on a long-lived instance, since the synchronous attribute-change
-        /// methods can't await an async store.
+        /// configured.
         /// </summary>
+        /// <remarks>
+        /// <see cref="LoadFeatures"/> calls this automatically, and so does every attribute change: the async
+        /// attribute methods await it, and the synchronous ones dispatch it without waiting, since they have no
+        /// way to await an async store. Call it directly only when you need to be sure the refresh has landed
+        /// after a synchronous attribute change.
+        /// </remarks>
         /// <param name="cancellationToken">Used for monitoring the need to cancel the retrieval.</param>
         public async Task LoadStickyBucketAssignmentsAsync(CancellationToken? cancellationToken = null)
         {
@@ -201,7 +211,7 @@ namespace GrowthBook
             var refreshedDocuments = await _asyncStickyBucketService
                 .GetAllAssignmentsAsync(GetStickyBucketAttributeKeys(), cancellationToken ?? CancellationToken.None);
 
-            MergeStickyBucketAssignments(refreshedDocuments);
+            PublishStickyBucketAssignments(refreshedDocuments);
         }
 
         /// <summary>
@@ -213,9 +223,14 @@ namespace GrowthBook
             var identifierAttributes = ExperimentUtilities.DeriveStickyBucketIdentifierAttributes(Features, Experiments);
             var formattedKeys = new List<string>();
 
+            // The constructor assigns the backing field straight from the context, and Dispose clears it, so
+            // this can run with no attributes at all. An absent identifier just yields no key to ask for,
+            // which is what the reference SDK does too - it reads a missing attribute as an empty value.
+            var attributes = Attributes ?? new JObject();
+
             foreach (var attributeName in identifierAttributes)
             {
-                (_, string hashValue) = Attributes.GetHashAttributeAndValue(attributeName);
+                (_, string hashValue) = attributes.GetHashAttributeAndValue(attributeName);
 
                 if (!hashValue.IsNullOrWhitespace())
                 {
@@ -243,19 +258,37 @@ namespace GrowthBook
             }
         }
 
-        private void MergeStickyBucketAssignments(IDictionary<string, StickyAssignmentsDocument> refreshedDocuments)
+        /// <summary>
+        /// Refreshes the assignments from an asynchronous store on behalf of a caller that cannot await, which
+        /// is every synchronous attribute-change method. Exceptions are caught and logged rather than
+        /// propagated, because nothing observes this task.
+        /// </summary>
+        private async Task RefreshAsyncStickyBucketAssignmentsAsync()
+        {
+            try
+            {
+                await LoadStickyBucketAssignmentsAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to refresh sticky bucket assignments after an attribute change");
+            }
+        }
+
+        /// <summary>
+        /// Publishes the refreshed assignment docs as the current ones, with a single reference assignment so
+        /// that a concurrent evaluation sees either the previous set or the refreshed one, never a partial one.
+        /// </summary>
+        /// <param name="refreshedDocuments">What the store currently holds. A null value leaves the docs alone.</param>
+        private void PublishStickyBucketAssignments(IDictionary<string, StickyAssignmentsDocument> refreshedDocuments)
         {
             if (refreshedDocuments == null)
             {
                 return;
             }
 
-            _stickyBucketAssignmentDocs.Clear();
-
-            foreach (var entry in refreshedDocuments)
-            {
-                _stickyBucketAssignmentDocs[entry.Key] = entry.Value;
-            }
+            // Copied rather than stored directly: the store owns the dictionary it returned and may reuse it.
+            _stickyBucketAssignmentDocs = new Dictionary<string, StickyAssignmentsDocument>(refreshedDocuments);
         }
 
         /// <summary>
@@ -648,6 +681,14 @@ namespace GrowthBook
             // re-resolved for the new identifier exactly once per change.
             RefreshStickyBucketAssignments();
 
+            if (_asyncStickyBucketService != null)
+            {
+                // An asynchronous store can't be read from here, so the refresh is dispatched the same way
+                // writes to that store are. It lands shortly after this returns; callers that need it to have
+                // completed before they evaluate should use the async overloads, which await it.
+                _ = RefreshAsyncStickyBucketAssignmentsAsync();
+            }
+
             if (requiresRemoteEvaluation)
             {
                 // The caller has no way to wait for this, so the task is kept around for the next feature load
@@ -663,19 +704,27 @@ namespace GrowthBook
         /// <param name="attributes">The attributes to apply.</param>
         /// <param name="isMerge">True to merge into the existing attributes, false to replace them.</param>
         /// <param name="cancellationToken">Optional cancellation token.</param>
-        /// <returns>A <see cref="Task"/> that represents any remote evaluation that was triggered.</returns>
-        private Task ApplyAttributesAsync(JObject attributes, bool isMerge, CancellationToken? cancellationToken)
+        /// <returns>
+        /// A <see cref="Task"/> that represents the sticky bucket refresh and any remote evaluation that was
+        /// triggered.
+        /// </returns>
+        private async Task ApplyAttributesAsync(JObject attributes, bool isMerge, CancellationToken? cancellationToken)
         {
             var requiresRemoteEvaluation = SwapInAttributes(attributes, isMerge);
 
             RefreshStickyBucketAssignments();
 
+            // The reference SDK's setAttributes awaits refreshStickyBuckets, so an attribute change always
+            // re-resolves the assignments for the new identifier. The synchronous overloads can't await an
+            // async store, but these can, so here both store flavors are treated alike.
+            await LoadStickyBucketAssignmentsAsync(cancellationToken).ConfigureAwait(false);
+
             if (!requiresRemoteEvaluation)
             {
-                return Task.CompletedTask;
+                return;
             }
 
-            return StartRemoteEvaluation(cancellationToken);
+            await StartRemoteEvaluation(cancellationToken).ConfigureAwait(false);
         }
 
         /// <summary>

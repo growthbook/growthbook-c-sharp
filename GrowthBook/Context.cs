@@ -100,9 +100,10 @@ namespace GrowthBook
         /// </summary>
         /// <remarks>
         /// Assignments are read up front by <c>GrowthBook.LoadStickyBucketAssignmentsAsync</c>, which
-        /// <c>LoadFeatures</c> also calls, so feature evaluation itself stays synchronous. Because the
-        /// synchronous attribute-change methods can't await, call
-        /// <c>LoadStickyBucketAssignmentsAsync</c> again after changing attributes on a long-lived instance.
+        /// <c>LoadFeatures</c> also calls, so feature evaluation itself stays synchronous. An attribute change
+        /// refreshes them too: the async attribute methods await that refresh, while the synchronous ones
+        /// dispatch it without waiting, since they have no way to await an async store. Use the async methods
+        /// when the very next evaluation has to see assignments for the new identifier.
         /// </remarks>
         public IAsyncStickyBucketService AsyncStickyBucketService { get; set; }
 

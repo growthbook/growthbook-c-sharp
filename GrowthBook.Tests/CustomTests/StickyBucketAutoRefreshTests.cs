@@ -277,4 +277,55 @@ public class StickyBucketAutoRefreshTests : UnitTest
         attributes.Should().Contain("id", "because HashAttribute defaults to \"id\" when unset");
         attributes.Should().Contain("orgId", "because standalone Experiments contribute their hash attribute too");
     }
+
+    [Fact]
+    public void ConstructingWithNullAttributesDoesNotThrow()
+    {
+        const string FeatureName = "test-feature";
+
+        var context = new Context
+        {
+            // Explicitly null rather than left at the default empty object. The constructor assigns this
+            // straight to the backing field, so the refresh it then runs has no attributes to resolve against.
+            Attributes = null,
+            Features = new Dictionary<string, Feature> { [FeatureName] = CreateExperimentFeature() },
+            StickyBucketService = new InMemoryStickyBucketService()
+        };
+
+        GrowthBook growthBook = null;
+
+        var construct = () => growthBook = new GrowthBook(context);
+
+        construct.Should().NotThrow("because an absent identifier means there is nothing to ask the store for, not a crash");
+        growthBook.EvalFeature(FeatureName).Should().NotBeNull();
+    }
+
+    [Fact]
+    public void RefreshingAssignmentsReplacesTheDocumentsInsteadOfClearingThemInPlace()
+    {
+        const string FeatureName = "test-feature";
+
+        var service = new InMemoryStickyBucketService();
+        service.SaveAssignments(new StickyAssignmentsDocument(
+            "id",
+            "user-1",
+            new Dictionary<string, string> { [$"{FeatureName}__0"] = "1" }));
+
+        var callerDocuments = new Dictionary<string, StickyAssignmentsDocument>();
+
+        var context = new Context
+        {
+            Attributes = JObject.FromObject(new { id = "user-1" }),
+            Features = new Dictionary<string, Feature> { [FeatureName] = CreateExperimentFeature() },
+            StickyBucketService = service,
+            StickyBucketAssignmentDocs = callerDocuments
+        };
+
+        var growthBook = new GrowthBook(context);
+
+        // The refresh publishes a new dictionary rather than mutating the one it was handed, so the caller's
+        // instance is left exactly as they passed it in.
+        callerDocuments.Should().BeEmpty("because the refreshed set is published as a replacement, not written into the caller's dictionary");
+        growthBook.EvalFeature(FeatureName).ExperimentResult.StickyBucketUsed.Should().BeTrue();
+    }
 }
