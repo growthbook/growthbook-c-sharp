@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+- Fixed an unreachable features API causing roughly one HTTP request per feature evaluation. A failed fetch left
+  the cache untouched, so it stayed expired and the next call fetched again. Consecutive failures now hold off the
+  next automatic attempt for an exponentially growing window (1s base, doubling, jittered, capped at 5 minutes),
+  reset on success. The window is only applied while the cache still holds features to serve; with an empty cache
+  an attempt is always made, and an explicit force refresh is never suppressed.
+- Fixed concurrent callers each starting their own fetch. They now share a single in-flight request, which also
+  keeps a burst of simultaneous callers from registering one failure each.
+- Added `GrowthBook.RefreshFeatures(force, cancellationToken)`, a facade over
+  `LoadFeaturesWithResult(new GrowthBookRetrievalOptions { ForceRefresh = force })`. Added to the class only;
+  `IGrowthBook` is unchanged.
+
 ## [1.2.0]
 
 - Added custom fields support for experiments.
