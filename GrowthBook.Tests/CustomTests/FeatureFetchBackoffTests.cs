@@ -462,8 +462,13 @@ public class FeatureFetchBackoffTests
 
         await cache.RefreshWith(FeatureSet());
 
-        await repository.GetFeatures(Background);
-        worker.WaitForAttempts(1).Should().BeTrue();
+        // Blocking rather than background for the first call: the outcome is then recorded before it
+        // returns, so the window is provably open by the time the next call is made. The background path
+        // records in a continuation, which under load can still be pending - and a window that has not
+        // opened yet suppresses nothing, so the second call would fetch and the test would be measuring
+        // scheduling rather than the gate.
+        await repository.GetFeatures(Blocking);
+        worker.Attempts.Should().Be(1);
 
         await repository.GetFeatures(Background);
         worker.WaitForQuiet();
