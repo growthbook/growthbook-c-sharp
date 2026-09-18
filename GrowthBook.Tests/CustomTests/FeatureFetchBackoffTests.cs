@@ -513,14 +513,20 @@ public class FeatureFetchBackoffTests
 
         await cache.RefreshWith(FeatureSet());
 
-        var callers = new List<Task<IDictionary<string, Feature>>>();
-
-        for (var i = 0; i < 8; i++)
-        {
-            callers.Add(Task.Run(() => repository.GetFeatures(Blocking)));
-        }
+        // One caller starts the fetch and is held inside the worker. The joiners are then called from
+        // this thread rather than from tasks of their own: GetFeatures reaches the in-flight task before
+        // it returns, so joining is guaranteed instead of depending on when the scheduler runs them.
+        // Fanning out with Task.Run and waiting for the first to enter only proves that one arrived - a
+        // straggler could reach the repository after the fetch had finished and start a second one.
+        var callers = new List<Task<IDictionary<string, Feature>>> { Task.Run(() => repository.GetFeatures(Blocking)) };
 
         worker.WaitUntilEntered().Should().BeTrue();
+
+        for (var i = 0; i < 7; i++)
+        {
+            callers.Add(repository.GetFeatures(Blocking));
+        }
+
         worker.Release();
 
         await Task.WhenAll(callers);
