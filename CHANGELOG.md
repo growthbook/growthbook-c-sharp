@@ -7,11 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Finished keeping the caller's synchronization context out of the async paths: `FeatureRepository`,
-  `FeatureRefreshWorker`, `HttpClientExtensions` and `SSEClient` no longer capture it either. An application on a
-  single-threaded context (classic ASP.NET on .NET Framework, WPF, WinForms) that blocks on an SDK task could
-  otherwise still deadlock on the innermost await, including through `EvalFeature(key, alwaysLoadFeatures: true)`
-  and `GetFeatureValue(key, fallback, alwaysLoadFeatures: true)`, which block internally.
+- Finished keeping the caller's synchronization context out of the async paths: `GrowthBook`, `FeatureRepository`,
+  `FeatureRefreshWorker`, `HttpClientExtensions`, `RemoteEvaluationService` and `SSEClient` no longer capture it
+  either. An application on a single-threaded context (classic ASP.NET on .NET Framework, WPF, WinForms) that
+  blocks on an SDK task could otherwise still deadlock on the innermost await.
+- Fixed `EvalFeature(key, alwaysLoadFeatures: true)` and `GetFeatureValue(key, fallback, alwaysLoadFeatures: true)`
+  deadlocking on the same contexts when a feature repository supplied on the `Context` captures it. These two
+  block internally, so they now start the load off the calling thread instead of depending on how the
+  application's own repository resumes.
 
 ## [1.2.0]
 
