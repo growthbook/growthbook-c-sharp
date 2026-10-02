@@ -33,6 +33,9 @@ namespace GrowthBook.Tests.CustomTests
 
         private bool Eval(JObject attributes, JObject condition) => _provider.EvalCondition(attributes, condition, SavedGroups);
 
+        private bool Eval(JObject attributes, JObject condition, string savedGroups) =>
+            _provider.EvalCondition(attributes, condition, JObject.Parse(savedGroups));
+
         [Fact]
         public void InGroupMatchesAMemberOfTheGroup()
         {
@@ -89,15 +92,19 @@ namespace GrowthBook.Tests.CustomTests
                 "because the operators are logical negations of each other - collapsing both to false asserts that the user is simultaneously in and not in the group");
         }
 
+        /// <summary>
+        /// The two differ only when the group lists a null member, which
+        /// <see cref="AnAbsentAttributeDoesNotMatchANullMemberOfTheGroup"/> covers. For every other
+        /// group they have to agree, since neither has a value the group could contain.
+        /// </summary>
         [Fact]
-        public void AnAbsentAttributeBehavesTheSameAsAnExplicitJsonNull()
+        public void AnAbsentAttributeBehavesTheSameAsAnExplicitJsonNullForAGroupOfValues()
         {
             var absent = JObject.Parse(@"{ ""other"": ""value"" }");
             var explicitNull = JObject.Parse(@"{ ""id"": null }");
 
             Eval(absent, InGroup($"\"{GroupName}\"")).Should().Be(Eval(explicitNull, InGroup($"\"{GroupName}\"")));
-            Eval(absent, NotInGroup($"\"{GroupName}\"")).Should().Be(Eval(explicitNull, NotInGroup($"\"{GroupName}\"")),
-                "because a JValue wrapping JSON null and a missing key are both 'no value' and must not diverge");
+            Eval(absent, NotInGroup($"\"{GroupName}\"")).Should().Be(Eval(explicitNull, NotInGroup($"\"{GroupName}\"")));
         }
 
         [Fact]
@@ -144,6 +151,54 @@ namespace GrowthBook.Tests.CustomTests
 
             Eval(attributes, InGroup($"\"{GroupName}\"")).Should().BeTrue("because the reference isIn treats an array attribute as matching on any shared element");
             Eval(attributes, NotInGroup($"\"{GroupName}\"")).Should().BeFalse();
+        }
+
+        /// <summary>
+        /// The reference distinguishes an absent attribute from one set to null: isIn passes
+        /// <c>undefined</c> for the first and <c>null</c> for the second, and <c>[null].includes(undefined)</c>
+        /// is false. Treating both as a JSON null would silently add every user with no value for
+        /// the attribute to any group that happens to list one.
+        /// </summary>
+        [Fact]
+        public void AnAbsentAttributeDoesNotMatchANullMemberOfTheGroup()
+        {
+            const string groupsWithNullMember = @"{ ""admins"": [ ""user-1"", null ] }";
+            var absent = JObject.Parse(@"{ ""other"": ""value"" }");
+
+            Eval(absent, InGroup($"\"{GroupName}\""), groupsWithNullMember)
+                .Should().BeFalse("because a user with no value for the attribute is not the group's null member");
+            Eval(absent, NotInGroup($"\"{GroupName}\""), groupsWithNullMember).Should().BeTrue();
+        }
+
+        [Fact]
+        public void AnAttributeExplicitlySetToNullStillMatchesANullMemberOfTheGroup()
+        {
+            const string groupsWithNullMember = @"{ ""admins"": [ ""user-1"", null ] }";
+            var explicitNull = JObject.Parse(@"{ ""id"": null }");
+
+            Eval(explicitNull, InGroup($"\"{GroupName}\""), groupsWithNullMember)
+                .Should().BeTrue("because the reference compares null to null and finds the member");
+            Eval(explicitNull, NotInGroup($"\"{GroupName}\""), groupsWithNullMember).Should().BeFalse();
+        }
+
+        /// <summary>
+        /// A saved group that is not an array is malformed payload, not a reason to abandon the
+        /// evaluation: the condition has to produce a result the caller can act on.
+        /// </summary>
+        [Theory]
+        [InlineData(@"{ ""admins"": null }")]
+        [InlineData(@"{ ""admins"": ""user-1"" }")]
+        [InlineData(@"{ ""admins"": 42 }")]
+        [InlineData(@"{ ""admins"": { ""user-1"": true } }")]
+        public void ANonArraySavedGroupBehavesAsAnEmptyGroup(string savedGroups)
+        {
+            var present = JObject.Parse(@"{ ""id"": ""user-1"" }");
+            var absent = JObject.Parse(@"{ ""other"": ""value"" }");
+
+            Eval(present, InGroup($"\"{GroupName}\""), savedGroups).Should().BeFalse();
+            Eval(present, NotInGroup($"\"{GroupName}\""), savedGroups).Should().BeTrue();
+            Eval(absent, InGroup($"\"{GroupName}\""), savedGroups).Should().BeFalse();
+            Eval(absent, NotInGroup($"\"{GroupName}\""), savedGroups).Should().BeTrue();
         }
     }
 }

@@ -323,11 +323,11 @@ namespace GrowthBook.Providers
             }
             if (op == "$inGroup")
             {
-                return IsIn(GetSavedGroup(savedGroups, conditionValue), attributeValue);
+                return IsInSavedGroup(savedGroups, conditionValue, attributeValue);
             }
             if (op == "$notInGroup")
             {
-                return !IsIn(GetSavedGroup(savedGroups, conditionValue), attributeValue);
+                return !IsInSavedGroup(savedGroups, conditionValue, attributeValue);
             }
 
             _logger.LogWarning("Unable to handle unsupported operator condition \'{Op}\', failing the condition", op);
@@ -400,6 +400,18 @@ namespace GrowthBook.Providers
             }
         }
 
+        private bool IsInSavedGroup(JObject savedGroups, JToken groupId, JToken attributeValue)
+        {
+            // An attribute that isn't present at all has no value to find in the group, not even
+            // in one that lists a JSON null. Only an attribute explicitly set to null matches that.
+            if (attributeValue is null)
+            {
+                return false;
+            }
+
+            return IsIn(GetSavedGroup(savedGroups, groupId), attributeValue);
+        }
+
         private static JArray GetSavedGroup(JObject savedGroups, JToken groupId)
         {
             if (savedGroups is null || groupId is null)
@@ -407,7 +419,9 @@ namespace GrowthBook.Providers
                 return new JArray();
             }
 
-            return savedGroups[groupId.ToString()]?.AsArray() ?? new JArray();
+            // A group that is missing, null, or not an array matches nothing rather than
+            // interrupting the evaluation part way through.
+            return savedGroups[groupId.ToString()] as JArray ?? new JArray();
         }
 
         private bool IsIn(JToken conditionValue, JToken actualValue, StringComparison? stringComparison = null)
