@@ -299,4 +299,178 @@ public class PushRefreshedFeaturesTests
         callerOwned.Dispose();
     }
 
+    /// <summary>
+    /// An API refresh and a streaming refresh can be in flight at once. The cache writes under a lock
+    /// but fans out without one, so the two notifications can reach an instance in the opposite order
+    /// to the writes. Arriving late, the older one would roll the instance back to definitions the
+    /// cache has already replaced, and nothing would correct it until the next refresh.
+    /// </summary>
+    [Fact]
+    public async Task ARefreshOvertakenOnItsWayToAnInstanceDoesNotRollItBack()
+    {
+        var repository = CreateRepository(out var cache);
+
+        var parkFirstFanOut = new ManualResetEventSlim(false);
+        var fanOutParked = new SemaphoreSlim(0);
+        var remainingParks = 1;
+
+        // Registered before the instance, so parking here holds the first refresh between the cache
+        // write and the instance seeing it - the window the fix has to close.
+        using var park = ((IFeatureRefreshSource)repository).SubscribeToRefresh(_ =>
+        {
+            if (Interlocked.Exchange(ref remainingParks, 0) == 1)
+            {
+                fanOutParked.Release();
+                parkFirstFanOut.Wait(TimeSpan.FromSeconds(5));
+            }
+        });
+
+        using var growthBook = new GrowthBook(new Context
+        {
+            Attributes = JObject.FromObject(new { id = "user-1" }),
+            Features = FeatureSet(false),
+            FeatureRepository = repository
+        });
+
+        var overtaken = Task.Run(() => cache.RefreshWith(FeatureSet(false)));
+        fanOutParked.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue("because the first refresh has to be in flight");
+
+        await cache.RefreshWith(FeatureSet(true));
+        growthBook.IsOn("flag").Should().BeTrue("because the second refresh reached the instance");
+
+        parkFirstFanOut.Set();
+        await overtaken;
+
+        growthBook.IsOn("flag").Should().BeTrue(
+            "because the refresh that lost the race is stale by the time it arrives and must be dropped, not installed");
+    }
+
+    /// <summary>
+    /// A repository whose fetch finishes only when the test says so, and which can push a refresh in
+    /// the meantime, so the order of the two is the test's to decide rather than the scheduler's.
+    /// </summary>
+    private sealed class ControllableRepository : IGrowthBookFeatureRepository, IFeatureRefreshSource
+    {
+        private readonly List<Action<FeatureRefresh>> _handlers = new List<Action<FeatureRefresh>>();
+        private readonly ManualResetEventSlim _release = new ManualResetEventSlim(false);
+        private readonly SemaphoreSlim _entered = new SemaphoreSlim(0);
+
+        public IDictionary<string, Feature> Result { get; set; }
+
+        public bool WaitUntilFetching() => _entered.Wait(TimeSpan.FromSeconds(5));
+        public void FinishFetch() => _release.Set();
+
+        public void Push(long version, IDictionary<string, Feature> features)
+        {
+            Action<FeatureRefresh>[] handlers;
+
+            lock (_handlers)
+            {
+                handlers = _handlers.ToArray();
+            }
+
+            foreach (var handler in handlers)
+            {
+                handler(new FeatureRefresh(version, features));
+            }
+        }
+
+        public IDisposable SubscribeToRefresh(Action<FeatureRefresh> handler)
+        {
+            lock (_handlers)
+            {
+                _handlers.Add(handler);
+            }
+
+            return new Unsubscriber(this, handler);
+        }
+
+        public Task<IDictionary<string, Feature>> GetFeatures(GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null)
+        {
+            _entered.Release();
+            _release.Wait(TimeSpan.FromSeconds(5));
+
+            return Task.FromResult(Result);
+        }
+
+        public Task<IDictionary<string, Feature>> GetFeaturesWithContext(Context context, GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null) =>
+            GetFeatures(options, cancellationToken);
+
+        public void Cancel() { }
+        public bool HasIdenticalAssignment(string experimentKey, ExperimentAssignment assignment) => false;
+        public void RecordAssignment(string experimentKey, ExperimentAssignment assignment) { }
+        public bool IsAlreadyTracked(string trackingKey) => false;
+        public void MarkAsTracked(string trackingKey) { }
+        public bool TryMarkAsTracked(string trackingKey) => true;
+
+        private sealed class Unsubscriber : IDisposable
+        {
+            private readonly ControllableRepository _owner;
+            private readonly Action<FeatureRefresh> _handler;
+
+            public Unsubscriber(ControllableRepository owner, Action<FeatureRefresh> handler)
+            {
+                _owner = owner;
+                _handler = handler;
+            }
+
+            public void Dispose()
+            {
+                lock (_owner._handlers)
+                {
+                    _owner._handlers.Remove(_handler);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// A load that was already waiting on the API when a refresh arrived is holding definitions older
+    /// than the ones now installed. Writing its result on completion would undo the refresh.
+    /// </summary>
+    [Fact]
+    public async Task ALoadInFlightDoesNotOverwriteARefreshThatArrivedWhileItWaited()
+    {
+        var repository = new ControllableRepository { Result = FeatureSet(false) };
+
+        using var growthBook = new GrowthBook(new Context
+        {
+            Attributes = JObject.FromObject(new { id = "user-1" }),
+            Features = FeatureSet(false),
+            FeatureRepository = repository
+        });
+
+        var load = Task.Run(() => growthBook.LoadFeaturesWithResult());
+        repository.WaitUntilFetching().Should().BeTrue("because the load has to be waiting on the repository");
+
+        repository.Push(1, FeatureSet(true));
+        growthBook.IsOn("flag").Should().BeTrue("because the refresh reached the instance while the load waited");
+
+        repository.FinishFetch();
+        var result = await load;
+
+        result.Success.Should().BeTrue("because the load itself did succeed");
+        growthBook.IsOn("flag").Should().BeTrue(
+            "because the load's result was already stale when it arrived and must not replace the newer definitions");
+    }
+
+    [Fact]
+    public async Task ALoadStillInstallsItsResultWhenNoRefreshArrived()
+    {
+        var repository = new ControllableRepository { Result = FeatureSet(true) };
+
+        using var growthBook = new GrowthBook(new Context
+        {
+            Attributes = JObject.FromObject(new { id = "user-1" }),
+            Features = FeatureSet(false),
+            FeatureRepository = repository
+        });
+
+        repository.FinishFetch();
+
+        var result = await growthBook.LoadFeaturesWithResult();
+
+        result.Success.Should().BeTrue();
+        growthBook.IsOn("flag").Should().BeTrue("because nothing newer landed, so the load's result is the current one");
+    }
 }
