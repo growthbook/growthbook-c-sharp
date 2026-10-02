@@ -32,7 +32,8 @@ namespace GrowthBook.Api
         private int _consecutiveFailures;
         private DateTime _nextAttemptAllowedAt = DateTime.MinValue;
         private Task<IDictionary<string, Feature>> _inFlightRefresh;
-        private Task _lastRecordedRefresh;
+        private long _inFlightRefreshId;
+        private long _lastRecordedRefreshId;
 
         public FeatureRepository(ILogger<FeatureRepository> logger, IGrowthBookFeatureCache cache, IGrowthBookFeatureRefreshWorker backgroundRefreshWorker, IRemoteEvaluationService remoteEvaluationService = null)
             : this(logger, cache, backgroundRefreshWorker, remoteEvaluationService, () => DateTime.UtcNow)
@@ -93,7 +94,9 @@ namespace GrowthBook.Api
                 // Use TaskFactory.StartNew to decouple from the current SynchronizationContext
                 // This prevents threading issues in .NET Framework MVC when the original HttpContext
                 // thread is no longer available after the HTTP request completes
-                var refreshTask = StartOrJoinRefresh(cancellationToken);
+                var attempt = StartOrJoinRefresh();
+                var refreshTask = attempt.Task;
+                var callerToken = cancellationToken ?? CancellationToken.None;
 
                 // When there aren't any features in the cache to begin with, we need to just wait until
                 // that has been officially refreshed to proceed (otherwise the caller gets nothing up front
@@ -106,17 +109,21 @@ namespace GrowthBook.Api
 
                     try
                     {
-                        var features = await refreshTask;
+                        var features = await AwaitWithCancellation(refreshTask, callerToken);
 
                         // Recorded synchronously, before returning: a following sequential call must not
                         // reach the gate before this outcome is known, or it fires a second request.
-                        RecordRefreshOutcome(refreshTask, features != null);
+                        RecordRefreshOutcome(attempt.Id, features != null);
 
                         return features;
                     }
+                    catch (OperationCanceledException) when (callerToken.IsCancellationRequested)
+                    {
+                        throw;
+                    }
                     catch
                     {
-                        RecordRefreshOutcome(refreshTask, false);
+                        RecordRefreshOutcome(attempt.Id, false);
                         throw;
                     }
                 }
@@ -126,7 +133,7 @@ namespace GrowthBook.Api
                     // Not !IsFaulted: an escaping OperationCanceledException completes the task as
                     // Canceled, which is exactly what HttpClient raises when its Timeout elapses. Reading
                     // Result then throws inside the continuation, whose exception nothing observes.
-                    RecordRefreshOutcome(t, t.Status == TaskStatus.RanToCompletion && t.Result != null);
+                    RecordRefreshOutcome(attempt.Id, t.Status == TaskStatus.RanToCompletion && t.Result != null);
 
                     if (t.IsFaulted)
                     {
@@ -151,7 +158,7 @@ namespace GrowthBook.Api
         /// callers arriving together all start a fetch before the first failure has been recorded.
         /// Mirrors the reference SDK's activeFetches map.
         /// </summary>
-        private Task<IDictionary<string, Feature>> StartOrJoinRefresh(CancellationToken? cancellationToken)
+        private RefreshAttempt StartOrJoinRefresh()
         {
             lock (_backoffLock)
             {
@@ -159,16 +166,64 @@ namespace GrowthBook.Api
 
                 if (inFlight != null && !inFlight.IsCompleted)
                 {
-                    return inFlight;
+                    return new RefreshAttempt(inFlight, _inFlightRefreshId);
                 }
 
-                var taskFactory = new TaskFactory(cancellationToken ?? CancellationToken.None);
-                var started = taskFactory.StartNew(async () => await _backgroundRefreshWorker.RefreshCacheFromApi(cancellationToken)).Unwrap();
+                            if (inFlight != null && _inFlightRefreshId > _lastRecordedRefreshId)
+                {
+                    ApplyOutcome(_inFlightRefreshId, inFlight.Status == TaskStatus.RanToCompletion && inFlight.Result != null);
+                }
+
+                var taskFactory = new TaskFactory(CancellationToken.None);
+                var started = taskFactory.StartNew(async () => await _backgroundRefreshWorker.RefreshCacheFromApi(CancellationToken.None)).Unwrap();
 
                 _inFlightRefresh = started;
+                _inFlightRefreshId++;
 
-                return started;
+                return new RefreshAttempt(started, _inFlightRefreshId);
             }
+        }
+
+        /// <summary>
+        /// One fetch and the number identifying it, so an outcome can only be recorded for the fetch
+        /// it belongs to.
+        /// </summary>
+        private readonly struct RefreshAttempt
+        {
+            public RefreshAttempt(Task<IDictionary<string, Feature>> task, long id)
+            {
+                Task = task;
+                Id = id;
+            }
+
+            public Task<IDictionary<string, Feature>> Task { get; }
+            public long Id { get; }
+        }
+
+        /// <summary>
+        /// Awaits a shared fetch while still honouring one caller's cancellation. Cancelling abandons
+        /// the wait, never the request, which other callers may still be waiting on.
+        /// </summary>
+        private static async Task<IDictionary<string, Feature>> AwaitWithCancellation(Task<IDictionary<string, Feature>> refresh, CancellationToken cancellationToken)
+        {
+            if (!cancellationToken.CanBeCanceled)
+            {
+                return await refresh;
+            }
+
+            var cancelled = new TaskCompletionSource<bool>();
+
+            using (cancellationToken.Register(() => cancelled.TrySetResult(true)))
+            {
+                var finished = await Task.WhenAny(refresh, cancelled.Task);
+
+                if (finished != refresh)
+                {
+                    throw new OperationCanceledException(cancellationToken);
+                }
+            }
+
+            return await refresh;
         }
 
         /// <summary>
@@ -196,16 +251,27 @@ namespace GrowthBook.Api
         /// itself a single failed request would advance the failure count once per joiner and overshoot
         /// the backoff window badly.
         /// </remarks>
-        private void RecordRefreshOutcome(Task refresh, bool succeeded)
+        private void RecordRefreshOutcome(long refreshId, bool succeeded)
         {
             lock (_backoffLock)
             {
-                if (ReferenceEquals(_lastRecordedRefresh, refresh))
+                ApplyOutcome(refreshId, succeeded);
+            }
+        }
+
+        /// <summary>
+        /// Applies one outcome under the lock. Outcomes older than the last recorded one are dropped:
+        /// a late continuation from a failed fetch must not reopen the backoff a newer success closed.
+        /// </summary>
+        private void ApplyOutcome(long refreshId, bool succeeded)
+        {
+            {
+                if (refreshId <= _lastRecordedRefreshId)
                 {
                     return;
                 }
 
-                _lastRecordedRefresh = refresh;
+                _lastRecordedRefreshId = refreshId;
 
                 if (succeeded)
                 {

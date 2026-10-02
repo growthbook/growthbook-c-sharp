@@ -645,7 +645,15 @@ namespace GrowthBook
         /// <param name="cancellationToken">The cancellation token for this operation.</param>
         /// <returns>A <see cref="FeatureLoadResult"/> describing the outcome.</returns>
         public Task<FeatureLoadResult> RefreshFeatures(bool force = true, CancellationToken? cancellationToken = null)
-            => LoadFeaturesWithResult(new GrowthBookRetrievalOptions { ForceRefresh = force }, cancellationToken);
+        {
+            var options = new GrowthBookRetrievalOptions
+            {
+                ForceRefresh = force,
+                WaitForCompletion = true
+            };
+
+            return LoadFeaturesWithResult(options, cancellationToken);
+        }
 
         /// <inheritdoc />
         public async Task<FeatureLoadResult> LoadFeaturesWithResult(GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null)
