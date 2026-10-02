@@ -10,12 +10,12 @@ namespace GrowthBook.Api
     internal sealed class FeatureRefreshSubscriptions
     {
         private readonly object _lock = new object();
-        private readonly List<Action<IDictionary<string, Feature>>> _handlers = new List<Action<IDictionary<string, Feature>>>();
+        private readonly List<Action<FeatureRefresh>> _handlers = new List<Action<FeatureRefresh>>();
 
         /// <summary>
         /// Registers a handler and returns the handle that removes it again.
         /// </summary>
-        public IDisposable Add(Action<IDictionary<string, Feature>> handler)
+        public IDisposable Add(Action<FeatureRefresh> handler)
         {
             if (handler is null)
             {
@@ -31,13 +31,13 @@ namespace GrowthBook.Api
         }
 
         /// <summary>
-        /// Calls every registered handler with the new features. A handler that throws is reported to
+        /// Calls every registered handler with the refresh. A handler that throws is reported to
         /// <paramref name="onHandlerError"/> and the remaining handlers still run, so one misbehaving
         /// subscriber cannot stop the others from seeing the refresh.
         /// </summary>
-        public void Notify(IDictionary<string, Feature> features, Action<Exception> onHandlerError)
+        public void Notify(FeatureRefresh refresh, Action<Exception> onHandlerError)
         {
-            Action<IDictionary<string, Feature>>[] handlers;
+            Action<FeatureRefresh>[] handlers;
 
             lock (_lock)
             {
@@ -53,7 +53,7 @@ namespace GrowthBook.Api
             {
                 try
                 {
-                    handler(features);
+                    handler(refresh);
                 }
                 catch (Exception ex)
                 {
@@ -62,7 +62,7 @@ namespace GrowthBook.Api
             }
         }
 
-        private void Remove(Action<IDictionary<string, Feature>> handler)
+        private void Remove(Action<FeatureRefresh> handler)
         {
             lock (_lock)
             {
@@ -73,9 +73,9 @@ namespace GrowthBook.Api
         private sealed class Subscription : IDisposable
         {
             private readonly FeatureRefreshSubscriptions _owner;
-            private Action<IDictionary<string, Feature>> _handler;
+            private Action<FeatureRefresh> _handler;
 
-            public Subscription(FeatureRefreshSubscriptions owner, Action<IDictionary<string, Feature>> handler)
+            public Subscription(FeatureRefreshSubscriptions owner, Action<FeatureRefresh> handler)
             {
                 _owner = owner;
                 _handler = handler;

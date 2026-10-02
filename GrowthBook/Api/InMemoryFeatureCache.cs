@@ -26,6 +26,7 @@ namespace GrowthBook.Api
         private IDictionary<string, Feature> _cachedFeatures = new Dictionary<string, Feature>();
         private readonly int _cacheExpirationInSeconds;
         private DateTime _nextCacheExpiration;
+        private long _refreshVersion;
 
         public InMemoryFeatureCache(int cacheExpirationInSeconds)
         {
@@ -67,21 +68,23 @@ namespace GrowthBook.Api
         }
 
         /// <inheritdoc/>
-        public IDisposable SubscribeToRefresh(Action<IDictionary<string, Feature>> handler) => _refreshSubscriptions.Add(handler);
+        public IDisposable SubscribeToRefresh(Action<FeatureRefresh> handler) => _refreshSubscriptions.Add(handler);
 
         public Task RefreshWith(IDictionary<string, Feature> features, CancellationToken? cancellationToken = null)
         {
-            IDictionary<string, Feature> refreshed;
+            FeatureRefresh refresh;
 
             lock(_cacheLock)
             {
                 _cachedFeatures = new Dictionary<string, Feature>(features);
                 _nextCacheExpiration = DateTime.UtcNow.AddSeconds(_cacheExpirationInSeconds);
 
-                refreshed = new Dictionary<string, Feature>(_cachedFeatures);
+                // Stamped under the same lock as the write, so the version orders the refreshes the
+                // way the cache saw them even though the fan-out below runs unlocked.
+                refresh = new FeatureRefresh(++_refreshVersion, new Dictionary<string, Feature>(_cachedFeatures));
             }
 
-            _refreshSubscriptions.Notify(refreshed, null);
+            _refreshSubscriptions.Notify(refresh, null);
 
             return Task.CompletedTask;
         }

@@ -40,7 +40,7 @@ namespace GrowthBook.Api
         }
 
         /// <inheritdoc/>
-        public IDisposable SubscribeToRefresh(Action<IDictionary<string, Feature>> handler) => _refreshSubscriptions.Add(handler);
+        public IDisposable SubscribeToRefresh(Action<FeatureRefresh> handler) => _refreshSubscriptions.Add(handler);
 
         /// <summary>
         /// Detaches this repository from the cache it was listening to. A cache supplied on the
@@ -52,12 +52,11 @@ namespace GrowthBook.Api
             _cacheSubscription?.Dispose();
         }
 
-        /// <inheritdoc/>
-        private void OnCacheRefreshed(IDictionary<string, Feature> features)
+        private void OnCacheRefreshed(FeatureRefresh refresh)
         {
-            _logger.LogDebug("Cache reported '{FeatureCount}' refreshed feature(s), notifying subscribers", features?.Count ?? 0);
+            _logger.LogDebug("Cache reported '{FeatureCount}' refreshed feature(s), notifying subscribers", refresh.Features?.Count ?? 0);
 
-            _refreshSubscriptions.Notify(features, ex => _logger.LogError(ex, "A feature refresh subscriber threw an exception"));
+            _refreshSubscriptions.Notify(refresh, ex => _logger.LogError(ex, "A feature refresh subscriber threw an exception"));
         }
 
         /// <inheritdoc/>
