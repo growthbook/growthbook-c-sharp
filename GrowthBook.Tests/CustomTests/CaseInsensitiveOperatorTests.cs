@@ -117,4 +117,37 @@ public class CaseInsensitiveOperatorTests : UnitTest
         Eval(@"{""name"": {""$regex"": ""^hello""}}", @"{""name"": ""HELLO world""}")
             .Should().BeFalse("because $regex must stay case-sensitive");
     }
+
+    /// <summary>
+    /// A string condition is compared against the stringified attribute, so "5" matches 5. That is what
+    /// the reference does for a string condition - evalConditionValue returns
+    /// <c>String(value).toLowerCase() === condition.toLowerCase()</c> - and it is deliberate rather than
+    /// an accident of the case-insensitive path. Narrowing this to string-typed attributes only would make
+    /// $alli stricter than every other SDK.
+    /// </summary>
+    [Fact]
+    public void AlliComparesAStringConditionAgainstTheStringifiedAttribute()
+    {
+        Eval(@"{""nums"": {""$alli"": [""5""]}}", @"{""nums"": [5]}")
+            .Should().BeTrue("because the reference stringifies the attribute for a string condition");
+
+        Eval(@"{""flags"": {""$alli"": [""TRUE""]}}", @"{""flags"": [true]}")
+            .Should().BeTrue("because the same stringification applies to any non-string attribute, case folded");
+
+        Eval(@"{""nums"": {""$alli"": [""6""]}}", @"{""nums"": [5]}")
+            .Should().BeFalse("because stringifying is not the same as matching anything");
+    }
+
+    /// <summary>
+    /// $alli and $all disagree here: $all goes through a DeepEquals that compares JSON types, so "5" does
+    /// not match 5. The reference has no such split - it stringifies for both - which makes $all the one
+    /// that diverges. That predates the case-insensitive operators and is left alone deliberately;
+    /// changing it would alter plain equality for every condition in the SDK.
+    /// </summary>
+    [Fact]
+    public void AllStillComparesJsonTypesWhichIsAKnownDivergenceFromTheReference()
+    {
+        Eval(@"{""nums"": {""$all"": [""5""]}}", @"{""nums"": [5]}")
+            .Should().BeFalse("because this pins today's behavior, not the desired one - the reference returns true here");
+    }
 }

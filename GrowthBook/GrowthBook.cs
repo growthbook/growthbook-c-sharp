@@ -49,6 +49,10 @@ namespace GrowthBook
         /// all. The reference SDK publishes refreshed docs the same way, by assigning the whole collection.
         /// </summary>
         private volatile IDictionary<string, StickyAssignmentsDocument> _stickyBucketAssignmentDocs;
+
+        private readonly object _stickyBucketWriteLock = new object();
+        private long _stickyBucketLoadSequence;
+        private long _publishedStickyBucketLoad;
         private readonly ILogger<GrowthBook> _logger;
         private readonly JObject _savedGroups;
         private readonly ILoggerFactory _loggerFactory;
@@ -177,7 +181,9 @@ namespace GrowthBook
                 return;
             }
 
-            PublishStickyBucketAssignments(_stickyBucketService.GetAllAssignments(GetStickyBucketAttributeKeys()));
+            var sequence = Interlocked.Increment(ref _stickyBucketLoadSequence);
+
+            PublishStickyBucketAssignments(_stickyBucketService.GetAllAssignments(GetStickyBucketAttributeKeys()), sequence);
         }
 
         /// <summary>
@@ -199,10 +205,12 @@ namespace GrowthBook
                 return;
             }
 
+            var sequence = Interlocked.Increment(ref _stickyBucketLoadSequence);
+
             var refreshedDocuments = await _asyncStickyBucketService
                 .GetAllAssignmentsAsync(GetStickyBucketAttributeKeys(), cancellationToken ?? CancellationToken.None);
 
-            PublishStickyBucketAssignments(refreshedDocuments);
+            PublishStickyBucketAssignments(refreshedDocuments, sequence);
         }
 
         /// <summary>
@@ -211,7 +219,15 @@ namespace GrowthBook
         /// </summary>
         private IList<string> GetStickyBucketAttributeKeys()
         {
-            var identifierAttributes = ExperimentUtilities.DeriveStickyBucketIdentifierAttributes(Features, Experiments);
+            return FormatStickyBucketKeys(ExperimentUtilities.DeriveStickyBucketIdentifierAttributes(Features, Experiments));
+        }
+
+        /// <summary>
+        /// Turns identifier attribute names into the "name||value" keys a sticky bucket store is asked for,
+        /// using this instance's current attribute values.
+        /// </summary>
+        private IList<string> FormatStickyBucketKeys(IEnumerable<string> identifierAttributes)
+        {
             var formattedKeys = new List<string>();
 
             // The constructor assigns the backing field straight from the context, and Dispose clears it, so
@@ -271,15 +287,98 @@ namespace GrowthBook
         /// that a concurrent evaluation sees either the previous set or the refreshed one, never a partial one.
         /// </summary>
         /// <param name="refreshedDocuments">What the store currently holds. A null value leaves the docs alone.</param>
-        private void PublishStickyBucketAssignments(IDictionary<string, StickyAssignmentsDocument> refreshedDocuments)
+        /// <param name="sequence">
+        /// The position of the load that produced them. A load that started earlier holds the previous
+        /// identifier's documents, so it is dropped rather than published over a newer set.
+        /// </param>
+        private void PublishStickyBucketAssignments(IDictionary<string, StickyAssignmentsDocument> refreshedDocuments, long sequence)
         {
             if (refreshedDocuments == null)
             {
                 return;
             }
 
-            // Copied rather than stored directly: the store owns the dictionary it returned and may reuse it.
-            _stickyBucketAssignmentDocs = new Dictionary<string, StickyAssignmentsDocument>(refreshedDocuments);
+            lock (_stickyBucketWriteLock)
+            {
+                if (sequence <= _publishedStickyBucketLoad)
+                {
+                    _logger.LogDebug("Discarded sticky bucket assignments from load '{Sequence}', already published '{Published}'", sequence, _publishedStickyBucketLoad);
+
+                    return;
+                }
+
+                _publishedStickyBucketLoad = sequence;
+
+                // Copied rather than stored directly: the store owns the dictionary it returned and may reuse it.
+                _stickyBucketAssignmentDocs = new Dictionary<string, StickyAssignmentsDocument>(refreshedDocuments);
+            }
+        }
+
+        /// <summary>
+        /// Adds a single assignment doc by publishing a replacement dictionary, since writing into the live
+        /// one would race with the evaluations reading it.
+        /// </summary>
+        private void StoreStickyBucketAssignment(StickyAssignmentsDocument document)
+        {
+            lock (_stickyBucketWriteLock)
+            {
+                var updated = new Dictionary<string, StickyAssignmentsDocument>(_stickyBucketAssignmentDocs);
+
+                updated[document.FormattedAttribute] = document;
+
+                _stickyBucketAssignmentDocs = updated;
+            }
+        }
+
+        /// <summary>
+        /// Makes sure the current docs cover an experiment handed straight to <see cref="Run"/>, which the
+        /// up-front load misses when the experiment is in neither the features nor the context.
+        /// </summary>
+        /// <remarks>
+        /// Synchronous store only. With an asynchronous one, list the experiment on the
+        /// <see cref="Context"/> or call <see cref="LoadStickyBucketAssignmentsAsync"/> after adding it.
+        /// </remarks>
+        private void EnsureStickyBucketAssignmentsFor(Experiment experiment)
+        {
+            if (_stickyBucketService == null || experiment == null)
+            {
+                return;
+            }
+
+            var identifierAttributes = new HashSet<string> { experiment.HashAttribute ?? "id" };
+
+            if (!string.IsNullOrEmpty(experiment.FallbackAttribute))
+            {
+                identifierAttributes.Add(experiment.FallbackAttribute);
+            }
+
+            var currentDocuments = _stickyBucketAssignmentDocs;
+            var missingKeys = new List<string>();
+
+            foreach (var key in FormatStickyBucketKeys(identifierAttributes))
+            {
+                if (currentDocuments == null || !currentDocuments.ContainsKey(key))
+                {
+                    missingKeys.Add(key);
+                }
+            }
+
+            if (missingKeys.Count == 0)
+            {
+                return;
+            }
+
+            var found = _stickyBucketService.GetAllAssignments(missingKeys);
+
+            if (found == null)
+            {
+                return;
+            }
+
+            foreach (var document in found.Values)
+            {
+                StoreStickyBucketAssignment(document);
+            }
         }
 
         /// <summary>
@@ -1146,6 +1245,8 @@ namespace GrowthBook
         {
             try
             {
+                EnsureStickyBucketAssignmentsFor(experiment);
+
                 ExperimentResult result = RunExperiment(experiment, null);
 
                 TryAssignExperimentResult(experiment, result);
@@ -1517,7 +1618,7 @@ namespace GrowthBook
 
                 if (isChanged)
                 {
-                    _stickyBucketAssignmentDocs[document.FormattedAttribute] = document;
+                    StoreStickyBucketAssignment(document);
 
                     if (_stickyBucketService != null)
                     {

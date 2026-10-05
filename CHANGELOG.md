@@ -52,6 +52,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Stopped logging the remote evaluation request and response bodies at debug level. The request is built from the
   user's attributes, which are personal data, and an evaluated response can carry saved groups, which are typically
   lists of user identifiers. Counts are logged instead.
+- Fixed a sticky bucket load that was overtaken by a newer one still publishing its documents. Loads overlap
+  whenever the identifier changes while one is in flight, and the earlier one holds the previous identifier's
+  documents however late it arrives, so it is now dropped rather than replacing the current user's.
+- Fixed a newly stored sticky bucket assignment being written into the dictionary that concurrent evaluations are
+  reading. It is published as a replacement set instead, the same way a refresh already was.
+- Fixed an experiment passed directly to `Run` not finding its stored assignment. The documents loaded up front
+  are derived from the loaded features and `Context.Experiments`, so an experiment listed in neither was bucketed
+  as though nothing had been stored for it. Applies to the synchronous store; with an asynchronous one, call
+  `LoadStickyBucketAssignmentsAsync` after adding the experiment.
+- Fixed `RedisStickyBucketService` reporting a cancelled read as an empty set of assignments, which had the caller
+  replace the assignments it still held with nothing. Cancellation now propagates.
+- Fixed `RedisStickyBucketService` publishing a stored document under the identifier named inside its JSON rather
+  than the key it was read from, so an entry written against one identifier could hand out another user's
+  variation. A document that doesn't match the key it was read under is ignored.
 
 ## [1.2.0]
 

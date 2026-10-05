@@ -328,4 +328,116 @@ public class StickyBucketAutoRefreshTests : UnitTest
         callerDocuments.Should().BeEmpty("because the refreshed set is published as a replacement, not written into the caller's dictionary");
         growthBook.EvalFeature(FeatureName).ExperimentResult.StickyBucketUsed.Should().BeTrue();
     }
+
+    private static Experiment StandaloneExperiment()
+    {
+        return new Experiment
+        {
+            Key = "standalone-experiment",
+            HashAttribute = "deviceId",
+            Variations = new JArray(false, true),
+            Coverage = 1d,
+            Meta = new List<VariationMeta>
+            {
+                new VariationMeta { Key = "0" },
+                new VariationMeta { Key = "1" }
+            }
+        };
+    }
+
+    /// <summary>
+    /// An experiment handed straight to <c>Run</c> need not appear in the context at all, so the scan over
+    /// loaded features and context experiments never sees its hash attribute and never asks the store for
+    /// its document. The user then gets re-bucketed on an experiment that already had a stored variation.
+    /// </summary>
+    [Fact]
+    public void AnExperimentPassedStraightToRunStillFindsItsStoredAssignment()
+    {
+        var experiment = StandaloneExperiment();
+
+        var service = new InMemoryStickyBucketService();
+        service.SaveAssignments(new StickyAssignmentsDocument(
+            "deviceId",
+            "device-1",
+            new Dictionary<string, string> { [$"{experiment.Key}__0"] = "1" }));
+
+        var context = new Context
+        {
+            Attributes = JObject.FromObject(new { id = "user-1", deviceId = "device-1" }),
+            StickyBucketService = service
+            // No Features and no Experiments: the caller drives this one entirely through Run.
+        };
+
+        using var growthBook = new GrowthBook(context);
+
+        var result = growthBook.Run(experiment);
+
+        result.StickyBucketUsed.Should().BeTrue(
+            "because a variation was already stored for this device and the experiment, however the experiment reached the SDK");
+        result.Key.Should().Be("1", "and it has to be the stored variation, not a freshly hashed one");
+    }
+
+    private static IDictionary<string, StickyAssignmentsDocument> CurrentDocuments(GrowthBook growthBook)
+    {
+        var field = typeof(GrowthBook).GetField("_stickyBucketAssignmentDocs",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+
+        return (IDictionary<string, StickyAssignmentsDocument>)field.GetValue(growthBook);
+    }
+
+    /// <summary>
+    /// Storing an assignment has to publish a replacement dictionary rather than write into the live one.
+    /// A concurrent evaluation is reading that dictionary, and <see cref="Dictionary{TKey, TValue}"/> is
+    /// not safe for a read during a write - the volatile field makes swapping the reference safe, not
+    /// mutating what it points at. Asserted on the published reference because a race itself cannot be
+    /// made to happen on demand.
+    /// </summary>
+    [Fact]
+    public void StoringAnAssignmentPublishesAReplacementInsteadOfMutatingTheLiveSet()
+    {
+        const string FeatureName = "test-feature";
+
+        var context = new Context
+        {
+            Attributes = JObject.FromObject(new { id = "user-1" }),
+            Features = new Dictionary<string, Feature> { [FeatureName] = CreateExperimentFeature() },
+            StickyBucketService = new InMemoryStickyBucketService()
+        };
+
+        using var growthBook = new GrowthBook(context);
+
+        var beforeEvaluation = CurrentDocuments(growthBook);
+        var countBefore = beforeEvaluation.Count;
+
+        var result = growthBook.EvalFeature(FeatureName).ExperimentResult;
+
+        result.Should().NotBeNull("because the evaluation has to produce an assignment worth storing");
+
+        var afterEvaluation = CurrentDocuments(growthBook);
+
+        afterEvaluation.Should().NotBeSameAs(beforeEvaluation, "because the new assignment is published as a replacement set");
+        afterEvaluation.Should().ContainKey("id||user-1", "and the replacement is the one that carries it");
+        beforeEvaluation.Count.Should().Be(countBefore,
+            "because the dictionary an in-flight evaluation is reading must not gain entries underneath it");
+    }
+
+    [Fact]
+    public void AStandaloneExperimentWithNoStoredAssignmentStillEvaluates()
+    {
+        var service = new InMemoryStickyBucketService();
+
+        var context = new Context
+        {
+            Attributes = JObject.FromObject(new { id = "user-1", deviceId = "device-1" }),
+            StickyBucketService = service
+        };
+
+        using var growthBook = new GrowthBook(context);
+
+        var result = growthBook.Run(StandaloneExperiment());
+
+        result.Should().NotBeNull();
+        result.StickyBucketUsed.Should().BeFalse("because nothing was stored for it yet");
+        result.InExperiment.Should().BeTrue("and an empty store must not stop the experiment running");
+    }
 }
