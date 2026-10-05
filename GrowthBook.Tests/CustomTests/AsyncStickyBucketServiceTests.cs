@@ -274,4 +274,170 @@ public class AsyncStickyBucketServiceTests : UnitTest
         public void MarkAsTracked(string trackingKey) { }
         public bool TryMarkAsTracked(string trackingKey) => true;
     }
+
+    /// <summary>
+    /// A store whose reads finish when the test says so, and in whatever order it chooses, so an
+    /// overlapping pair of loads can be made to come back the wrong way round on purpose.
+    /// </summary>
+    private sealed class GatedAsyncStickyBucketService : IAsyncStickyBucketService
+    {
+        private readonly Dictionary<string, StickyAssignmentsDocument> _documents = new Dictionary<string, StickyAssignmentsDocument>();
+
+        private readonly List<TaskCompletionSource<IDictionary<string, StickyAssignmentsDocument>>> _pending =
+            new List<TaskCompletionSource<IDictionary<string, StickyAssignmentsDocument>>>();
+
+        private readonly List<string[]> _requested = new List<string[]>();
+
+        public void Seed(StickyAssignmentsDocument document) => _documents[document.FormattedAttribute] = document;
+
+        public int ReadCount
+        {
+            get
+            {
+                lock (_pending)
+                {
+                    return _pending.Count;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Waits until at least <paramref name="count"/> reads have reached the store. An attribute change
+        /// dispatches a refresh of its own, so the number of reads in flight is not simply the number the
+        /// test started itself.
+        /// </summary>
+        public bool WaitForReadCount(int count)
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+
+            while (DateTime.UtcNow < deadline)
+            {
+                if (ReadCount >= count)
+                {
+                    return true;
+                }
+
+                Thread.Sleep(10);
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Completes the read at <paramref name="index"/> with whatever was stored for the keys it asked for.
+        /// </summary>
+        public void Finish(int index)
+        {
+            string[] keys;
+
+            lock (_pending)
+            {
+                keys = _requested[index];
+            }
+
+            var answer = keys.Where(_documents.ContainsKey).ToDictionary(key => key, key => _documents[key]);
+
+            lock (_pending)
+            {
+                _pending[index].SetResult(answer);
+            }
+        }
+
+        public Task<IDictionary<string, StickyAssignmentsDocument>> GetAllAssignmentsAsync(IEnumerable<string> attributes, CancellationToken cancellationToken = default)
+        {
+            var pending = new TaskCompletionSource<IDictionary<string, StickyAssignmentsDocument>>();
+
+            lock (_pending)
+            {
+                _requested.Add(attributes.ToArray());
+                _pending.Add(pending);
+            }
+
+            return pending.Task;
+        }
+
+        public Task<StickyAssignmentsDocument> GetAssignmentsAsync(string attributeName, string attributeValue, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task SaveAssignmentsAsync(StickyAssignmentsDocument document, CancellationToken cancellationToken = default)
+        {
+            _documents[document.FormattedAttribute] = document;
+
+            return Task.CompletedTask;
+        }
+    }
+
+    /// <summary>
+    /// Two loads overlapping is ordinary: the identifier changes, a load starts, it changes again, another
+    /// starts. If the first one comes back last it is holding the previous user's documents, and
+    /// publishing them loses the current user's stored variation - who is then bucketed afresh.
+    /// </summary>
+    [Fact]
+    public async Task AnOverlappingLoadThatFinishesLastDoesNotReplaceTheNewerUsersDocuments()
+    {
+        const string FeatureName = "sticky-feature";
+
+        var service = new GatedAsyncStickyBucketService();
+        service.Seed(new StickyAssignmentsDocument("id", "user-1", new Dictionary<string, string> { [$"{FeatureName}__0"] = "0" }));
+        service.Seed(new StickyAssignmentsDocument("id", "user-2", new Dictionary<string, string> { [$"{FeatureName}__0"] = "1" }));
+
+        using var growthBook = new GrowthBook(new Context
+        {
+            Attributes = JObject.FromObject(new { id = "user-1" }),
+            Features = new Dictionary<string, Feature> { [FeatureName] = CreateExperimentFeature() },
+            AsyncStickyBucketService = service
+        });
+
+        var firstLoad = growthBook.LoadStickyBucketAssignmentsAsync();
+        service.WaitForReadCount(1).Should().BeTrue("because the load for user-1 has to be under way");
+
+        growthBook.Attributes = JObject.FromObject(new { id = "user-2" });
+
+        var secondLoad = growthBook.LoadStickyBucketAssignmentsAsync();
+
+        // Three reads in flight, not two: changing the attributes dispatches a refresh of its own. Both of
+        // the later ones ask for user-2, so either answers the second load.
+        service.WaitForReadCount(3).Should().BeTrue("because the loads for user-2 have to be under way too");
+
+        // The newer ones land first, then the older one - the order the fix has to survive.
+        for (var index = 1; index < service.ReadCount; index++)
+        {
+            service.Finish(index);
+        }
+
+        await secondLoad;
+
+        service.Finish(0);
+        await firstLoad;
+
+        var result = growthBook.EvalFeature(FeatureName).ExperimentResult;
+
+        result.StickyBucketUsed.Should().BeTrue(
+            "because user-2's document was loaded and the late answer for user-1 must not have displaced it");
+        result.Key.Should().Be("1", "and it has to be the variation stored for user-2, not user-1's");
+    }
+
+    [Fact]
+    public async Task ALoadStillPublishesWhenNothingOvertookIt()
+    {
+        const string FeatureName = "sticky-feature";
+
+        var service = new GatedAsyncStickyBucketService();
+        service.Seed(new StickyAssignmentsDocument("id", "user-1", new Dictionary<string, string> { [$"{FeatureName}__0"] = "1" }));
+
+        using var growthBook = new GrowthBook(new Context
+        {
+            Attributes = JObject.FromObject(new { id = "user-1" }),
+            Features = new Dictionary<string, Feature> { [FeatureName] = CreateExperimentFeature() },
+            AsyncStickyBucketService = service
+        });
+
+        var load = growthBook.LoadStickyBucketAssignmentsAsync();
+        service.WaitForReadCount(1).Should().BeTrue();
+        service.Finish(0);
+        await load;
+
+        growthBook.EvalFeature(FeatureName).ExperimentResult.StickyBucketUsed.Should().BeTrue(
+            "because dropping superseded loads must not stop an ordinary one from landing");
+    }
 }

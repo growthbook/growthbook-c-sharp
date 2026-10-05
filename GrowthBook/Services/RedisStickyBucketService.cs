@@ -74,6 +74,10 @@ namespace GrowthBook.Services
             {
                 values = await _redis.MultiGetAsync(keys, cancellationToken).ConfigureAwait(false);
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to read '{KeyCount}' sticky bucket document(s) from Redis, continuing without them", keys.Length);
@@ -86,13 +90,13 @@ namespace GrowthBook.Services
                 return documents;
             }
 
-            foreach (var value in values)
+            for (var index = 0; index < values.Length && index < formattedAttributes.Length; index++)
             {
-                var document = Deserialize(value);
+                var document = Deserialize(values[index], formattedAttributes[index]);
 
                 if (document != null)
                 {
-                    documents[document.FormattedAttribute] = document;
+                    documents[formattedAttributes[index]] = document;
                 }
             }
 
@@ -134,7 +138,12 @@ namespace GrowthBook.Services
         /// unreadable entry - hand-edited, written by a different version, truncated - must not take the
         /// whole batch down with it, so failures are dropped rather than thrown.
         /// </summary>
-        private StickyAssignmentsDocument Deserialize(string value)
+        /// <param name="value">The stored value.</param>
+        /// <param name="expectedAttribute">
+        /// The formatted attribute the value was read under. A document naming a different one belongs to
+        /// another user.
+        /// </param>
+        private StickyAssignmentsDocument Deserialize(string value, string expectedAttribute)
         {
             if (string.IsNullOrWhiteSpace(value))
             {
@@ -161,6 +170,13 @@ namespace GrowthBook.Services
             if (document?.AttributeName is null || document.AttributeValue is null || document.Assignments is null)
             {
                 _logger.LogWarning("Ignoring a sticky bucket document from Redis that was missing required fields");
+
+                return null;
+            }
+
+            if (!string.Equals(document.FormattedAttribute, expectedAttribute, StringComparison.Ordinal))
+            {
+                _logger.LogWarning("Ignoring a sticky bucket document from Redis that was stored under a different attribute than the one it names");
 
                 return null;
             }

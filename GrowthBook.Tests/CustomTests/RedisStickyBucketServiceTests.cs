@@ -404,4 +404,81 @@ public class RedisStickyBucketServiceTests
         secondResult.ExperimentResult.Key.Should().Be(firstResult.ExperimentResult.Key);
         secondResult.On.Should().Be(firstResult.On, "because a user must not flip variation by landing on another instance");
     }
+
+    private static string DocumentFor(string attributeName, string attributeValue, string experiment, string variationKey)
+    {
+        return JsonConvert.SerializeObject(new
+        {
+            attributeName,
+            attributeValue,
+            assignments = new Dictionary<string, string> { [experiment] = variationKey }
+        });
+    }
+
+    /// <summary>
+    /// A read the caller gave up on has no result, which is not the same as there being nothing stored.
+    /// Reporting it as an empty round makes the caller replace the assignments it already had with
+    /// nothing, and every user in flight gets re-bucketed.
+    /// </summary>
+    [Fact]
+    public async Task ACancelledReadDoesNotReportAnEmptySetOfAssignments()
+    {
+        var redis = new FakeRedis { ThrowOnMultiGet = new OperationCanceledException() };
+        var service = new RedisStickyBucketService(redis);
+
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        Func<Task> read = () => service.GetAllAssignmentsAsync(new[] { "id||user-1" }, cancellation.Token);
+
+        await read.Should().ThrowAsync<OperationCanceledException>(
+            "because the caller asked to stop, and silently answering 'nothing stored' would wipe the assignments it still had");
+    }
+
+    [Fact]
+    public async Task AFailedReadIsStillReportedAsNoAssignmentsRatherThanThrowing()
+    {
+        var redis = new FakeRedis { ThrowOnMultiGet = new InvalidOperationException("redis is down") };
+        var service = new RedisStickyBucketService(redis);
+
+        var documents = await service.GetAllAssignmentsAsync(new[] { "id||user-1" });
+
+        documents.Should().BeEmpty(
+            "because an unreachable store must not fail an evaluation - only a cancelled read is the caller's own doing");
+    }
+
+    /// <summary>
+    /// The key a document is published under has to be the key it was read from. Taking it from inside the
+    /// stored JSON lets one entry answer for an identifier it was never stored against, and the variation
+    /// it carries then belongs to a different user.
+    /// </summary>
+    [Fact]
+    public async Task ADocumentNamingADifferentIdentifierIsNotAccepted()
+    {
+        var redis = new FakeRedis();
+        redis.Put("id||user-1", DocumentFor("id", "user-2", "my-experiment__0", "1"));
+
+        var service = new RedisStickyBucketService(redis);
+
+        var documents = await service.GetAllAssignmentsAsync(new[] { "id||user-1" });
+
+        documents.Should().NotContainKey("id||user-2",
+            "because the entry stored under user-1 cannot hand out user-2's variation");
+        documents.Should().BeEmpty("because it is not a usable document for the key it was read from either");
+    }
+
+    [Fact]
+    public async Task AMismatchedDocumentDoesNotDisplaceTheGoodOnesInTheSameBatch()
+    {
+        var redis = new FakeRedis();
+        redis.Put("id||user-1", DocumentFor("id", "user-9", "my-experiment__0", "1"));
+        redis.Put("id||user-2", DocumentFor("id", "user-2", "my-experiment__0", "0"));
+
+        var service = new RedisStickyBucketService(redis);
+
+        var documents = await service.GetAllAssignmentsAsync(new[] { "id||user-1", "id||user-2" });
+
+        documents.Keys.Should().BeEquivalentTo(new[] { "id||user-2" });
+        documents["id||user-2"].Assignments["my-experiment__0"].Should().Be("0");
+    }
 }
