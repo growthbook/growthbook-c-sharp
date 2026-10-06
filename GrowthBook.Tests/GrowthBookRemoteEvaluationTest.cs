@@ -327,6 +327,94 @@ namespace GrowthBook.Tests
             await mockRepository.DidNotReceive().GetFeaturesWithContext(Arg.Any<Context>(), Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken?>());
         }
 
+        /// <summary>
+        /// A forced value short-circuits evaluation of its own feature locally, so the obvious reading is that
+        /// the server never needs to know. It does: a feature that reaches a forced one through a prerequisite
+        /// is resolved server-side, and an override applied locally afterwards cannot correct that result.
+        /// </summary>
+        [Fact]
+        public async Task SetForcedFeaturesAsync_ShouldSendTheForcedValuesToBeEvaluatedAgainst()
+        {
+            // Arrange
+            var mockRepository = Substitute.For<IGrowthBookFeatureRepository>();
+            var features = new Dictionary<string, Feature> { { "test", new Feature { DefaultValue = true } } };
+
+            mockRepository.GetFeaturesWithContext(Arg.Any<Context>(), Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken?>())
+                .Returns(Task.FromResult<IDictionary<string, Feature>>(features));
+
+            var context = new Context(new { userId = "123" })
+            {
+                RemoteEval = true,
+                ClientKey = "test-key",
+                ApiHost = "https://api.example.com",
+                FeatureRepository = mockRepository
+            };
+
+            using var growthBook = new GrowthBook(context);
+
+            // Act
+            await growthBook.SetForcedFeaturesAsync(new Dictionary<string, JToken> { { "dark-mode", JToken.FromObject(true) } });
+
+            // Assert
+            await mockRepository.Received(1).GetFeaturesWithContext(
+                Arg.Is<Context>(x => x.ForcedFeatures != null
+                    && x.ForcedFeatures.ContainsKey("dark-mode")
+                    && x.ForcedFeatures["dark-mode"].Value<bool>()),
+                Arg.Any<GrowthBookRetrievalOptions>(),
+                Arg.Any<CancellationToken?>());
+
+            growthBook.Features.Should().ContainKey("test");
+        }
+
+        [Fact]
+        public async Task SetForcedFeaturesAsync_WithoutAnActualChange_ShouldNotTriggerRemoteEvaluation()
+        {
+            // Arrange
+            var mockRepository = Substitute.For<IGrowthBookFeatureRepository>();
+
+            var context = new Context(new { userId = "123" })
+            {
+                RemoteEval = true,
+                ClientKey = "test-key",
+                ApiHost = "https://api.example.com",
+                ForcedFeatures = new Dictionary<string, JToken> { { "dark-mode", JToken.FromObject(true) } },
+                FeatureRepository = mockRepository
+            };
+
+            using var growthBook = new GrowthBook(context);
+
+            // Act - the same value, built as a separate token, so this leans on a structural comparison
+            await growthBook.SetForcedFeaturesAsync(new Dictionary<string, JToken> { { "dark-mode", JToken.FromObject(true) } });
+
+            // Assert
+            await mockRepository.DidNotReceive().GetFeaturesWithContext(Arg.Any<Context>(), Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken?>());
+        }
+
+        /// <summary>
+        /// Evaluating locally means no request to make stale, so forcing a feature must stay as cheap as it was.
+        /// </summary>
+        [Fact]
+        public void SetForcedFeatures_WithoutRemoteEval_ShouldNotTriggerAnything()
+        {
+            // Arrange
+            var mockRepository = Substitute.For<IGrowthBookFeatureRepository>();
+
+            var context = new Context(new { userId = "123" })
+            {
+                Features = new Dictionary<string, Feature> { { "dark-mode", new Feature { DefaultValue = false } } },
+                FeatureRepository = mockRepository
+            };
+
+            using var growthBook = new GrowthBook(context);
+
+            // Act
+            growthBook.SetForcedFeatures(new Dictionary<string, JToken> { { "dark-mode", JToken.FromObject(true) } });
+
+            // Assert
+            growthBook.IsOn("dark-mode").Should().BeTrue("because the override still short-circuits evaluation locally");
+            mockRepository.DidNotReceiveWithAnyArgs().GetFeaturesWithContext(default, default, default);
+        }
+
         [Fact]
         public async Task Attributes_WhenAssignedDirectly_ShouldStartARemoteEvaluation()
         {
