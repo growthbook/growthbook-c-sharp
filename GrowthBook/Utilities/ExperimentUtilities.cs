@@ -296,6 +296,17 @@ namespace GrowthBook.Utilities
         public static (StickyAssignmentsDocument Document, bool IsChanged) GenerateStickyBucketAssignment(IStickyBucketService stickyBucketService, string attributeName, string attributeValue, IDictionary<string, string> assignments)
         {
             var existingDocument = stickyBucketService is null ? new StickyAssignmentsDocument(attributeName, attributeValue) : stickyBucketService.GetAssignments(attributeName, attributeValue);
+
+            return GenerateStickyBucketAssignment(existingDocument, attributeName, attributeValue, assignments);
+        }
+
+        /// <summary>
+        /// Merges new assignments into an already-retrieved document rather than asking a service for it.
+        /// Used by the asynchronous sticky bucket path, which can't do a blocking read mid-evaluation, and
+        /// so merges against the assignment docs already held in memory.
+        /// </summary>
+        public static (StickyAssignmentsDocument Document, bool IsChanged) GenerateStickyBucketAssignment(StickyAssignmentsDocument existingDocument, string attributeName, string attributeValue, IDictionary<string, string> assignments)
+        {
             var newAssignments = new Dictionary<string, string>(existingDocument?.Assignments ?? new Dictionary<string, string>());
 
             newAssignments.MergeWith(new[] { assignments });
@@ -380,5 +391,48 @@ namespace GrowthBook.Utilities
         }
 
         public static string GetStickyBucketExperimentKey(string key, int bucketVersion) => $"{key}__{bucketVersion}";
+
+        /// <summary>
+        /// Scans every loaded feature rule and experiment for the hash/fallback attributes they could
+        /// bucket on, so a sticky bucket service knows which attributes it needs assignment docs for.
+        /// Only rules that could run an experiment (i.e. have variations) contribute - force rules don't.
+        /// </summary>
+        /// <param name="features">The currently loaded feature definitions.</param>
+        /// <param name="experiments">The currently loaded standalone experiment definitions.</param>
+        /// <returns>The distinct set of attribute names used for hashing across all rules/experiments.</returns>
+        public static ISet<string> DeriveStickyBucketIdentifierAttributes(IDictionary<string, Feature> features, IEnumerable<Experiment> experiments)
+        {
+            var attributes = new HashSet<string>();
+
+            foreach (var feature in features?.Values ?? Enumerable.Empty<Feature>())
+            {
+                foreach (var rule in feature?.Rules ?? Enumerable.Empty<FeatureRule>())
+                {
+                    if (rule.Variations is null)
+                    {
+                        continue;
+                    }
+
+                    attributes.Add(rule.HashAttribute ?? "id");
+
+                    if (!string.IsNullOrEmpty(rule.FallbackAttribute))
+                    {
+                        attributes.Add(rule.FallbackAttribute);
+                    }
+                }
+            }
+
+            foreach (var experiment in experiments ?? Enumerable.Empty<Experiment>())
+            {
+                attributes.Add(experiment.HashAttribute ?? "id");
+
+                if (!string.IsNullOrEmpty(experiment.FallbackAttribute))
+                {
+                    attributes.Add(experiment.FallbackAttribute);
+                }
+            }
+
+            return attributes;
+        }
     }
 }

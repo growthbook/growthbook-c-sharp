@@ -48,6 +48,33 @@ namespace GrowthBook.Tests.Api
             growthBook.Attributes["environment"].ToString().Should().Be("test");
         }
 
+        [Fact]
+        public void GrowthBookFactory_CreateForUser_KeepsEachUsersFeaturesIsolated()
+        {
+            // The per-user clone shares the Features dictionary with the base context to avoid copying it
+            // twice, relying on the GrowthBook constructor to do the isolating copy. This pins that the
+            // isolation actually still happens - mutating one user's Features must not leak anywhere else.
+            const string FeatureName = "shared-feature";
+
+            var baseContext = new Context
+            {
+                ClientKey = "test-key",
+                Features = new Dictionary<string, Feature>
+                {
+                    [FeatureName] = new Feature { DefaultValue = true }
+                }
+            };
+            using var factory = new GrowthBookFactory(baseContext);
+
+            using var firstUser = factory.CreateForUser(new { userId = "user-1" });
+            using var secondUser = factory.CreateForUser(new { userId = "user-2" });
+
+            firstUser.Features[FeatureName] = new Feature { DefaultValue = false };
+
+            secondUser.IsOn(FeatureName).Should().BeTrue("because one user's feature mutation must not leak into another user's instance");
+            baseContext.Features[FeatureName].DefaultValue.ToObject<bool>().Should().BeTrue("because it must not leak back into the base context either");
+        }
+
         public void Dispose()
         {
             // Cleanup if needed

@@ -75,10 +75,13 @@ namespace GrowthBook
         /// </summary>
         public IDictionary<string, Feature> Features { get; set; } = new Dictionary<string, Feature>();
 
-                /// <summary>
-        /// Feature definitions (usually pulled from an API or cache).
+        /// <summary>
+        /// Values to force specific features to resolve to, keyed by feature key (used for QA/debugging).
+        /// These are the values a feature should evaluate to, not feature definitions: an entry of
+        /// <c>["dark-mode"] = true</c> forces that feature to <c>true</c> regardless of its rules, and even if
+        /// the feature isn't otherwise defined.
         /// </summary>
-        public IDictionary<string, Feature> ForcedFeatures { get; set; } = new Dictionary<string, Feature>();
+        public IDictionary<string, JToken> ForcedFeatures { get; set; } = new Dictionary<string, JToken>();
 
 
         /// <summary>
@@ -90,6 +93,19 @@ namespace GrowthBook
         /// Service for using sticky buckets.
         /// </summary>
         public IStickyBucketService StickyBucketService { get; set; }
+
+        /// <summary>
+        /// Service for using sticky buckets backed by an asynchronous store (Redis, SQL, an HTTP API).
+        /// Mutually exclusive with <see cref="StickyBucketService"/> - setting both throws at construction.
+        /// </summary>
+        /// <remarks>
+        /// Assignments are read up front by <c>GrowthBook.LoadStickyBucketAssignmentsAsync</c>, which
+        /// <c>LoadFeatures</c> also calls, so feature evaluation itself stays synchronous. An attribute change
+        /// refreshes them too: the async attribute methods await that refresh, while the synchronous ones
+        /// dispatch it without waiting, since they have no way to await an async store. Use the async methods
+        /// when the very next evaluation has to see assignments for the new identifier.
+        /// </remarks>
+        public IAsyncStickyBucketService AsyncStickyBucketService { get; set; }
 
         /// <summary>
         /// The assignment docs for sticky bucket usage. Optional.
@@ -176,7 +192,21 @@ namespace GrowthBook
         /// Creates a deep copy of this Context instance.
         /// </summary>
         /// <returns>A new Context instance with copied values</returns>
-        public Context Clone()
+        public Context Clone() => Clone(copyFeatures: true);
+
+        /// <summary>
+        /// Creates a copy intended to be handed straight to the <see cref="GrowthBook"/> constructor, which
+        /// copies <see cref="Features"/> itself. Skipping the copy here avoids allocating the whole feature
+        /// dictionary twice per instance, which is the hot path for <see cref="GrowthBookFactory"/>.
+        /// </summary>
+        /// <remarks>
+        /// Only safe when the result goes directly into the <see cref="GrowthBook"/> constructor. The returned
+        /// context shares its <see cref="Features"/> dictionary with this one, so mutating it would affect
+        /// both. Use the public <see cref="Clone"/> if you need a fully independent copy.
+        /// </remarks>
+        internal Context CloneForGrowthBookConstruction() => Clone(copyFeatures: false);
+
+        private Context Clone(bool copyFeatures)
         {
             var cloned = new Context
             {
@@ -186,9 +216,12 @@ namespace GrowthBook
                 DecryptionKey = this.DecryptionKey,
                 Attributes = this.Attributes?.DeepClone() as JObject ?? new JObject(),
                 Url = this.Url,
-                Features = new Dictionary<string, Feature>(this.Features ?? new Dictionary<string, Feature>()),
+                Features = copyFeatures
+                    ? new Dictionary<string, Feature>(this.Features ?? new Dictionary<string, Feature>())
+                    : this.Features ?? new Dictionary<string, Feature>(),
                 Experiments = this.Experiments?.ToList(),
                 StickyBucketService = this.StickyBucketService,
+                AsyncStickyBucketService = this.AsyncStickyBucketService,
                 StickyBucketAssignmentDocs = new Dictionary<string, StickyAssignmentsDocument>(this.StickyBucketAssignmentDocs ?? new Dictionary<string, StickyAssignmentsDocument>()),
                 EncryptedFeatures = this.EncryptedFeatures,
                 ForcedVariations = new Dictionary<string, int>(this.ForcedVariations ?? new Dictionary<string, int>()),
@@ -200,7 +233,7 @@ namespace GrowthBook
                 CachePath = this.CachePath,
                 RemoteEval = this.RemoteEval,
                 CacheKeyAttributes = this.CacheKeyAttributes?.ToArray(),
-                ForcedFeatures = this.ForcedFeatures
+                ForcedFeatures = new Dictionary<string, JToken>(this.ForcedFeatures ?? new Dictionary<string, JToken>())
             };
             return cloned;
         }

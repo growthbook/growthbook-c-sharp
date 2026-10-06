@@ -126,10 +126,21 @@ namespace GrowthBook.Providers
         /// </summary>
         /// <param name="conditionValue">The condition value to check.</param>
         /// <param name="attributeValue">The attribute value to check.</param>
+        /// <param name="savedGroups">The saved groups available to group operators.</param>
+        /// <param name="stringComparison">
+        /// When provided, string condition values are compared using it instead of an exact match.
+        /// Used by the case-insensitive operators so they keep supporting operator objects and
+        /// non-string condition values rather than degrading to plain equality.
+        /// </param>
         /// <returns>True if the condition value matches the attribute value.</returns>
-        private bool EvalConditionValue(JToken conditionValue, JToken attributeValue, JObject savedGroups)
+        private bool EvalConditionValue(JToken conditionValue, JToken attributeValue, JObject savedGroups, StringComparison? stringComparison = null)
         {
             _logger.LogDebug("Evaluating condition value \'{ConditionValue}\'", conditionValue);
+
+            if (stringComparison != null && conditionValue?.Type == JTokenType.String)
+            {
+                return string.Equals(attributeValue?.ToString(), conditionValue.ToString(), stringComparison.Value);
+            }
 
             if (conditionValue.Type == JTokenType.Object)
             {
@@ -466,14 +477,7 @@ namespace GrowthBook.Providers
 
             foreach (JToken condition in conditionList)
             {
-                if (stringComparison is null)
-                {
-                    if (!attributeList.Any(x => EvalConditionValue(condition, x, savedGroups)))
-                    {
-                        return false;
-                    }
-                }
-                else if (!attributeList.Any(x => TokensEqual(condition, x, stringComparison)))
+                if (!attributeList.Any(x => EvalConditionValue(condition, x, savedGroups, stringComparison)))
                 {
                     return false;
                 }

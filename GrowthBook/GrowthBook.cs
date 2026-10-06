@@ -29,18 +29,43 @@ namespace GrowthBook
         private readonly Dictionary<string, ExperimentAssignment> _assigned;
         private readonly ConcurrentDictionary<string, byte> _tracked;
         private Action<Experiment, ExperimentResult> _trackingCallback;
+        private IDictionary<string, JToken> _forcedFeatures;
         private bool _disposedValue;
         private readonly IConditionEvaluationProvider _conditionEvaluator;
         private readonly IGrowthBookFeatureRepository _featureRepository;
         private readonly IStickyBucketService _stickyBucketService;
-        private readonly IDictionary<string, StickyAssignmentsDocument> _stickyBucketAssignmentDocs;
+        private readonly IAsyncStickyBucketService _asyncStickyBucketService;
+
+        /// <summary>
+        /// Whether sticky bucketing is available at all, regardless of which of the two service flavors
+        /// was configured. Reads always come from <see cref="_stickyBucketAssignmentDocs"/>, so the read
+        /// path doesn't care which store filled them.
+        /// </summary>
+        private bool IsStickyBucketingEnabled => _stickyBucketService != null || _asyncStickyBucketService != null;
+        /// <summary>
+        /// Replaced wholesale on a refresh rather than mutated in place. A concurrent evaluation reads this
+        /// dictionary, so clearing it before repopulating would let that evaluation see an empty or half-filled
+        /// set - and <see cref="Dictionary{TKey, TValue}"/> is not safe for a concurrent read during a write at
+        /// all. The reference SDK publishes refreshed docs the same way, by assigning the whole collection.
+        /// </summary>
+        private volatile IDictionary<string, StickyAssignmentsDocument> _stickyBucketAssignmentDocs;
+
+        private readonly object _stickyBucketWriteLock = new object();
+        private long _stickyBucketLoadSequence;
+        private long _publishedStickyBucketLoad;
         private readonly ILogger<GrowthBook> _logger;
         private readonly JObject _savedGroups;
         private readonly ILoggerFactory _loggerFactory;
         private readonly bool _ownsLoggerFactory;
         private readonly Context _context;
+        private readonly object _attributesLock = new object();
+        private JObject _attributes;
+        private IDictionary<string, int> _forcedVariations;
         private JObject _previousAttributes;
         private IDictionary<string, int> _previousForcedVariations;
+        private IDictionary<string, JToken> _previousForcedFeatures;
+        private Task _pendingRemoteEvaluation;
+        private long _remoteEvaluationGeneration;
         private readonly List<Action<Experiment, ExperimentResult>> _subscribers
             = new List<Action<Experiment, ExperimentResult>>();
         private readonly List<Func<Experiment, ExperimentResult, Task>> _asyncSubscribers
@@ -53,24 +78,38 @@ namespace GrowthBook
         public GrowthBook(Context context)
         {
             ValidateRemoteEvaluationConfiguration(context);
+            ValidateStickyBucketConfiguration(context);
 
             _context = context;
             Enabled = context.Enabled;
-            Attributes = context.Attributes;
             Url = context.Url;
             Features = context.Features?.ToDictionary(k => k.Key, v => v.Value) ?? new Dictionary<string, Feature>();
             Experiments = context.Experiments ?? new List<Experiment>();
-            ForcedVariations = context.ForcedVariations;
+
+            // Assigned through the backing fields rather than the properties: the property setters start a remote
+            // evaluation on change, and there is nothing to refresh yet while the instance is still being built.
+            _attributes = context.Attributes;
+            _forcedVariations = context.ForcedVariations;
 
             _qaMode = context.QaMode;
             _trackingCallback = context.TrackingCallback;
+            if (context.ForcedFeatures != null)
+            {
+                _forcedFeatures = new Dictionary<string, JToken>(context.ForcedFeatures);
+            }
+            else
+            {
+                _forcedFeatures = new Dictionary<string, JToken>();
+            }
             _assigned = new Dictionary<string, ExperimentAssignment>();
             _tracked = new ConcurrentDictionary<string, byte>();
             _stickyBucketService = context.StickyBucketService;
+            _asyncStickyBucketService = context.AsyncStickyBucketService;
             _stickyBucketAssignmentDocs = context.StickyBucketAssignmentDocs ?? new Dictionary<string, StickyAssignmentsDocument>();
             _savedGroups = context.SavedGroups;
             _previousAttributes = context.Attributes?.DeepClone() as JObject;
             _previousForcedVariations = context.ForcedVariations?.ToDictionary(k => k.Key, v => v.Value);
+            _previousForcedFeatures = new Dictionary<string, JToken>(_forcedFeatures);
 
 
             var config = new GrowthBookConfigurationOptions
@@ -125,12 +164,270 @@ namespace GrowthBook
 
                 _featureRepository = new FeatureRepository(featureRepositoryLogger, featureCache, featureRefreshWorker, remoteEvaluationService);
             }
+
+            HydrateStickyBucketServiceFromContext(context.StickyBucketAssignmentDocs);
+
+            RefreshStickyBucketAssignments();
+        }
+
+        /// <summary>
+        /// Replaces this instance's sticky bucket assignment docs with what the configured
+        /// <see cref="IStickyBucketService"/> currently holds for every hash/fallback attribute in use
+        /// across the loaded features and experiments. A no-op when no sticky bucket service is
+        /// configured. Called after construction and whenever Features or Attributes change.
+        /// </summary>
+        private void RefreshStickyBucketAssignments()
+        {
+            if (_stickyBucketService == null)
+            {
+                return;
+            }
+
+            var sequence = Interlocked.Increment(ref _stickyBucketLoadSequence);
+
+            PublishStickyBucketAssignments(_stickyBucketService.GetAllAssignments(GetStickyBucketAttributeKeys()), sequence);
+        }
+
+        /// <summary>
+        /// Pulls fresh sticky bucket assignment docs from the configured
+        /// <see cref="IAsyncStickyBucketService"/>. A no-op when no async sticky bucket service is
+        /// configured.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="LoadFeatures"/> calls this automatically, and so does every attribute change: the async
+        /// attribute methods await it, and the synchronous ones dispatch it without waiting, since they have no
+        /// way to await an async store. Call it directly only when you need to be sure the refresh has landed
+        /// after a synchronous attribute change.
+        /// </remarks>
+        /// <param name="cancellationToken">Used for monitoring the need to cancel the retrieval.</param>
+        public async Task LoadStickyBucketAssignmentsAsync(CancellationToken? cancellationToken = null)
+        {
+            if (_asyncStickyBucketService == null)
+            {
+                return;
+            }
+
+            var sequence = Interlocked.Increment(ref _stickyBucketLoadSequence);
+
+            var refreshedDocuments = await _asyncStickyBucketService
+                .GetAllAssignmentsAsync(GetStickyBucketAttributeKeys(), cancellationToken ?? CancellationToken.None);
+
+            PublishStickyBucketAssignments(refreshedDocuments, sequence);
+        }
+
+        /// <summary>
+        /// Builds the formatted attribute keys ("name||value") that a sticky bucket store needs documents
+        /// for, based on the hash/fallback attributes used across the loaded features and experiments.
+        /// </summary>
+        private IList<string> GetStickyBucketAttributeKeys()
+        {
+            return FormatStickyBucketKeys(ExperimentUtilities.DeriveStickyBucketIdentifierAttributes(Features, Experiments));
+        }
+
+        /// <summary>
+        /// Turns identifier attribute names into the "name||value" keys a sticky bucket store is asked for,
+        /// using this instance's current attribute values.
+        /// </summary>
+        private IList<string> FormatStickyBucketKeys(IEnumerable<string> identifierAttributes)
+        {
+            var formattedKeys = new List<string>();
+
+            // The constructor assigns the backing field straight from the context, and Dispose clears it, so
+            // this can run with no attributes at all. An absent identifier just yields no key to ask for,
+            // which is what the reference SDK does too - it reads a missing attribute as an empty value.
+            var attributes = Attributes ?? new JObject();
+
+            foreach (var attributeName in identifierAttributes)
+            {
+                (_, string hashValue) = attributes.GetHashAttributeAndValue(attributeName);
+
+                if (!hashValue.IsNullOrWhitespace())
+                {
+                    formattedKeys.Add(new StickyAssignmentsDocument(attributeName, hashValue).FormattedAttribute);
+                }
+            }
+
+            return formattedKeys;
+        }
+
+        /// <summary>
+        /// Persists an assignment to the asynchronous store. Exceptions are caught and logged rather than
+        /// propagated, because this is dispatched without being awaited - an unhandled failure here would
+        /// otherwise surface as an unobserved task exception far from its cause.
+        /// </summary>
+        private async Task SaveStickyBucketAssignmentAsync(StickyAssignmentsDocument document)
+        {
+            try
+            {
+                await _asyncStickyBucketService.SaveAssignmentsAsync(document).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to save sticky bucket assignments for attribute '{FormattedAttribute}'", document.FormattedAttribute);
+            }
+        }
+
+        /// <summary>
+        /// Refreshes the assignments from an asynchronous store on behalf of a caller that cannot await, which
+        /// is every synchronous attribute-change method. Exceptions are caught and logged rather than
+        /// propagated, because nothing observes this task.
+        /// </summary>
+        private async Task RefreshAsyncStickyBucketAssignmentsAsync()
+        {
+            try
+            {
+                await LoadStickyBucketAssignmentsAsync().ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to refresh sticky bucket assignments after an attribute change");
+            }
+        }
+
+        /// <summary>
+        /// Publishes the refreshed assignment docs as the current ones, with a single reference assignment so
+        /// that a concurrent evaluation sees either the previous set or the refreshed one, never a partial one.
+        /// </summary>
+        /// <param name="refreshedDocuments">What the store currently holds. A null value leaves the docs alone.</param>
+        /// <param name="sequence">
+        /// The position of the load that produced them. A load that started earlier holds the previous
+        /// identifier's documents, so it is dropped rather than published over a newer set.
+        /// </param>
+        private void PublishStickyBucketAssignments(IDictionary<string, StickyAssignmentsDocument> refreshedDocuments, long sequence)
+        {
+            if (refreshedDocuments == null)
+            {
+                return;
+            }
+
+            lock (_stickyBucketWriteLock)
+            {
+                if (sequence <= _publishedStickyBucketLoad)
+                {
+                    _logger.LogDebug("Discarded sticky bucket assignments from load '{Sequence}', already published '{Published}'", sequence, _publishedStickyBucketLoad);
+
+                    return;
+                }
+
+                _publishedStickyBucketLoad = sequence;
+
+                // Copied rather than stored directly: the store owns the dictionary it returned and may reuse it.
+                _stickyBucketAssignmentDocs = new Dictionary<string, StickyAssignmentsDocument>(refreshedDocuments);
+            }
+        }
+
+        /// <summary>
+        /// Adds a single assignment doc by publishing a replacement dictionary, since writing into the live
+        /// one would race with the evaluations reading it.
+        /// </summary>
+        private void StoreStickyBucketAssignment(StickyAssignmentsDocument document)
+        {
+            lock (_stickyBucketWriteLock)
+            {
+                var updated = new Dictionary<string, StickyAssignmentsDocument>(_stickyBucketAssignmentDocs);
+
+                updated[document.FormattedAttribute] = document;
+
+                _stickyBucketAssignmentDocs = updated;
+            }
+        }
+
+        /// <summary>
+        /// Makes sure the current docs cover an experiment handed straight to <see cref="Run"/>, which the
+        /// up-front load misses when the experiment is in neither the features nor the context.
+        /// </summary>
+        /// <remarks>
+        /// Synchronous store only. With an asynchronous one, list the experiment on the
+        /// <see cref="Context"/> or call <see cref="LoadStickyBucketAssignmentsAsync"/> after adding it.
+        /// </remarks>
+        private void EnsureStickyBucketAssignmentsFor(Experiment experiment)
+        {
+            if (_stickyBucketService == null || experiment == null)
+            {
+                return;
+            }
+
+            var identifierAttributes = new HashSet<string> { experiment.HashAttribute ?? "id" };
+
+            if (!string.IsNullOrEmpty(experiment.FallbackAttribute))
+            {
+                identifierAttributes.Add(experiment.FallbackAttribute);
+            }
+
+            var currentDocuments = _stickyBucketAssignmentDocs;
+            var missingKeys = new List<string>();
+
+            foreach (var key in FormatStickyBucketKeys(identifierAttributes))
+            {
+                if (currentDocuments == null || !currentDocuments.ContainsKey(key))
+                {
+                    missingKeys.Add(key);
+                }
+            }
+
+            if (missingKeys.Count == 0)
+            {
+                return;
+            }
+
+            var found = _stickyBucketService.GetAllAssignments(missingKeys);
+
+            if (found == null)
+            {
+                return;
+            }
+
+            foreach (var document in found.Values)
+            {
+                StoreStickyBucketAssignment(document);
+            }
+        }
+
+        /// <summary>
+        /// Writes assignment docs supplied on the Context into the sticky bucket service, so they survive
+        /// the full replace done by <see cref="RefreshStickyBucketAssignments"/>. The reference SDK does the
+        /// same in its constructor; without it, docs handed in directly would be dropped by the first
+        /// refresh unless the caller had separately written them to the store themselves.
+        /// </summary>
+        private void HydrateStickyBucketServiceFromContext(IDictionary<string, StickyAssignmentsDocument> providedDocuments)
+        {
+            if (_stickyBucketService == null || providedDocuments == null)
+            {
+                return;
+            }
+
+            foreach (var document in providedDocuments.Values)
+            {
+                if (document == null)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    _stickyBucketService.SaveAssignments(document);
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogWarning(ex, "Failed to hydrate sticky bucket service with the assignment doc for '{FormattedAttribute}'", document.FormattedAttribute);
+                }
+            }
         }
 
         /// <summary>
         /// Arbitrary JSON object containing user and request attributes.
         /// </summary>
-        public JObject Attributes { get; set; }
+        /// <remarks>
+        /// Assigning replaces the attributes entirely and starts a remote evaluation in the background when the
+        /// change requires one. Use <see cref="UpdateAttributesAsync(object, CancellationToken?)"/> to wait for that
+        /// evaluation instead, or <see cref="UpdateAttributes(object)"/> to hand over attributes that this instance
+        /// should take a private copy of rather than share with the caller.
+        /// </remarks>
+        public JObject Attributes
+        {
+            get => _attributes;
+            set => ApplyAttributes(value, isMerge: false);
+        }
 
         /// <summary>
         /// Dictionary of the currently loaded feature objects.
@@ -145,7 +442,17 @@ namespace GrowthBook
         /// <summary>
         /// Listing of specific experiments to always assign a specific variation (used for QA).
         /// </summary>
-        public IDictionary<string, int> ForcedVariations { get; set; }
+        /// <remarks>
+        /// Forced variations are part of the remote evaluation payload, so assigning starts a remote evaluation in
+        /// the background when the change requires one. Use
+        /// <see cref="SetForcedVariationsAsync(IDictionary{string, int}, CancellationToken?)"/> to wait for that
+        /// evaluation instead.
+        /// </remarks>
+        public IDictionary<string, int> ForcedVariations
+        {
+            get => _forcedVariations;
+            set => ApplyForcedVariations(value);
+        }
 
         /// <summary>
         /// The URL of the current page.
@@ -167,10 +474,16 @@ namespace GrowthBook
             {
                 if (disposing)
                 {
-                    Attributes = null;
+                    // Through the backing fields: tearing the instance down must not start a remote evaluation.
+                    _attributes = null;
+                    _forcedVariations = null;
+                    _pendingRemoteEvaluation = null;
                     Features.Clear();
-                    ForcedVariations = null;
                     _trackingCallback = null;
+                    // Swapped for an empty set rather than cleared in place: the dictionary is handed to the
+                    // context a remote evaluation request is built from, and a request still in flight would
+                    // otherwise see it emptied underneath it.
+                    _forcedFeatures = new Dictionary<string, JToken>();
                     _assigned.Clear();
                     _tracked.Clear();
                     _subscribers.Clear();
@@ -204,110 +517,485 @@ namespace GrowthBook
         }
 
         /// <summary>
-        /// Updates user attributes from an IDictionary for singleton usage pattern.
+        /// Replaces all user attributes with the ones provided.
         /// </summary>
-        /// <param name="attributes">New user attributes as IDictionary</param>
+        /// <remarks>
+        /// This is a full replace: any attribute that isn't present in <paramref name="attributes"/> is dropped.
+        /// Use <see cref="MergeAttributes(IDictionary{string, object})"/> to merge into the existing attributes instead.
+        /// Passing null clears all attributes, and a null value is stored as a JSON null rather than removing the key.
+        /// </remarks>
+        /// <param name="attributes">New user attributes as IDictionary, or null to clear all attributes.</param>
         public void UpdateAttributes(IDictionary<string, object> attributes)
         {
-            var newAttributes = attributes != null ? JObject.FromObject(attributes) : new JObject();
+            ApplyAttributes(ToJObject(attributes), isMerge: false);
 
-            if (_context.RemoteEval && ShouldTriggerRemoteEvaluation(newAttributes))
-            {
-                TriggerRemoteEvaluationAsync(newAttributes).ConfigureAwait(false);
-            }
-
-            Attributes = newAttributes;
-            _previousAttributes = newAttributes?.DeepClone() as JObject;
-
-            if (attributes != null)
-            {
-                Attributes = JObject.FromObject(attributes);
-                _logger?.LogDebug("Updated attributes with {Count} properties", attributes.Count);
-            }
-            else
-            {
-                Attributes = new JObject();
-                _logger?.LogDebug("Cleared attributes");
-            }
+            _logger?.LogDebug("Replaced attributes with {Count} properties", attributes?.Count ?? 0);
         }
 
         /// <summary>
-        /// Updates user attributes from an anonymous object for singleton usage pattern.
+        /// Replaces all user attributes with the ones provided.
         /// </summary>
-        /// <param name="attributes">New user attributes as anonymous object</param>
+        /// <remarks>
+        /// This is a full replace: any attribute that isn't present in <paramref name="attributes"/> is dropped.
+        /// Use <see cref="MergeAttributes(object)"/> to merge into the existing attributes instead.
+        /// Passing null clears all attributes, and a null value is stored as a JSON null rather than removing the key.
+        /// </remarks>
+        /// <param name="attributes">New user attributes as an anonymous object or a <see cref="JObject"/>, or null to clear all attributes.</param>
         public void UpdateAttributes(object attributes)
         {
-            var newAttributes = attributes != null ? JObject.FromObject(attributes) : new JObject();
+            ApplyAttributes(ToJObject(attributes), isMerge: false);
 
-            if (_context.RemoteEval && ShouldTriggerRemoteEvaluation(newAttributes))
-            {
-                TriggerRemoteEvaluationAsync(newAttributes).ConfigureAwait(false);
-            }
-
-            Attributes = newAttributes;
-            _previousAttributes = newAttributes?.DeepClone() as JObject;
-
-            if (attributes != null)
-            {
-                Attributes = JObject.FromObject(attributes);
-                _logger?.LogDebug("Updated attributes from object");
-            }
-            else
-            {
-                Attributes = new JObject();
-                _logger?.LogDebug("Cleared attributes");
-            }
+            _logger?.LogDebug("Replaced attributes from object");
         }
 
         /// <summary>
-        /// Merges additional attributes with existing ones.
+        /// Merges additional attributes into the existing ones.
         /// </summary>
+        /// <remarks>
+        /// This is a shallow merge, matching the TypeScript SDK's updateAttributes(): new keys are added, existing keys
+        /// are overwritten, and keys that aren't present in <paramref name="additionalAttributes"/> are preserved.
+        /// Nested objects are replaced rather than merged. Passing null is a no-op, and a null value is stored as a
+        /// JSON null rather than removing the key.
+        /// </remarks>
         /// <param name="additionalAttributes">Additional attributes to merge</param>
         public void MergeAttributes(IDictionary<string, object> additionalAttributes)
         {
             if (additionalAttributes == null) return;
-            var oldAttributes = Attributes?.DeepClone() as JObject;
 
-
-            foreach (var kvp in additionalAttributes)
-            {
-                Attributes[kvp.Key] = JToken.FromObject(kvp.Value);
-            }
-
-            if (_context.RemoteEval && ShouldTriggerRemoteEvaluation(Attributes))
-            {
-                TriggerRemoteEvaluationAsync(Attributes).ConfigureAwait(false);
-            }
-
-            _previousAttributes = Attributes?.DeepClone() as JObject;
+            ApplyAttributes(ToJObject(additionalAttributes), isMerge: true);
 
             _logger?.LogDebug("Merged {Count} additional attributes", additionalAttributes.Count);
         }
 
         /// <summary>
-        /// Merges additional attributes from an anonymous object with existing ones.
+        /// Merges additional attributes into the existing ones.
         /// </summary>
-        /// <param name="additionalAttributes">Additional attributes to merge as anonymous object</param>
+        /// <remarks>
+        /// This is a shallow merge, matching the TypeScript SDK's updateAttributes(): new keys are added, existing keys
+        /// are overwritten, and keys that aren't present in <paramref name="additionalAttributes"/> are preserved.
+        /// Nested objects are replaced rather than merged. Passing null is a no-op, and a null value is stored as a
+        /// JSON null rather than removing the key.
+        /// </remarks>
+        /// <param name="additionalAttributes">Additional attributes to merge as an anonymous object or a <see cref="JObject"/>.</param>
         public void MergeAttributes(object additionalAttributes)
         {
             if (additionalAttributes == null) return;
 
-            var oldAttributes = Attributes?.DeepClone() as JObject;
-
-            var additionalJObject = JObject.FromObject(additionalAttributes);
-            foreach (var property in additionalJObject.Properties())
-            {
-                Attributes[property.Name] = property.Value;
-            }
-
-            if (_context.RemoteEval && ShouldTriggerRemoteEvaluation(Attributes))
-            {
-                TriggerRemoteEvaluationAsync(Attributes).ConfigureAwait(false);
-            }
-
-            _previousAttributes = Attributes?.DeepClone() as JObject;
+            ApplyAttributes(ToJObject(additionalAttributes), isMerge: true);
 
             _logger?.LogDebug("Merged additional attributes from object");
+        }
+
+        /// <summary>
+        /// Replaces the forced feature value overrides for this instance.
+        /// </summary>
+        /// <remarks>
+        /// Forced features are part of the remote evaluation payload, so this starts a remote evaluation in the
+        /// background when the change requires one. A forced value short-circuits evaluation of its own feature
+        /// either way, but a feature that depends on a forced one through a prerequisite is resolved remotely,
+        /// and the server can only honour the override if it was told about it. Use
+        /// <see cref="SetForcedFeaturesAsync(IDictionary{string, JToken}, CancellationToken?)"/> to wait for that
+        /// evaluation instead.
+        /// </remarks>
+        /// <param name="forcedFeatures">The feature keys to force to a specific value, or null to clear them.</param>
+        public void SetForcedFeatures(IDictionary<string, JToken> forcedFeatures)
+        {
+            if (SwapInForcedFeatures(forcedFeatures))
+            {
+                // The caller has no way to wait for this, so the task is kept around for the next feature load
+                // to await. Callers that need the refreshed features can use SetForcedFeaturesAsync.
+                StartRemoteEvaluation(null);
+            }
+        }
+
+        /// <summary>
+        /// Replaces the forced feature value overrides for this instance and, in remote evaluation mode, waits
+        /// for the features to be evaluated again against them.
+        /// </summary>
+        /// <remarks>
+        /// Behaves like <see cref="SetForcedFeatures(IDictionary{string, JToken})"/>, except that the returned task
+        /// only completes once any triggered remote evaluation has finished.
+        /// </remarks>
+        /// <param name="forcedFeatures">The feature keys to force to a specific value, or null to clear them.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A <see cref="Task"/> that represents the update and any remote evaluation it triggered.</returns>
+        public Task SetForcedFeaturesAsync(IDictionary<string, JToken> forcedFeatures, CancellationToken? cancellationToken = null)
+        {
+            if (!SwapInForcedFeatures(forcedFeatures))
+            {
+                return Task.CompletedTask;
+            }
+
+            return StartRemoteEvaluation(cancellationToken);
+        }
+
+        /// <summary>
+        /// Publishes the provided forced features as the current ones.
+        /// </summary>
+        /// <param name="forcedFeatures">The forced features to apply.</param>
+        /// <returns>True if the change requires a remote evaluation.</returns>
+        private bool SwapInForcedFeatures(IDictionary<string, JToken> forcedFeatures)
+        {
+            lock (_attributesLock)
+            {
+                // Copied rather than stored directly, so that a caller mutating their dictionary afterwards can't
+                // change what evaluations and in-flight requests are running against. Published before the
+                // comparison, the same way the attributes and forced variations paths work.
+                _forcedFeatures = forcedFeatures != null
+                    ? new Dictionary<string, JToken>(forcedFeatures)
+                    : new Dictionary<string, JToken>();
+
+                var shouldTriggerRemoteEvaluation = ShouldTriggerRemoteEvaluation(_attributes);
+
+                SnapshotRemoteEvaluationState(_attributes);
+
+                _logger?.LogDebug("Set {Count} forced feature override(s)", _forcedFeatures.Count);
+
+                return shouldTriggerRemoteEvaluation;
+            }
+        }
+
+        /// <summary>
+        /// Replaces all user attributes with the ones provided and, in remote evaluation mode, waits for the
+        /// features to be evaluated again against them.
+        /// </summary>
+        /// <remarks>
+        /// Behaves like <see cref="UpdateAttributes(IDictionary{string, object})"/>, except that the returned task
+        /// only completes once any triggered remote evaluation has finished.
+        /// </remarks>
+        /// <param name="attributes">New user attributes as IDictionary, or null to clear all attributes.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A <see cref="Task"/> that represents the update and any remote evaluation it triggered.</returns>
+        public Task UpdateAttributesAsync(IDictionary<string, object> attributes, CancellationToken? cancellationToken = null)
+        {
+            _logger?.LogDebug("Replaced attributes with {Count} properties", attributes?.Count ?? 0);
+
+            return ApplyAttributesAsync(ToJObject(attributes), isMerge: false, cancellationToken);
+        }
+
+        /// <summary>
+        /// Replaces all user attributes with the ones provided and, in remote evaluation mode, waits for the
+        /// features to be evaluated again against them.
+        /// </summary>
+        /// <remarks>
+        /// Behaves like <see cref="UpdateAttributes(object)"/>, except that the returned task only completes once
+        /// any triggered remote evaluation has finished.
+        /// </remarks>
+        /// <param name="attributes">New user attributes as an anonymous object or a <see cref="JObject"/>, or null to clear all attributes.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A <see cref="Task"/> that represents the update and any remote evaluation it triggered.</returns>
+        public Task UpdateAttributesAsync(object attributes, CancellationToken? cancellationToken = null)
+        {
+            _logger?.LogDebug("Replaced attributes from object");
+
+            return ApplyAttributesAsync(ToJObject(attributes), isMerge: false, cancellationToken);
+        }
+
+        /// <summary>
+        /// Merges additional attributes into the existing ones and, in remote evaluation mode, waits for the
+        /// features to be evaluated again against them.
+        /// </summary>
+        /// <remarks>
+        /// Behaves like <see cref="MergeAttributes(IDictionary{string, object})"/>, except that the returned task
+        /// only completes once any triggered remote evaluation has finished.
+        /// </remarks>
+        /// <param name="additionalAttributes">Additional attributes to merge.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A <see cref="Task"/> that represents the merge and any remote evaluation it triggered.</returns>
+        public Task MergeAttributesAsync(IDictionary<string, object> additionalAttributes, CancellationToken? cancellationToken = null)
+        {
+            if (additionalAttributes == null) return Task.CompletedTask;
+
+            _logger?.LogDebug("Merged {Count} additional attributes", additionalAttributes.Count);
+
+            return ApplyAttributesAsync(ToJObject(additionalAttributes), isMerge: true, cancellationToken);
+        }
+
+        /// <summary>
+        /// Merges additional attributes into the existing ones and, in remote evaluation mode, waits for the
+        /// features to be evaluated again against them.
+        /// </summary>
+        /// <remarks>
+        /// Behaves like <see cref="MergeAttributes(object)"/>, except that the returned task only completes once
+        /// any triggered remote evaluation has finished.
+        /// </remarks>
+        /// <param name="additionalAttributes">Additional attributes to merge as an anonymous object or a <see cref="JObject"/>.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A <see cref="Task"/> that represents the merge and any remote evaluation it triggered.</returns>
+        public Task MergeAttributesAsync(object additionalAttributes, CancellationToken? cancellationToken = null)
+        {
+            if (additionalAttributes == null) return Task.CompletedTask;
+
+            _logger?.LogDebug("Merged additional attributes from object");
+
+            return ApplyAttributesAsync(ToJObject(additionalAttributes), isMerge: true, cancellationToken);
+        }
+
+        /// <summary>
+        /// Replaces the forced variations with the ones provided.
+        /// </summary>
+        /// <remarks>
+        /// Forced variations are part of the remote evaluation payload, so this starts a remote evaluation in the
+        /// background when the change requires one. Equivalent to assigning <see cref="ForcedVariations"/>.
+        /// </remarks>
+        /// <param name="forcedVariations">The experiment keys to force to a specific variation, or null to clear them.</param>
+        public void SetForcedVariations(IDictionary<string, int> forcedVariations)
+        {
+            _logger?.LogDebug("Replaced forced variations with {Count} entries", forcedVariations?.Count ?? 0);
+
+            ApplyForcedVariations(forcedVariations);
+        }
+
+        /// <summary>
+        /// Replaces the forced variations with the ones provided and, in remote evaluation mode, waits for the
+        /// features to be evaluated again against them.
+        /// </summary>
+        /// <remarks>
+        /// Behaves like <see cref="SetForcedVariations(IDictionary{string, int})"/>, except that the returned task
+        /// only completes once any triggered remote evaluation has finished.
+        /// </remarks>
+        /// <param name="forcedVariations">The experiment keys to force to a specific variation, or null to clear them.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A <see cref="Task"/> that represents the update and any remote evaluation it triggered.</returns>
+        public Task SetForcedVariationsAsync(IDictionary<string, int> forcedVariations, CancellationToken? cancellationToken = null)
+        {
+            _logger?.LogDebug("Replaced forced variations with {Count} entries", forcedVariations?.Count ?? 0);
+
+            if (!SwapInForcedVariations(forcedVariations))
+            {
+                return Task.CompletedTask;
+            }
+
+            return StartRemoteEvaluation(cancellationToken);
+        }
+
+        /// <summary>
+        /// Publishes the provided forced variations and starts a remote evaluation in the background if the change
+        /// requires one.
+        /// </summary>
+        /// <param name="forcedVariations">The forced variations to apply.</param>
+        private void ApplyForcedVariations(IDictionary<string, int> forcedVariations)
+        {
+            if (SwapInForcedVariations(forcedVariations))
+            {
+                // The caller has no way to wait for this, so the task is kept around for the next feature load
+                // to await. Callers that need the refreshed features can use SetForcedVariationsAsync.
+                StartRemoteEvaluation(null);
+            }
+        }
+
+        /// <summary>
+        /// Applies the provided attributes, either replacing the existing ones entirely or merging into them,
+        /// and starts a remote evaluation in the background if the change requires one.
+        /// </summary>
+        /// <param name="attributes">The attributes to apply.</param>
+        /// <param name="isMerge">True to merge into the existing attributes, false to replace them.</param>
+        private void ApplyAttributes(JObject attributes, bool isMerge)
+        {
+            var requiresRemoteEvaluation = SwapInAttributes(attributes, isMerge);
+
+            // Outside the attributes lock, since this reaches the sticky bucket service. Every attribute change
+            // funnels through here - including a direct assignment to Attributes - so the assignments are
+            // re-resolved for the new identifier exactly once per change.
+            RefreshStickyBucketAssignments();
+
+            if (_asyncStickyBucketService != null)
+            {
+                // An asynchronous store can't be read from here, so the refresh is dispatched the same way
+                // writes to that store are. It lands shortly after this returns; callers that need it to have
+                // completed before they evaluate should use the async overloads, which await it.
+                _ = RefreshAsyncStickyBucketAssignmentsAsync();
+            }
+
+            if (requiresRemoteEvaluation)
+            {
+                // The caller has no way to wait for this, so the task is kept around for the next feature load
+                // to await. Callers that need the refreshed features can use the async version of this method.
+                StartRemoteEvaluation(null);
+            }
+        }
+
+        /// <summary>
+        /// Applies the provided attributes, either replacing the existing ones entirely or merging into them,
+        /// and waits for any remote evaluation the change requires.
+        /// </summary>
+        /// <param name="attributes">The attributes to apply.</param>
+        /// <param name="isMerge">True to merge into the existing attributes, false to replace them.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>
+        /// A <see cref="Task"/> that represents the sticky bucket refresh and any remote evaluation that was
+        /// triggered.
+        /// </returns>
+        private async Task ApplyAttributesAsync(JObject attributes, bool isMerge, CancellationToken? cancellationToken)
+        {
+            var requiresRemoteEvaluation = SwapInAttributes(attributes, isMerge);
+
+            RefreshStickyBucketAssignments();
+
+            // The reference SDK's setAttributes awaits refreshStickyBuckets, so an attribute change always
+            // re-resolves the assignments for the new identifier. The synchronous overloads can't await an
+            // async store, but these can, so here both store flavors are treated alike.
+            await LoadStickyBucketAssignmentsAsync(cancellationToken).ConfigureAwait(false);
+
+            if (!requiresRemoteEvaluation)
+            {
+                return;
+            }
+
+            await StartRemoteEvaluation(cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Starts a remote evaluation and records it so that a subsequent feature load can wait for it.
+        /// </summary>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A <see cref="Task"/> that represents the remote evaluation.</returns>
+        private Task StartRemoteEvaluation(CancellationToken? cancellationToken)
+        {
+            // Attributes and forced variations are part of the remote evaluation payload, so changing them makes
+            // the previously evaluated features stale. This runs after the swap so the request uses the new state.
+            var evaluationContext = CreateRemoteEvaluationContext(out var generation);
+            var remoteEvaluation = TriggerRemoteEvaluationAsync(evaluationContext, generation, cancellationToken);
+
+            Interlocked.Exchange(ref _pendingRemoteEvaluation, remoteEvaluation);
+
+            return remoteEvaluation;
+        }
+
+        /// <summary>
+        /// Snapshots the state a remote evaluation request is built from and allocates the generation that
+        /// identifies that request.
+        /// </summary>
+        /// <remarks>
+        /// Both happen under the same lock on purpose. Requests are independent, so a slower earlier one can
+        /// complete after a newer one, and only the generation tells them apart. Allocating it while holding
+        /// the lock that publishes the state makes the generation order the same as the order the state was
+        /// read in, so the highest generation is always the one carrying the newest state. Allocating it
+        /// outside the lock would reintroduce the very race it exists to close.
+        /// </remarks>
+        /// <param name="generation">The generation identifying the request built from the returned state.</param>
+        /// <returns>The state the remote evaluation must run against.</returns>
+        private Context CreateRemoteEvaluationContext(out long generation)
+        {
+            lock (_attributesLock)
+            {
+                generation = Interlocked.Increment(ref _remoteEvaluationGeneration);
+
+                return CreateCurrentContext();
+            }
+        }
+
+        /// <summary>
+        /// Determines whether the remote evaluation identified by the provided generation is still the most
+        /// recent one, and may therefore publish its features.
+        /// </summary>
+        /// <param name="generation">The generation of the remote evaluation to check.</param>
+        /// <returns>True if no newer remote evaluation has been started since.</returns>
+        private bool IsLatestRemoteEvaluation(long generation)
+        {
+            return Interlocked.Read(ref _remoteEvaluationGeneration) == generation;
+        }
+
+        /// <summary>
+        /// Builds the updated attributes and publishes them as the current ones.
+        /// </summary>
+        /// <param name="attributes">The attributes to apply.</param>
+        /// <param name="isMerge">True to merge into the existing attributes, false to replace them.</param>
+        /// <returns>True if the change requires a remote evaluation.</returns>
+        private bool SwapInAttributes(JObject attributes, bool isMerge)
+        {
+            lock (_attributesLock)
+            {
+                var updatedAttributes = attributes;
+
+                if (isMerge)
+                {
+                    updatedAttributes = _attributes?.DeepClone() as JObject ?? new JObject();
+
+                    foreach (var property in attributes.Properties())
+                    {
+                        updatedAttributes[property.Name] = property.Value;
+                    }
+                }
+
+                var shouldTriggerRemoteEvaluation = ShouldTriggerRemoteEvaluation(updatedAttributes);
+
+                // The updated attributes are built off to the side and swapped in with a single reference assignment
+                // so that a concurrent evaluation sees either the previous attributes or the fully updated ones,
+                // but never a partially merged state.
+                _attributes = updatedAttributes;
+
+                SnapshotRemoteEvaluationState(updatedAttributes);
+
+                return shouldTriggerRemoteEvaluation;
+            }
+        }
+
+        /// <summary>
+        /// Publishes the provided forced variations as the current ones.
+        /// </summary>
+        /// <param name="forcedVariations">The forced variations to apply.</param>
+        /// <returns>True if the change requires a remote evaluation.</returns>
+        private bool SwapInForcedVariations(IDictionary<string, int> forcedVariations)
+        {
+            lock (_attributesLock)
+            {
+                // Published before the comparison so that ShouldTriggerRemoteEvaluation sees the new forced
+                // variations against the previous snapshot, the same way the attributes path works.
+                _forcedVariations = forcedVariations;
+
+                var shouldTriggerRemoteEvaluation = ShouldTriggerRemoteEvaluation(_attributes);
+
+                SnapshotRemoteEvaluationState(_attributes);
+
+                return shouldTriggerRemoteEvaluation;
+            }
+        }
+
+        /// <summary>
+        /// Records the current attributes and forced variations as the state the last remote evaluation was made for.
+        /// </summary>
+        /// <remarks>
+        /// Callers must hold <see cref="_attributesLock"/>. Both are snapshotted together because they're compared
+        /// together: snapshotting only the attributes would leave the forced variations permanently different from
+        /// the previous ones once they've been changed, so every later change would trigger a remote evaluation
+        /// whether or not it needed one.
+        /// </remarks>
+        /// <param name="attributes">The attributes that are now current.</param>
+        private void SnapshotRemoteEvaluationState(JObject attributes)
+        {
+            // Only ShouldTriggerRemoteEvaluation reads these, and it answers false outright without remote evaluation.
+            // Skipping the clone keeps assigning attributes as cheap as it was for everyone evaluating locally.
+            if (!_context.RemoteEval)
+            {
+                return;
+            }
+
+            _previousAttributes = attributes?.DeepClone() as JObject;
+            _previousForcedVariations = _forcedVariations?.ToDictionary(k => k.Key, v => v.Value);
+            _previousForcedFeatures = _forcedFeatures?.ToDictionary(k => k.Key, v => v.Value);
+        }
+
+        /// <summary>
+        /// Converts the provided attributes into a JSON object that this instance can safely take ownership of.
+        /// </summary>
+        /// <param name="attributes">The attributes to convert, which may be null.</param>
+        /// <returns>The attributes as a JSON object, or an empty one if they were null.</returns>
+        private static JObject ToJObject(object attributes)
+        {
+            if (attributes == null)
+            {
+                return new JObject();
+            }
+
+            // Clone rather than take the caller's instance so that later changes on their side
+            // can't mutate the attributes that evaluations are running against.
+            if (attributes is JObject json)
+            {
+                return (JObject)json.DeepClone();
+            }
+
+            return JObject.FromObject(attributes);
         }
 
         /// <inheritdoc />
@@ -453,6 +1141,12 @@ namespace GrowthBook
 
                 evaluatedFeatures.Add(featureId);
 
+                if (_forcedFeatures.TryGetValue(featureId, out JToken forcedValue))
+                {
+                    _logger.LogDebug("Feature '{FeatureId}' has a forced override, returning it without evaluating rules", featureId);
+                    return GetFeatureResult(forcedValue ?? JValue.CreateNull(), FeatureResult.SourceId.Override);
+                }
+
                 if (!Features.TryGetValue(featureId, out Feature feature))
                 {
                     return GetFeatureResult(null, FeatureResult.SourceId.UnknownFeature);
@@ -549,7 +1243,7 @@ namespace GrowthBook
                         });
 
                         _logger.LogDebug("Rule {RuleIndex}: returning forced value for feature '{FeatureId}'", ruleIndex, featureId);
-                        return GetFeatureResult(rule.Force, FeatureResult.SourceId.Force);
+                        return GetFeatureResult(rule.Force, FeatureResult.SourceId.Force, ruleId: rule.Id);
                     }
 
                     var experiment = new Experiment
@@ -585,7 +1279,7 @@ namespace GrowthBook
 
                     NotifySubscribers(experiment, result);
 
-                    return GetFeatureResult(result.Value, FeatureResult.SourceId.Experiment, experiment, result);
+                    return GetFeatureResult(result.Value, FeatureResult.SourceId.Experiment, experiment, result, ruleId: rule.Id);
                 }
 
                 _logger.LogDebug("No rules matched for feature '{FeatureId}', returning default value", featureId);
@@ -609,6 +1303,8 @@ namespace GrowthBook
         {
             try
             {
+                EnsureStickyBucketAssignmentsFor(experiment);
+
                 ExperimentResult result = RunExperiment(experiment, null);
 
                 TryAssignExperimentResult(experiment, result);
@@ -644,11 +1340,24 @@ namespace GrowthBook
                 _logger.LogInformation("Loading features from the repository");
                 IDictionary<string, Feature> features;
 
-                // Use remote evaluation if enabled and configured
-                if (_context.RemoteEval && RemoteEvaluationUtilities.IsValidForRemoteEvaluation(_context))
+                // A remote evaluation started by an attribute change may still be in flight. Wait for it first so
+                // that its now older response can't land after this load and overwrite the features it retrieves.
+                // It handles its own errors, so it never faults.
+                var pendingRemoteEvaluation = Interlocked.Exchange(ref _pendingRemoteEvaluation, null);
+
+                if (pendingRemoteEvaluation != null)
                 {
-                    var currentContext = CreateCurrentContext();
-                    features = await _featureRepository.GetFeaturesWithContext(currentContext, options, cancellationToken);
+                    await pendingRemoteEvaluation;
+                }
+
+                // Use remote evaluation if enabled and configured
+                var isRemoteEvaluation = _context.RemoteEval && RemoteEvaluationUtilities.IsValidForRemoteEvaluation(_context);
+                var generation = 0L;
+
+                if (isRemoteEvaluation)
+                {
+                    var evaluationContext = CreateRemoteEvaluationContext(out generation);
+                    features = await _featureRepository.GetFeaturesWithContext(evaluationContext, options, cancellationToken).ConfigureAwait(false);
                 }
                 else
                 {
@@ -662,10 +1371,38 @@ namespace GrowthBook
                     return FeatureLoadResult.CreateFailure(errorMessage);
                 }
 
+                // An attribute change during this fetch started a newer remote evaluation, so these features
+                // were evaluated for state that has already been replaced. The newer evaluation owns what gets
+                // applied; this load reports what is currently applied rather than overwriting it.
+                if (isRemoteEvaluation && !IsLatestRemoteEvaluation(generation))
+                {
+                    _logger.LogDebug("Discarding a superseded remote evaluation response received while loading features");
+
+                    return FeatureLoadResult.CreateSuccess(Features?.Count ?? 0);
+                }
+
                 Features = features;
                 var featureCount = Features.Count;
 
                 _logger.LogInformation($"Loading features has completed, retrieved '{featureCount}' features");
+
+                // The features are already applied by this point, so a sticky bucket store that is down must not
+                // turn a load that succeeded into a reported failure. Evaluation still works without the refreshed
+                // assignments - it just can't honour previously stored variations until a later refresh lands.
+                // Cancellation is left to propagate, since that is the caller asking to stop rather than a fault.
+                try
+                {
+                    RefreshStickyBucketAssignments();
+                    await LoadStickyBucketAssignmentsAsync(cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Features were loaded, but refreshing the sticky bucket assignments failed");
+                }
 
                 return FeatureLoadResult.CreateSuccess(featureCount);
             }
@@ -803,7 +1540,7 @@ namespace GrowthBook
             var foundStickyBucket = false;
             var stickyBucketVersionIsBlocked = false;
 
-            if (_stickyBucketService != null && !experiment.DisableStickyBucketing)
+            if (IsStickyBucketingEnabled && !experiment.DisableStickyBucketing)
             {
                 var bucketVersion = experiment.BucketVersion;
                 var minBucketVersion = experiment.MinBucketVersion;
@@ -928,7 +1665,7 @@ namespace GrowthBook
 
             // 13.5 Store the value for later if sticky bucketing is enabled.
 
-            if (_stickyBucketService != null && !experiment.DisableStickyBucketing)
+            if (IsStickyBucketingEnabled && !experiment.DisableStickyBucketing)
             {
                 var experimentKey = ExperimentUtilities.GetStickyBucketExperimentKey(experiment.Key, experiment.BucketVersion);
 
@@ -937,11 +1674,33 @@ namespace GrowthBook
                     [experimentKey] = result.Key
                 };
 
-                (var document, var isChanged) = ExperimentUtilities.GenerateStickyBucketAssignment(_stickyBucketService, hashAttribute, hashValue, assignments);
+                StickyAssignmentsDocument document;
+                bool isChanged;
+
+                if (_stickyBucketService != null)
+                {
+                    (document, isChanged) = ExperimentUtilities.GenerateStickyBucketAssignment(_stickyBucketService, hashAttribute, hashValue, assignments);
+                }
+                else
+                {
+                    var formattedAttribute = new StickyAssignmentsDocument(hashAttribute, hashValue).FormattedAttribute;
+                    _stickyBucketAssignmentDocs.TryGetValue(formattedAttribute, out var existingDocument);
+
+                    (document, isChanged) = ExperimentUtilities.GenerateStickyBucketAssignment(existingDocument, hashAttribute, hashValue, assignments);
+                }
 
                 if (isChanged)
                 {
-                    _stickyBucketService.SaveAssignments(document);
+                    StoreStickyBucketAssignment(document);
+
+                    if (_stickyBucketService != null)
+                    {
+                        _stickyBucketService.SaveAssignments(document);
+                    }
+                    else
+                    {
+                        _ = SaveStickyBucketAssignmentAsync(document);
+                    }
                 }
             }
 
@@ -950,14 +1709,15 @@ namespace GrowthBook
             return result;
         }
 
-        private FeatureResult GetFeatureResult(JToken value, string source, Experiment experiment = null, ExperimentResult experimentResult = null)
+        private FeatureResult GetFeatureResult(JToken value, string source, Experiment experiment = null, ExperimentResult experimentResult = null, string ruleId = null)
         {
             return new FeatureResult
             {
                 Value = value,
                 Source = source,
                 Experiment = experiment,
-                ExperimentResult = experimentResult
+                ExperimentResult = experimentResult,
+                RuleId = ruleId ?? string.Empty
             };
         }
 
@@ -1041,7 +1801,7 @@ namespace GrowthBook
                 inExperiment = false;
             }
 
-            var canUseStickyBucketing = _stickyBucketService != null && !experiment.DisableStickyBucketing;
+            var canUseStickyBucketing = IsStickyBucketingEnabled && !experiment.DisableStickyBucketing;
             var fallbackAttribute = canUseStickyBucketing ? experiment.FallbackAttribute : default;
 
             (var hashAttribute, var hashValue) = Attributes.GetHashAttributeAndValue(experiment.HashAttribute, fallbackAttributeKey: fallbackAttribute);
@@ -1137,12 +1897,31 @@ namespace GrowthBook
         }
 
         /// <summary>
+        /// Validates that only one sticky bucket service is configured. Allowing both would leave it
+        /// ambiguous which store owns an assignment, and writes would silently go to only one of them.
+        /// </summary>
+        /// <param name="context">The context to validate</param>
+        private static void ValidateStickyBucketConfiguration(Context context)
+        {
+            if (context.StickyBucketService != null && context.AsyncStickyBucketService != null)
+            {
+                throw new ArgumentException("StickyBucketService and AsyncStickyBucketService cannot both be set - choose the one that matches your backing store", nameof(context));
+            }
+        }
+
+        /// <summary>
         /// Determines if remote evaluation should be triggered based on attribute or forced variation changes.
         /// </summary>
         /// <param name="newAttributes">The new attributes to check</param>
         /// <returns>True if remote evaluation should be triggered</returns>
         private bool ShouldTriggerRemoteEvaluation(JObject newAttributes)
         {
+            // Nothing is evaluated remotely, so no change can make a remote evaluation stale.
+            if (!_context.RemoteEval)
+            {
+                return false;
+            }
+
             // Check if attributes changed
             var attributesChanged = RemoteEvaluationUtilities.ShouldTriggerRemoteEvaluation(
                 _previousAttributes,
@@ -1153,30 +1932,49 @@ namespace GrowthBook
             // Check if forced variations changed
             var forcedVariationsChanged = RemoteEvaluationUtilities.ShouldTriggerRemoteEvaluationForForcedVariations(
                 _previousForcedVariations,
-                ForcedVariations
+                _forcedVariations
             );
 
-            return attributesChanged || forcedVariationsChanged;
+            // Check if forced features changed
+            var forcedFeaturesChanged = RemoteEvaluationUtilities.ShouldTriggerRemoteEvaluationForForcedFeatures(
+                _previousForcedFeatures,
+                _forcedFeatures
+            );
+
+            return attributesChanged || forcedVariationsChanged || forcedFeaturesChanged;
         }
 
         /// <summary>
-        /// Triggers remote evaluation asynchronously when attribute changes are detected.
+        /// Triggers remote evaluation asynchronously when a change to the evaluated state is detected.
         /// </summary>
-        /// <param name="newAttributes">The new attributes</param>
-        private async Task TriggerRemoteEvaluationAsync(JObject newAttributes)
+        /// <param name="evaluationContext">The state to evaluate against, snapshotted when the generation was allocated.</param>
+        /// <param name="generation">The generation identifying this remote evaluation.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        private async Task TriggerRemoteEvaluationAsync(Context evaluationContext, long generation, CancellationToken? cancellationToken)
         {
             try
             {
-                _logger?.LogDebug("Triggering remote evaluation due to attribute changes");
+                _logger?.LogDebug("Triggering remote evaluation due to attribute or forced variation changes");
 
-                var currentContext = CreateCurrentContext();
-                var features = await _featureRepository.GetFeaturesWithContext(currentContext);
+                var features = await _featureRepository.GetFeaturesWithContext(evaluationContext, cancellationToken: cancellationToken).ConfigureAwait(false);
 
-                if (features != null)
+                if (features == null)
                 {
-                    Features = features;
-                    _logger?.LogDebug("Remote evaluation completed, updated {Count} features", features.Count);
+                    return;
                 }
+
+                // The atomic swap keeps the state consistent, but the features derived from it are published here,
+                // and this response may well have overtaken a newer one. Publishing it would leave the caller on
+                // features evaluated for state they've already replaced, so a superseded response is dropped whole
+                // rather than applied.
+                if (!IsLatestRemoteEvaluation(generation))
+                {
+                    _logger?.LogDebug("Discarding a superseded remote evaluation response with {Count} features", features.Count);
+                    return;
+                }
+
+                Features = features;
+                _logger?.LogDebug("Remote evaluation completed, updated {Count} features", features.Count);
             }
             catch (Exception ex)
             {
@@ -1198,6 +1996,10 @@ namespace GrowthBook
                 CacheKeyAttributes = _context.CacheKeyAttributes,
                 Attributes = Attributes,
                 ForcedVariations = ForcedVariations,
+                // Without these the server evaluates as though nothing were forced. The override short-circuits
+                // its own feature locally either way, but a feature that reaches a forced one through a
+                // prerequisite is resolved server-side, and applying the override afterwards cannot correct it.
+                ForcedFeatures = _forcedFeatures,
                 Url = Url
             };
         }
