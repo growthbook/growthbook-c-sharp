@@ -192,7 +192,11 @@ namespace GrowthBook
                 CacheExpirationInSeconds = context.CacheExpirationInSeconds,
                 ClientKey = context.ClientKey,
                 DecryptionKey = context.DecryptionKey,
-                PreferServerSentEvents = context.BackgroundSync
+                PreferServerSentEvents = context.BackgroundSync,
+                RequestHeaders = context.RequestHeaders,
+                StreamingRequestHeaders = context.StreamingRequestHeaders,
+                OnFeaturesRefreshed = context.OnFeaturesRefreshed,
+                OnStreamingEventId = context.OnStreamingEventId
             };
     }
 }

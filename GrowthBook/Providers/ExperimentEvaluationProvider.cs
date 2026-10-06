@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using GrowthBook.Extensions;
@@ -253,8 +254,17 @@ namespace GrowthBook.Providers
                 }
             }
 
-            context.Global.TrackingCallback?.Invoke(experiment, result);
-            context.User.TrackingCallback?.Invoke(experiment, result);
+            // The assignment is already decided and may already be saved, so a throwing callback must
+            // not change what the user is shown. Elsewhere in evaluation these are guarded the same way.
+            try
+            {
+                context.Global.TrackingCallback?.Invoke(experiment, result);
+                context.User.TrackingCallback?.Invoke(experiment, result);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Encountered unhandled exception in tracking callback for experiment '{ExperimentKey}'", experiment.Key);
+            }
 
             return result;
         }

@@ -613,6 +613,13 @@ namespace GrowthBook
 
         private void TryAssignExperimentResult(Experiment experiment, ExperimentResult result)
         {
+            if (experiment == null)
+            {
+                NotifySubscribers(null, result);
+
+                return;
+            }
+
             var assignment = new ExperimentAssignment { Experiment = experiment, Result = result };
             bool shouldFireCallbacks = false;
 

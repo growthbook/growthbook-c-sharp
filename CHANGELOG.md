@@ -28,6 +28,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `SSEClient` auto-reconnects on 2xx status codes, stops on 410 Gone.
 
 ### Fixed
+- `Subscribe` and `SubscribeAsync` are back on `IGrowthBook`. Removing them compiled for the SDK but broke every
+  caller holding the interface, including anyone resolving it from DI.
+- A forced rule notifies subscribers again, as it did before the evaluation move into `FeatureEvaluationProvider`.
+- A feature override now applies to a key the loaded payload does not contain. It was checked after the lookup, so
+  an override for a feature that had not loaded did nothing — the reference checks it first.
+- An SSE endpoint that accepts the request and closes the stream immediately is backed off from rather than
+  reconnected to in a tight unbounded loop. A connection that delivered events still starts its next attempt from a
+  fresh budget, so only the base retry time applies to a healthy stream.
+- A `410 Gone` from the SSE endpoint stops the client instead of being retried: the server has ended the
+  subscription, so repeating the request only delays shutdown.
+- Reconnect jitter is now proportional to the delay rather than a flat second, which otherwise dominated the short
+  reconnect times a server can ask for with the SSE `retry:` field.
+- Callers arriving while a background feature refresh is in flight join it instead of each starting another. The
+  refresh lock was released while the request was still running and the cache stayed expired until it landed, so
+  every caller in that window produced a duplicate API request.
+- An `OnFeaturesRefreshed` subscriber that throws no longer has one successful refresh reported as both succeeded
+  and failed, and no longer stops the SSE mode from being established.
+- A tracking callback that throws no longer changes the assignment the user is given. The exception escaped after
+  the sticky assignment had been saved, so evaluation fell back to the feature default while the store disagreed.
+- `GrowthBookClient` installs refreshed features before reporting the refresh, and drops a refresh that was
+  overtaken by a newer one, so an evaluation can no longer see the previous feature set or be rolled back to it.
+- `GrowthBookClient.GetFeatures()` hands out a snapshot. It returned the live dictionary, so a caller changing it
+  changed what every user in the process evaluated against.
+- `GrowthBookClient` loads sticky bucket documents using the same merged attributes the evaluation hashes on —
+  global, user and overrides — rather than the user attributes alone, and covers an experiment passed straight to
+  `Run`. An identifier from any other source found no document and the user was bucketed again.
+- `GrowthBookFactory` passes the context's request headers, streaming headers, `OnFeaturesRefreshed` and
+  `OnStreamingEventId` to the repository it builds. Factory users were making unauthenticated feature and SSE
+  requests and never seeing their callbacks fire.
 - Sticky bucket assignment docs now update correctly in-memory after save.
 - Empty string fallback attribute no longer causes incorrect bucket assignment.
 - `ForcedVariations` null reference in `GrowthBook` constructor.

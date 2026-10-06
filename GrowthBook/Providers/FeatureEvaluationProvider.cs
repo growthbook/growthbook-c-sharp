@@ -35,6 +35,12 @@ namespace GrowthBook.Providers
 
                 context.Stack.EvaluatedFeatures.Add(featureId);
 
+                var forcedValues = context.GetForcedFeatureValues();
+                if (forcedValues != null && forcedValues.TryGetValue(featureId, out var forcedValue))
+                {
+                    return GetFeatureResult(forcedValue, "override");
+                }
+
                 if (!context.Global.Features.TryGetValue(featureId, out Feature feature))
                 {
                     return GetFeatureResult(null, FeatureResult.SourceId.UnknownFeature);
@@ -42,12 +48,6 @@ namespace GrowthBook.Providers
 
                 _logger.LogDebug("Evaluating feature '{FeatureId}' with {RuleCount} rules", featureId,
                     feature?.Rules?.Count ?? 0);
-
-                var forcedValues = context.GetForcedFeatureValues();
-                if (forcedValues != null && forcedValues.TryGetValue(featureId, out var forcedValue))
-                {
-                    return GetFeatureResult(forcedValue, "override");
-                }
 
                 var ruleIndex = 0;
 
@@ -143,6 +143,14 @@ namespace GrowthBook.Providers
                                 }
                             }
                         }
+
+                        // Subscribers hear about a forced evaluation too; there is no experiment behind
+                        // it, which is what the null stands for.
+                        context.Global.OnExperimentEval?.Invoke(null, new ExperimentResult
+                        {
+                            InExperiment = false,
+                            Value = rule.Force
+                        });
 
                         _logger.LogDebug("Rule {RuleIndex}: returning forced value for feature '{FeatureId}'",
                             ruleIndex, featureId);

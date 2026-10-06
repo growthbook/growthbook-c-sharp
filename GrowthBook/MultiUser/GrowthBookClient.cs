@@ -27,6 +27,14 @@ namespace GrowthBook.MultiUser
         private readonly bool _ownsLoggerFactory;
         private readonly bool _ownsRepository;
         private volatile IDictionary<string, Feature> _currentFeatures = new Dictionary<string, Feature>();
+
+        /// <summary>
+        /// Orders the feature sets. Refreshes overlap, and one that started earlier carries older
+        /// definitions however late it comes back.
+        /// </summary>
+        private long _refreshSequence;
+        private long _publishedRefresh;
+        private readonly object _publishLock = new object();
         private bool _disposed;
 
         /// <summary>
@@ -64,15 +72,24 @@ namespace GrowthBook.MultiUser
             {
                 _repository = CreateRepository(options, _loggerFactory, success =>
                 {
-                    if (success)
+                    if (!success)
                     {
-                        _ = Task.Run(async () =>
-                        {
-                            var features = await _repository.GetFeatures(null);
-                            if (features != null) _currentFeatures = features;
-                        });
+                        options.OnFeaturesRefreshed?.Invoke(false);
+
+                        return;
                     }
-                    options.OnFeaturesRefreshed?.Invoke(success);
+
+                    // The refreshed features are installed before anyone is told the refresh happened,
+                    // so a handler that evaluates does not see the previous set.
+                    _ = Task.Run(async () =>
+                    {
+                        var sequence = Interlocked.Increment(ref _refreshSequence);
+                        var features = await _repository.GetFeatures(null);
+
+                        PublishFeatures(features, sequence);
+
+                        options.OnFeaturesRefreshed?.Invoke(true);
+                    });
                 });
                 _ownsRepository = true;
             }
@@ -84,10 +101,11 @@ namespace GrowthBook.MultiUser
         /// </summary>
         public async Task InitializeAsync(CancellationToken ct = default)
         {
+            var sequence = Interlocked.Increment(ref _refreshSequence);
             var features = await _repository.GetFeatures(null, ct);
             if (features != null)
             {
-                _currentFeatures = features;
+                PublishFeatures(features, sequence);
                 // With a custom repository the internal callback is not registered,
                 // so fire OnFeaturesRefreshed explicitly. With the default repository
                 // the internal callback already fires it.
@@ -104,12 +122,13 @@ namespace GrowthBook.MultiUser
         /// </summary>
         public async Task RefreshFeaturesAsync(CancellationToken ct = default)
         {
+            var sequence = Interlocked.Increment(ref _refreshSequence);
             var features = await _repository.GetFeatures(
                 new GrowthBookRetrievalOptions { ForceRefresh = true, WaitForCompletion = true}, ct);
 
             if (features != null)
             {
-                _currentFeatures = features;
+                PublishFeatures(features, sequence);
                 if (!_ownsRepository)
                 {
                     _options.OnFeaturesRefreshed?.Invoke(true);
@@ -145,9 +164,21 @@ namespace GrowthBook.MultiUser
         public JObject GetGlobalAttributes()
             => _options.GlobalAttributes;
 
-        /// <summary>Returns a snapshot of the currently loaded features.</summary>
+        /// <summary>
+        /// Returns a snapshot of the currently loaded features. A copy, so a caller changing it cannot
+        /// change what every other user in the process evaluates against.
+        /// </summary>
         public IDictionary<string, Feature> GetFeatures()
-            => _currentFeatures;
+        {
+            var features = _currentFeatures;
+
+            if (features == null)
+            {
+                return new Dictionary<string, Feature>();
+            }
+
+            return new Dictionary<string, Feature>(features);
+        }
 
         /// <summary>Cancels the background feature refresh worker and releases resources.</summary>
         public void Dispose()
@@ -184,7 +215,7 @@ namespace GrowthBook.MultiUser
         /// <summary>Runs an inline experiment for the given user and returns the assigned variation result.</summary>
         public ExperimentResult Run(Experiment experiment, UserContext userContext)
         {
-            var context = BuildEvaluationContext(userContext);
+            var context = BuildEvaluationContext(userContext, experiment);
             return _experimentEvaluator.RunExperiment(experiment, null, context);
         }
 
@@ -211,23 +242,37 @@ namespace GrowthBook.MultiUser
 
         }
 
-        private EvaluationContext BuildEvaluationContext(UserContext userContext)
+        /// <summary>
+        /// Installs a refreshed feature set unless a later refresh has already published one.
+        /// </summary>
+        private void PublishFeatures(IDictionary<string, Feature> features, long sequence)
+        {
+            if (features == null)
+            {
+                return;
+            }
+
+            lock (_publishLock)
+            {
+                if (sequence <= _publishedRefresh)
+                {
+                    return;
+                }
+
+                _publishedRefresh = sequence;
+                _currentFeatures = features;
+            }
+        }
+
+        private EvaluationContext BuildEvaluationContext(UserContext userContext, Experiment experiment = null)
         {
             var stickyBucketService = userContext?.StickyBucketService ?? _options.StickyBucketService;
             var stickyBucketDocs = userContext?.StickyBucketAssignmentDocs;
-
-            if (stickyBucketService != null && stickyBucketDocs == null)
-            {
-                var attrs = ExperimentUtilities.DeriveIdentifierAttributes(
-                    _currentFeatures,
-                    null,
-                    userContext?.Attributes ?? new JObject());
-                stickyBucketDocs = stickyBucketService.GetAllAssignments(attrs);
-            }
+            var features = _currentFeatures;
 
             var global = new GlobalContext
             {
-                Features = _currentFeatures,
+                Features = features,
                 Enabled = _options.Enabled,
                 QaMode = _options.QaMode,
                 TrackingCallback = _options.TrackingCallback,
@@ -249,7 +294,31 @@ namespace GrowthBook.MultiUser
                 StickyBucketAssignmentDocs = stickyBucketDocs ?? new Dictionary<string, StickyAssignmentsDocument>()
             };
 
-            return new EvaluationContext(global, user);
+            var context = new EvaluationContext(global, user);
+
+            if (stickyBucketService != null && stickyBucketDocs == null)
+            {
+                // Resolved from the same merged attributes the evaluation hashes on, not from the user
+                // attributes alone: an identifier can come from the global set or from an override, and
+                // one looked up under the wrong value finds no document and re-buckets the user.
+                List<Experiment> experiments = null;
+
+                if (experiment != null)
+                {
+                    // An inline experiment is in no feature rule, so nothing else would name its identifier.
+                    experiments = new List<Experiment> { experiment };
+                }
+
+                var attributeKeys = ExperimentUtilities.DeriveIdentifierAttributes(features, experiments, context.GetAttributes());
+                var documents = stickyBucketService.GetAllAssignments(attributeKeys);
+
+                if (documents != null)
+                {
+                    user.StickyBucketAssignmentDocs = documents;
+                }
+            }
+
+            return context;
         }
 
         private static IGrowthBookFeatureRepository CreateRepository(Options options, ILoggerFactory loggerFactory, Action<bool> onFeaturesRefreshed)

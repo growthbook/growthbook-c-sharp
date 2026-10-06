@@ -144,7 +144,7 @@ namespace GrowthBook.Tests.ApiTests
         {
             var secondRequestSeen = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-            var firstStream = new StringContent("id: 123\ndata: hello\n\n", Encoding.UTF8, "text/event-stream");
+            var firstStream = new StringContent("retry: 10\nid: 123\ndata: hello\n\n", Encoding.UTF8, "text/event-stream");
             var handler = new FiniteSequencedHandler(
                 _ => new HttpResponseMessage(HttpStatusCode.OK) { Content = firstStream },
                 req =>
@@ -227,28 +227,34 @@ namespace GrowthBook.Tests.ApiTests
 
             // Use reflection to access private ShouldReconnect method or test via behavior
             // Since ShouldReconnect is private, we'll test it indirectly through connection behavior
+            // Signalled by the second request rather than waited out: a clean close is followed by the
+            // reconnect delay the server asked for with `retry:`, and a fixed sleep long enough for that
+            // on one machine is not long enough on a loaded CI runner.
+            var reconnectSeen = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
             var handler2 = new FiniteSequencedHandler(
                 _ => new HttpResponseMessage(HttpStatusCode.OK)
                 {
-                    Content = new StringContent("id: 1\nevent: features\ndata: test\n\n", Encoding.UTF8, "text/event-stream")
+                    Content = new StringContent("retry: 10\nid: 1\nevent: features\ndata: test\n\n", Encoding.UTF8, "text/event-stream")
                 },
                 req =>
                 {
                     statusCodes.Add(req.RequestUri != null ? HttpStatusCode.OK : HttpStatusCode.BadRequest);
                     reconnected = true;
+                    reconnectSeen.TrySetResult(true);
                     return new HttpResponseMessage(HttpStatusCode.Gone); // Stop after reconnect attempt
                 }
             );
 
             using var client2 = CreateClient(handler2);
             using var cts = new CancellationTokenSource();
-            cts.CancelAfter(TimeSpan.FromMilliseconds(500));
-            
+
             Task connectTask = null;
             try
             {
                 connectTask = client2.ConnectAsync(cts.Token);
-                await Task.Delay(300);
+                (await Task.WhenAny(reconnectSeen.Task, Task.Delay(TimeSpan.FromSeconds(5))))
+                    .Should().BeSameAs(reconnectSeen.Task, "the reconnect has to arrive within the time allowed");
             }
             finally
             {

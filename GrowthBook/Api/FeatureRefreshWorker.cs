@@ -88,12 +88,12 @@ namespace GrowthBook.Api
 
             if (response.Features is null)
             {
-                _config?.OnFeaturesRefreshed?.Invoke(false);
+                NotifyFeaturesRefreshed(false);
                 return null;
             }
 
             await _cache.RefreshWith(response.Features, cancellationToken);
-            _config?.OnFeaturesRefreshed?.Invoke(true);
+            NotifyFeaturesRefreshed(true);
 
             // Now that the cache has been populated at least once, we need to see if we're allowed
             // to kick off the server sent events listener and make sure we're in the intended mode
@@ -109,8 +109,27 @@ namespace GrowthBook.Api
             }
             catch (Exception)
             {
-                _config?.OnFeaturesRefreshed?.Invoke(false);
+                NotifyFeaturesRefreshed(false);
                 throw;
+            }
+        }
+
+        private void NotifyFeaturesRefreshed(bool succeeded)
+        {
+            var callback = _config?.OnFeaturesRefreshed;
+
+            if (callback == null)
+            {
+                return;
+            }
+
+            try
+            {
+                callback(succeeded);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "The OnFeaturesRefreshed callback threw while being told the refresh {Outcome}", succeeded ? "succeeded" : "failed");
             }
         }
 
@@ -168,7 +187,7 @@ namespace GrowthBook.Api
                             {
                                 var features = GetFeaturesFrom(sseEvent.Data);
                                 await _cache.RefreshWith(features, _refreshWorkerCancellation.Token);
-                                _config?.OnFeaturesRefreshed?.Invoke(true);
+                                NotifyFeaturesRefreshed(true);
 
                                 // Update last known event ID to prevent duplicates
                                 if (!string.IsNullOrEmpty(sseEvent.Id))
@@ -183,7 +202,7 @@ namespace GrowthBook.Api
                             {
                                 // Handle JSON parsing/decryption errors
                                 _logger.LogError(ex, "Error parsing SSE features data");
-                                _config?.OnFeaturesRefreshed?.Invoke(false);
+                                NotifyFeaturesRefreshed(false);
                             }
                         }
                     }
@@ -191,7 +210,7 @@ namespace GrowthBook.Api
                     {
                         // Handle any other errors in event processing
                         _logger.LogError(ex, "Error processing SSE features event");
-                        _config?.OnFeaturesRefreshed?.Invoke(false);
+                        NotifyFeaturesRefreshed(false);
                     }
                 });
 
@@ -205,7 +224,7 @@ namespace GrowthBook.Api
                 {
                     // Propagate connection errors to callback
                     _logger.LogError(exception, "SSE connection error occurred");
-                    _config?.OnFeaturesRefreshed?.Invoke(false);
+                    NotifyFeaturesRefreshed(false);
                 };
 
                 // Start the connection
@@ -219,7 +238,7 @@ namespace GrowthBook.Api
                     {
                         // Handle initial connection errors
                         _logger.LogError(ex, "Failed to start SSE client");
-                        _config?.OnFeaturesRefreshed?.Invoke(false);
+                        NotifyFeaturesRefreshed(false);
                     }
                 });
             }

@@ -23,6 +23,8 @@ namespace GrowthBook.Api
         private readonly ConcurrentDictionary<string, byte> _tracked;
         private readonly SemaphoreSlim _refreshLock = new SemaphoreSlim(1, 1);
 
+        private Task<IDictionary<string, Feature>> _inFlightRefresh;
+
         public FeatureRepository(ILogger<FeatureRepository> logger, IGrowthBookFeatureCache cache, IGrowthBookFeatureRefreshWorker backgroundRefreshWorker, IRemoteEvaluationService remoteEvaluationService = null)
         {
             _logger = logger;
@@ -57,12 +59,23 @@ namespace GrowthBook.Api
                         "Cache expired: \'{CacheIsCacheExpired}\' and option to force refresh: \'{OptionsForceRefresh}\'",
                         _cache.IsCacheExpired, options?.ForceRefresh);
 
-                    // Use TaskFactory.StartNew to decouple from the current SynchronizationContext
-                    // This prevents threading issues in .NET Framework MVC when the original HttpContext
-                    // thread is no longer available after the HTTP request completes
-                    var taskFactory = new TaskFactory(cancellationToken ?? CancellationToken.None);
-                    var refreshTask = taskFactory.StartNew(async () =>
-                        await _backgroundRefreshWorker.RefreshCacheFromApi(cancellationToken)).Unwrap();
+                    var refreshTask = _inFlightRefresh;
+
+                    if (refreshTask == null || refreshTask.IsCompleted)
+                    {
+                        // Use TaskFactory.StartNew to decouple from the current SynchronizationContext
+                        // This prevents threading issues in .NET Framework MVC when the original HttpContext
+                        // thread is no longer available after the HTTP request completes
+                        var taskFactory = new TaskFactory(cancellationToken ?? CancellationToken.None);
+                        refreshTask = taskFactory.StartNew(async () =>
+                            await _backgroundRefreshWorker.RefreshCacheFromApi(cancellationToken)).Unwrap();
+
+                        _inFlightRefresh = refreshTask;
+                    }
+                    else
+                    {
+                        _logger.LogDebug("A cache refresh is already in flight, joining it rather than starting another");
+                    }
 
                     // When there aren't any features in the cache to begin with, we need to just wait until
                     // that has been officially refreshed to proceed (otherwise the caller gets nothing up front

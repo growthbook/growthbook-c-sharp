@@ -134,30 +134,45 @@ namespace GrowthBook.Api.SSE
                         
                         if (!response.IsSuccessStatusCode)
                         {
+                            if (IsSubscriptionOver(response.StatusCode))
+                            {
+                               _logger.LogInformation("SSE endpoint returned {StatusCode}, the subscription is over and will not be retried", response.StatusCode);
+                                SetConnectionStatus(SSEConnectionStatus.Disconnected);
+                                break;
+                            }
+
                             throw new HttpRequestException($"SSE connection failed with status code: {response.StatusCode}");
                         }
 
                         SetConnectionStatus(SSEConnectionStatus.Connected);
-                        _currentRetryAttempt = 0; // Reset retry counter on successful connection
-                        
+
+                        var deliveredEvents = false;
+
                         using (var stream = await response.Content.ReadAsStreamAsync())
                         using (var reader = new StreamReader(stream))
                         {
-                            await ProcessStreamAsync(reader, cancellationToken);
+                            deliveredEvents = await ProcessStreamAsync(reader, cancellationToken);
                         }
-                        
-                        // Connection closed normally - check if we should reconnect
-                        if (ShouldReconnect(_lastStatusCode.Value))
+
+                        if (deliveredEvents)
                         {
-                            _logger.LogInformation("SSE connection closed with status {StatusCode}, attempting to reconnect...", _lastStatusCode.Value);
-                            // Continue loop to retry connection
-                            continue;
+                           _currentRetryAttempt = 0;
                         }
-                        else
+
+                        if (!ShouldReconnect(_lastStatusCode.Value))
                         {
                             _logger.LogInformation("SSE connection closed with status {StatusCode}, not reconnecting", _lastStatusCode.Value);
                             break;
                         }
+
+                        _logger.LogInformation("SSE connection closed with status {StatusCode}, attempting to reconnect...", _lastStatusCode.Value);
+
+                        if (!await WaitBeforeReconnecting(cancellationToken))
+                        {
+                            break;
+                        }
+
+                        continue;
                     }
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -198,10 +213,15 @@ namespace GrowthBook.Api.SSE
             }
         }
 
-        private async Task ProcessStreamAsync(StreamReader reader, CancellationToken cancellationToken)
+        /// <summary>
+        /// Reads the stream to its end, returning whether it delivered any event. A connection that
+        /// delivered nothing is not evidence that the endpoint is healthy.
+        /// </summary>
+        private async Task<bool> ProcessStreamAsync(StreamReader reader, CancellationToken cancellationToken)
         {
             var buffer = new char[4096];
-            
+            var deliveredEvents = false;
+
             while (!cancellationToken.IsCancellationRequested)
             {
                 var bytesRead = await reader.ReadAsync(buffer, 0, buffer.Length);
@@ -216,9 +236,12 @@ namespace GrowthBook.Api.SSE
 
                 foreach (var sseEvent in events)
                 {
+                    deliveredEvents = true;
                     await ProcessEventAsync(sseEvent);
                 }
             }
+
+            return deliveredEvents;
         }
 
         private async Task ProcessEventAsync(SSEEvent sseEvent)
@@ -274,7 +297,17 @@ namespace GrowthBook.Api.SSE
         {
             // Exponential backoff with jitter
             var baseDelay = Math.Min(_retryTimeMs * Math.Pow(2, _currentRetryAttempt), 30000); // Max 30 seconds
-            var jitter = new Random().Next(0, 1000); // Add up to 1 second jitter
+
+            // Jitter in proportion to the delay. A flat second on top would dominate the short retry
+            // times a server can ask for with the SSE `retry:` field.
+            var jitterCeiling = (int)Math.Min(baseDelay / 2, 1000);
+            var jitter = 0;
+
+            if (jitterCeiling > 0)
+            {
+                jitter = new Random().Next(0, jitterCeiling);
+            }
+
             return (int)baseDelay + jitter;
         }
 
@@ -287,6 +320,50 @@ namespace GrowthBook.Api.SSE
         {
             var statusCodeInt = (int)statusCode;
             return statusCodeInt >= 200 && statusCodeInt < 300;
+        }
+
+        /// <summary>
+        /// Whether the server has ended the subscription rather than failed to serve it. Reconnecting
+        /// after one of these only repeats a request the server has already refused outright.
+        /// </summary>
+        private static bool IsSubscriptionOver(System.Net.HttpStatusCode statusCode)
+        {
+            return statusCode == System.Net.HttpStatusCode.Gone;
+        }
+
+        /// <summary>
+        /// Counts a reconnect and waits out the backoff before it. Returns false when the attempts are
+        /// spent or the wait was cancelled, meaning the caller should stop.
+        /// </summary>
+        private async Task<bool> WaitBeforeReconnecting(CancellationToken cancellationToken)
+        {
+            _currentRetryAttempt++;
+
+            if (_currentRetryAttempt >= _maxRetryAttempts)
+            {
+                _logger.LogWarning("SSE connection gave up after {Attempts} attempts", _currentRetryAttempt);
+                SetConnectionStatus(SSEConnectionStatus.Disconnected);
+
+                return false;
+            }
+
+            SetConnectionStatus(SSEConnectionStatus.Reconnecting);
+
+            var delay = CalculateRetryDelay();
+            _logger.LogInformation("Retrying SSE connection in {Delay}ms", delay);
+
+            try
+            {
+                await Task.Delay(delay, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                SetConnectionStatus(SSEConnectionStatus.Disconnected);
+
+                return false;
+            }
+
+            return true;
         }
 
         private void SetConnectionStatus(SSEConnectionStatus status)
