@@ -50,7 +50,13 @@ namespace GrowthBook.Services
         /// <see cref="StickyAssignmentsDocument.FormattedAttribute"/>.
         /// </param>
         /// <param name="cancellationToken">Used for monitoring the need to cancel the retrieval.</param>
-        /// <returns>Documents keyed by their formatted attribute. Keys with nothing stored are omitted.</returns>
+        /// <returns>
+        /// Documents keyed by their formatted attribute. Keys with nothing stored are omitted. Return
+        /// <c>null</c> when the store could not be read at all, which is not the same as reading it and
+        /// finding nothing: the result replaces the assignments already loaded, so an empty set for a store
+        /// that never answered would drop the variations every user had been bucketed into. A <c>null</c>
+        /// leaves them in place instead.
+        /// </returns>
         Task<IDictionary<string, StickyAssignmentsDocument>> GetAllAssignmentsAsync(IEnumerable<string> attributes, CancellationToken cancellationToken = default);
     }
 }

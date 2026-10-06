@@ -1328,8 +1328,23 @@ namespace GrowthBook
 
                 _logger.LogInformation($"Loading features has completed, retrieved '{featureCount}' features");
 
-                RefreshStickyBucketAssignments();
-                await LoadStickyBucketAssignmentsAsync(cancellationToken);
+                // The features are already applied by this point, so a sticky bucket store that is down must not
+                // turn a load that succeeded into a reported failure. Evaluation still works without the refreshed
+                // assignments - it just can't honour previously stored variations until a later refresh lands.
+                // Cancellation is left to propagate, since that is the caller asking to stop rather than a fault.
+                try
+                {
+                    RefreshStickyBucketAssignments();
+                    await LoadStickyBucketAssignmentsAsync(cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Features were loaded, but refreshing the sticky bucket assignments failed");
+                }
 
                 return FeatureLoadResult.CreateSuccess(featureCount);
             }

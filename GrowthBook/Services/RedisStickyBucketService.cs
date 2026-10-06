@@ -80,14 +80,21 @@ namespace GrowthBook.Services
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to read '{KeyCount}' sticky bucket document(s) from Redis, continuing without them", keys.Length);
+                // Null rather than an empty set: the caller replaces the assignments it holds with whatever comes
+                // back, so reporting "nothing stored" for a store that never answered would drop the variations
+                // every user had already been bucketed into. Null says "no answer", and the caller keeps what it has.
+                _logger.LogError(ex, "Failed to read '{KeyCount}' sticky bucket document(s) from Redis, leaving the assignments already loaded in place", keys.Length);
 
-                return documents;
+                return null;
             }
 
             if (values is null)
             {
-                return documents;
+                // The contract is one entry per key, nulls included, so no array at all is a client that failed
+                // rather than a store with nothing in it. Same reasoning as above.
+                _logger.LogError("Reading '{KeyCount}' sticky bucket document(s) from Redis returned no results at all, leaving the assignments already loaded in place", keys.Length);
+
+                return null;
             }
 
             for (var index = 0; index < values.Length && index < formattedAttributes.Length; index++)
@@ -109,6 +116,12 @@ namespace GrowthBook.Services
             var formattedAttribute = $"{attributeName}||{attributeValue}";
 
             var documents = await GetAllAssignmentsAsync(new[] { formattedAttribute }, cancellationToken).ConfigureAwait(false);
+
+            // Null means the read failed, which for a single document is indistinguishable from nothing stored.
+            if (documents is null)
+            {
+                return null;
+            }
 
             return documents.TryGetValue(formattedAttribute, out var document) ? document : null;
         }
