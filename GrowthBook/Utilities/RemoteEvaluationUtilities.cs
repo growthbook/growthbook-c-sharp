@@ -117,6 +117,40 @@ namespace GrowthBook.Utilities
         }
 
         /// <summary>
+        /// Determines if remote evaluation should be triggered based on forced feature changes.
+        /// </summary>
+        /// <param name="oldForcedFeatures">Previous forced features</param>
+        /// <param name="newForcedFeatures">New forced features</param>
+        /// <returns>True if remote evaluation should be triggered</returns>
+        public static bool ShouldTriggerRemoteEvaluationForForcedFeatures(
+            IDictionary<string, JToken> oldForcedFeatures,
+            IDictionary<string, JToken> newForcedFeatures)
+        {
+            if (oldForcedFeatures == null && newForcedFeatures == null)
+                return false;
+
+            if (oldForcedFeatures == null || newForcedFeatures == null)
+                return true;
+
+            if (oldForcedFeatures.Count != newForcedFeatures.Count)
+                return true;
+
+            foreach (var kvp in oldForcedFeatures)
+            {
+                if (!newForcedFeatures.TryGetValue(kvp.Key, out var newValue))
+                    return true;
+
+                // DeepEquals rather than reference or ToString comparison: a forced value is arbitrary JSON, so
+                // two separately built tokens for the same value must compare equal, and a JSON null must not
+                // look the same as a missing key.
+                if (!JToken.DeepEquals(kvp.Value ?? JValue.CreateNull(), newValue ?? JValue.CreateNull()))
+                    return true;
+            }
+
+            return false;
+        }
+
+        /// <summary>
         /// Gets relevant attributes based on cache key attributes filter.
         /// </summary>
         /// <param name="allAttributes">All available attributes</param>

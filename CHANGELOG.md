@@ -66,6 +66,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed `RedisStickyBucketService` publishing a stored document under the identifier named inside its JSON rather
   than the key it was read from, so an entry written against one identifier could hand out another user's
   variation. A document that doesn't match the key it was read under is ignored.
+- Fixed a sticky bucket store that could not be read reporting an empty set of assignments, which had the caller
+  replace everything it held with nothing and unstick every user it had already bucketed. A failed read now
+  answers `null`, which `IAsyncStickyBucketService.GetAllAssignmentsAsync` defines as "no answer" and which
+  leaves the loaded assignments in place. Previously only a cancelled read was distinguished this way.
+- Fixed a sticky bucket store failure turning a successful feature load into a reported failure. The features are
+  applied before the assignments are refreshed, so the refresh no longer decides whether the load succeeded.
+- Forced features are now part of the remote evaluation payload, and changing them triggers a re-evaluation the
+  same way changing attributes or forced variations does. A forced value short-circuits evaluation of its own
+  feature locally either way, but a feature that reaches a forced one through a prerequisite is resolved
+  server-side, and applying the override locally afterwards cannot correct that result. Added
+  `SetForcedFeaturesAsync` for callers that need to wait for the re-evaluation.
 
 ## [1.2.0]
 

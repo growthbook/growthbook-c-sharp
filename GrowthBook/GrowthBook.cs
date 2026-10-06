@@ -63,6 +63,7 @@ namespace GrowthBook
         private IDictionary<string, int> _forcedVariations;
         private JObject _previousAttributes;
         private IDictionary<string, int> _previousForcedVariations;
+        private IDictionary<string, JToken> _previousForcedFeatures;
         private Task _pendingRemoteEvaluation;
         private long _remoteEvaluationGeneration;
         private readonly List<Action<Experiment, ExperimentResult>> _subscribers
@@ -108,6 +109,7 @@ namespace GrowthBook
             _savedGroups = context.SavedGroups;
             _previousAttributes = context.Attributes?.DeepClone() as JObject;
             _previousForcedVariations = context.ForcedVariations?.ToDictionary(k => k.Key, v => v.Value);
+            _previousForcedFeatures = new Dictionary<string, JToken>(_forcedFeatures);
 
 
             var config = new GrowthBookConfigurationOptions
@@ -478,7 +480,10 @@ namespace GrowthBook
                     _pendingRemoteEvaluation = null;
                     Features.Clear();
                     _trackingCallback = null;
-                    _forcedFeatures.Clear();
+                    // Swapped for an empty set rather than cleared in place: the dictionary is handed to the
+                    // context a remote evaluation request is built from, and a request still in flight would
+                    // otherwise see it emptied underneath it.
+                    _forcedFeatures = new Dictionary<string, JToken>();
                     _assigned.Clear();
                     _tracked.Clear();
                     _subscribers.Clear();
@@ -584,18 +589,70 @@ namespace GrowthBook
         /// <summary>
         /// Replaces the forced feature value overrides for this instance.
         /// </summary>
+        /// <remarks>
+        /// Forced features are part of the remote evaluation payload, so this starts a remote evaluation in the
+        /// background when the change requires one. A forced value short-circuits evaluation of its own feature
+        /// either way, but a feature that depends on a forced one through a prerequisite is resolved remotely,
+        /// and the server can only honour the override if it was told about it. Use
+        /// <see cref="SetForcedFeaturesAsync(IDictionary{string, JToken}, CancellationToken?)"/> to wait for that
+        /// evaluation instead.
+        /// </remarks>
+        /// <param name="forcedFeatures">The feature keys to force to a specific value, or null to clear them.</param>
         public void SetForcedFeatures(IDictionary<string, JToken> forcedFeatures)
         {
-            if (forcedFeatures != null)
+            if (SwapInForcedFeatures(forcedFeatures))
             {
-                _forcedFeatures = new Dictionary<string, JToken>(forcedFeatures);
+                // The caller has no way to wait for this, so the task is kept around for the next feature load
+                // to await. Callers that need the refreshed features can use SetForcedFeaturesAsync.
+                StartRemoteEvaluation(null);
             }
-            else
+        }
+
+        /// <summary>
+        /// Replaces the forced feature value overrides for this instance and, in remote evaluation mode, waits
+        /// for the features to be evaluated again against them.
+        /// </summary>
+        /// <remarks>
+        /// Behaves like <see cref="SetForcedFeatures(IDictionary{string, JToken})"/>, except that the returned task
+        /// only completes once any triggered remote evaluation has finished.
+        /// </remarks>
+        /// <param name="forcedFeatures">The feature keys to force to a specific value, or null to clear them.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A <see cref="Task"/> that represents the update and any remote evaluation it triggered.</returns>
+        public Task SetForcedFeaturesAsync(IDictionary<string, JToken> forcedFeatures, CancellationToken? cancellationToken = null)
+        {
+            if (!SwapInForcedFeatures(forcedFeatures))
             {
-                _forcedFeatures = new Dictionary<string, JToken>();
+                return Task.CompletedTask;
             }
 
-            _logger?.LogDebug("Set {Count} forced feature override(s)", _forcedFeatures.Count);
+            return StartRemoteEvaluation(cancellationToken);
+        }
+
+        /// <summary>
+        /// Publishes the provided forced features as the current ones.
+        /// </summary>
+        /// <param name="forcedFeatures">The forced features to apply.</param>
+        /// <returns>True if the change requires a remote evaluation.</returns>
+        private bool SwapInForcedFeatures(IDictionary<string, JToken> forcedFeatures)
+        {
+            lock (_attributesLock)
+            {
+                // Copied rather than stored directly, so that a caller mutating their dictionary afterwards can't
+                // change what evaluations and in-flight requests are running against. Published before the
+                // comparison, the same way the attributes and forced variations paths work.
+                _forcedFeatures = forcedFeatures != null
+                    ? new Dictionary<string, JToken>(forcedFeatures)
+                    : new Dictionary<string, JToken>();
+
+                var shouldTriggerRemoteEvaluation = ShouldTriggerRemoteEvaluation(_attributes);
+
+                SnapshotRemoteEvaluationState(_attributes);
+
+                _logger?.LogDebug("Set {Count} forced feature override(s)", _forcedFeatures.Count);
+
+                return shouldTriggerRemoteEvaluation;
+            }
         }
 
         /// <summary>
@@ -916,6 +973,7 @@ namespace GrowthBook
 
             _previousAttributes = attributes?.DeepClone() as JObject;
             _previousForcedVariations = _forcedVariations?.ToDictionary(k => k.Key, v => v.Value);
+            _previousForcedFeatures = _forcedFeatures?.ToDictionary(k => k.Key, v => v.Value);
         }
 
         /// <summary>
@@ -1877,7 +1935,13 @@ namespace GrowthBook
                 _forcedVariations
             );
 
-            return attributesChanged || forcedVariationsChanged;
+            // Check if forced features changed
+            var forcedFeaturesChanged = RemoteEvaluationUtilities.ShouldTriggerRemoteEvaluationForForcedFeatures(
+                _previousForcedFeatures,
+                _forcedFeatures
+            );
+
+            return attributesChanged || forcedVariationsChanged || forcedFeaturesChanged;
         }
 
         /// <summary>
@@ -1932,6 +1996,10 @@ namespace GrowthBook
                 CacheKeyAttributes = _context.CacheKeyAttributes,
                 Attributes = Attributes,
                 ForcedVariations = ForcedVariations,
+                // Without these the server evaluates as though nothing were forced. The override short-circuits
+                // its own feature locally either way, but a feature that reaches a forced one through a
+                // prerequisite is resolved server-side, and applying the override afterwards cannot correct it.
+                ForcedFeatures = _forcedFeatures,
                 Url = Url
             };
         }
