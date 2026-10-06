@@ -320,6 +320,69 @@ public class ContextEncryptedFeaturesTests
         captured.Should().NotContain("encrypted-flag\":{\"defaultValue", "because logging the decrypted payload defeats the point of encrypting it");
     }
 
+    /// <summary>
+    /// The async evaluation methods load from the repository before evaluating. With a payload supplied
+    /// on the Context there is nothing to load and - with no client key - nowhere to load it from, so the
+    /// load is at best a wasted request and at worst replaces the decrypted features with its own result.
+    /// </summary>
+    [Fact]
+    public async Task AnEncryptedPayloadIsEvaluatedByTheAsyncMethodsWithoutAnyNetworkCall()
+    {
+        using var growthBook = new GrowthBook(new Context
+        {
+            Attributes = JObject.FromObject(new { id = "user-1" }),
+            EncryptedFeatures = Encrypt(FeaturePayload),
+            DecryptionKey = DecryptionKey
+        });
+
+        (await growthBook.IsOnAsync("encrypted-flag"))
+            .Should().BeTrue("because the payload is already here - evaluating it must not depend on an API the caller never configured");
+
+        (await growthBook.EvalFeatureAsync("encrypted-flag")).On.Should().BeTrue();
+        (await growthBook.GetFeatureValueAsync("encrypted-flag", false)).Should().BeTrue();
+
+        growthBook.Features.Should().ContainKey("encrypted-flag",
+            "and the decrypted features are still the ones in effect afterwards");
+    }
+
+    [Fact]
+    public async Task PlaintextContextFeaturesAreAlsoEvaluatedByTheAsyncMethodsWithoutANetworkCall()
+    {
+        using var growthBook = new GrowthBook(new Context
+        {
+            Attributes = JObject.FromObject(new { id = "user-1" }),
+            Features = new Dictionary<string, Feature> { ["local-flag"] = new Feature { DefaultValue = true } }
+        });
+
+        (await growthBook.IsOnAsync("local-flag")).Should().BeTrue(
+            "because an inline payload with no client key is the same offline case");
+    }
+
+    /// <summary>
+    /// The load still has to happen when there is something to load: a client key means the caller
+    /// expects the API to be consulted, whatever else they supplied up front.
+    /// </summary>
+    [Fact]
+    public async Task AClientKeyStillMakesTheAsyncMethodsLoadFromTheRepository()
+    {
+        var repository = Substitute.For<IGrowthBookFeatureRepository>();
+        repository.GetFeatures(Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken?>())
+            .Returns(Task.FromResult<IDictionary<string, Feature>>(
+                new Dictionary<string, Feature> { ["from-api"] = new Feature { DefaultValue = true } }));
+
+        using var growthBook = new GrowthBook(new Context
+        {
+            Attributes = JObject.FromObject(new { id = "user-1" }),
+            ClientKey = "sdk-key",
+            EncryptedFeatures = Encrypt(FeaturePayload),
+            DecryptionKey = DecryptionKey,
+            FeatureRepository = repository
+        });
+
+        (await growthBook.IsOnAsync("from-api")).Should().BeTrue(
+            "because a configured repository is still consulted - this fix is about there being nothing to consult");
+    }
+
     private sealed class CapturingLoggerProvider : Microsoft.Extensions.Logging.ILoggerProvider
     {
         private readonly TextWriter _writer;

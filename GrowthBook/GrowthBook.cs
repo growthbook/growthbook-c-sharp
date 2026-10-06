@@ -39,6 +39,11 @@ namespace GrowthBook
         private readonly ILoggerFactory _loggerFactory;
         private readonly bool _ownsLoggerFactory;
         private readonly Context _context;
+
+        /// <summary>
+        /// Whether there is anywhere to fetch features from at all.
+        /// </summary>
+        private readonly bool _canFetchFeatures;
         private JObject _previousAttributes;
         private IDictionary<string, int> _previousForcedVariations;
         private readonly List<Action<Experiment, ExperimentResult>> _subscribers
@@ -55,6 +60,7 @@ namespace GrowthBook
             ValidateRemoteEvaluationConfiguration(context);
 
             _context = context;
+            _canFetchFeatures = context.FeatureRepository != null || !string.IsNullOrWhiteSpace(context.ClientKey);
             Enabled = context.Enabled;
             Attributes = context.Attributes;
             Url = context.Url;
@@ -361,7 +367,7 @@ namespace GrowthBook
         /// <returns><c>true</c> if the feature is on; otherwise, <c>false</c>.</returns>
         public async Task<bool> IsOnAsync(string key, CancellationToken? cancellationToken = null)
         {
-            await LoadFeatures(cancellationToken: cancellationToken);
+            await EnsureFeaturesLoaded(cancellationToken);
             var result = EvaluateFeature(key);
             var value = result.Value;
             return !value.IsNull() && value.ToObject<bool>();
@@ -466,9 +472,28 @@ namespace GrowthBook
 
         public async Task<FeatureResult> EvalFeatureAsync(string featureId, CancellationToken? cancellationToken = null)
         {
-            await LoadFeatures(cancellationToken: cancellationToken);
+            await EnsureFeaturesLoaded(cancellationToken);
 
             return EvaluateFeature(featureId);
+        }
+
+        /// <summary>
+        /// Loads the features these methods evaluate against, unless there is nowhere to load them from.
+        /// A payload supplied on the <see cref="Context"/> - plaintext or encrypted - with no client key
+        /// and no repository of the caller's own is a deliberately offline setup: fetching would call an
+        /// API that was never configured, and a response that did arrive would replace the payload the
+        /// caller supplied.
+        /// </summary>
+        private async Task EnsureFeaturesLoaded(CancellationToken? cancellationToken)
+        {
+            if (!_canFetchFeatures)
+            {
+                _logger.LogDebug("No client key and no supplied repository, evaluating the features the context carried");
+
+                return;
+            }
+
+            await LoadFeatures(cancellationToken: cancellationToken);
         }
 
         private FeatureResult EvaluateFeature(string featureId, ISet<string> evaluatedFeatures = default)
