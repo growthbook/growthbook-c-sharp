@@ -10,8 +10,15 @@ namespace GrowthBook.Tests.CustomTests
     /// Tests for the $inGroup / $notInGroup saved group operators, with emphasis on the inputs the
     /// conformance fixtures don't reach. Every $inGroup case in standard-cases.json supplies the hash
     /// attribute, so the absent-attribute path is invisible to the spec suite and has to be pinned here.
-    /// The reference behavior these assert against is the JS SDK's evalOperatorCondition, which applies
-    /// no null guard at all: <c>isIn(actual, savedGroups[expected] || [])</c>.
+    /// The reference behavior these assert against is the JS SDK's evalOperatorCondition:
+    /// <code>
+    /// const values = getSavedGroupArrayValues(savedGroups[expected]);
+    /// return values === null ? false : isIn(actual, values);
+    /// </code>
+    /// Two things follow from that and are easy to get wrong. The null check sits outside the
+    /// negation, so an unresolvable group makes both operators false rather than $notInGroup true.
+    /// And the attribute reaches isIn through <c>getPath</c>, which returns null both for a key that
+    /// is absent and for one set to null, so the two cannot be told apart here.
     /// </summary>
     public class SavedGroupOperatorTests
     {
@@ -80,8 +87,13 @@ namespace GrowthBook.Tests.CustomTests
                 .Should().BeFalse("because an absent attribute cannot be a member of the group");
         }
 
+        /// <summary>
+        /// Only while the group resolves. A group that doesn't is the one case where the reference
+        /// makes both false on purpose, which <see cref="AnUnresolvableSavedGroupMakesBothOperatorsFalse"/>
+        /// covers.
+        /// </summary>
         [Fact]
-        public void TheTwoOperatorsNeverAgreeForAnAbsentAttribute()
+        public void TheTwoOperatorsNeverAgreeForAnAbsentAttributeWhenTheGroupResolves()
         {
             var attributes = JObject.Parse(@"{ ""other"": ""value"" }");
 
@@ -93,18 +105,26 @@ namespace GrowthBook.Tests.CustomTests
         }
 
         /// <summary>
-        /// The two differ only when the group lists a null member, which
-        /// <see cref="AnAbsentAttributeDoesNotMatchANullMemberOfTheGroup"/> covers. For every other
-        /// group they have to agree, since neither has a value the group could contain.
+        /// <c>getPath</c> returns null for a key that is absent and for one set to null alike, so the
+        /// two reach the operator as the same value and can never diverge - not even for a group that
+        /// lists a null member, where both of them match it.
         /// </summary>
         [Fact]
-        public void AnAbsentAttributeBehavesTheSameAsAnExplicitJsonNullForAGroupOfValues()
+        public void AnAbsentAttributeBehavesTheSameAsAnExplicitJsonNull()
         {
+            const string groupsWithNullMember = @"{ ""admins"": [ ""user-1"", null ] }";
+
             var absent = JObject.Parse(@"{ ""other"": ""value"" }");
             var explicitNull = JObject.Parse(@"{ ""id"": null }");
 
-            Eval(absent, InGroup($"\"{GroupName}\"")).Should().Be(Eval(explicitNull, InGroup($"\"{GroupName}\"")));
+            Eval(absent, InGroup($"\"{GroupName}\"")).Should().Be(Eval(explicitNull, InGroup($"\"{GroupName}\"")),
+                "because a JValue wrapping JSON null and a missing key are both 'no value' and must not diverge");
             Eval(absent, NotInGroup($"\"{GroupName}\"")).Should().Be(Eval(explicitNull, NotInGroup($"\"{GroupName}\"")));
+
+            Eval(absent, InGroup($"\"{GroupName}\""), groupsWithNullMember)
+                .Should().Be(Eval(explicitNull, InGroup($"\"{GroupName}\""), groupsWithNullMember));
+            Eval(absent, NotInGroup($"\"{GroupName}\""), groupsWithNullMember)
+                .Should().Be(Eval(explicitNull, NotInGroup($"\"{GroupName}\""), groupsWithNullMember));
         }
 
         [Fact]
@@ -154,24 +174,24 @@ namespace GrowthBook.Tests.CustomTests
         }
 
         /// <summary>
-        /// The reference distinguishes an absent attribute from one set to null: isIn passes
-        /// <c>undefined</c> for the first and <c>null</c> for the second, and <c>[null].includes(undefined)</c>
-        /// is false. Treating both as a JSON null would silently add every user with no value for
-        /// the attribute to any group that happens to list one.
+        /// A group listing a null member matches a user with no value for the attribute, because
+        /// <c>getPath</c> hands the operator a null for an absent key and <c>[null].includes(null)</c>
+        /// is true. Guarding the absent case away would make this SDK stricter than the reference, so
+        /// the same targeting rule would resolve differently here than in JS.
         /// </summary>
         [Fact]
-        public void AnAbsentAttributeDoesNotMatchANullMemberOfTheGroup()
+        public void AnAbsentAttributeMatchesANullMemberOfTheGroup()
         {
             const string groupsWithNullMember = @"{ ""admins"": [ ""user-1"", null ] }";
             var absent = JObject.Parse(@"{ ""other"": ""value"" }");
 
             Eval(absent, InGroup($"\"{GroupName}\""), groupsWithNullMember)
-                .Should().BeFalse("because a user with no value for the attribute is not the group's null member");
-            Eval(absent, NotInGroup($"\"{GroupName}\""), groupsWithNullMember).Should().BeTrue();
+                .Should().BeTrue("because the reference compares the absent attribute's null against the member and finds it");
+            Eval(absent, NotInGroup($"\"{GroupName}\""), groupsWithNullMember).Should().BeFalse();
         }
 
         [Fact]
-        public void AnAttributeExplicitlySetToNullStillMatchesANullMemberOfTheGroup()
+        public void AnAttributeExplicitlySetToNullMatchesANullMemberOfTheGroup()
         {
             const string groupsWithNullMember = @"{ ""admins"": [ ""user-1"", null ] }";
             var explicitNull = JObject.Parse(@"{ ""id"": null }");
@@ -182,23 +202,61 @@ namespace GrowthBook.Tests.CustomTests
         }
 
         /// <summary>
-        /// A saved group that is not an array is malformed payload, not a reason to abandon the
-        /// evaluation: the condition has to produce a result the caller can act on.
+        /// A group that is defined but isn't a usable list is malformed payload, not a reason to
+        /// abandon the evaluation - but it is also not an empty group. The SDK cannot say whether a
+        /// user belongs to a group it could not read, so both operators answer false. Negating the
+        /// unresolvable case instead would have <c>$notInGroup</c> target everyone on a bad payload.
         /// </summary>
         [Theory]
         [InlineData(@"{ ""admins"": null }")]
         [InlineData(@"{ ""admins"": ""user-1"" }")]
         [InlineData(@"{ ""admins"": 42 }")]
         [InlineData(@"{ ""admins"": { ""user-1"": true } }")]
-        public void ANonArraySavedGroupBehavesAsAnEmptyGroup(string savedGroups)
+        [InlineData(@"{ ""admins"": { ""type"": ""list"", ""values"": ""user-1"" } }")]
+        public void AnUnresolvableSavedGroupMakesBothOperatorsFalse(string savedGroups)
         {
             var present = JObject.Parse(@"{ ""id"": ""user-1"" }");
             var absent = JObject.Parse(@"{ ""other"": ""value"" }");
 
             Eval(present, InGroup($"\"{GroupName}\""), savedGroups).Should().BeFalse();
-            Eval(present, NotInGroup($"\"{GroupName}\""), savedGroups).Should().BeTrue();
+            Eval(present, NotInGroup($"\"{GroupName}\""), savedGroups).Should().BeFalse(
+                "because the group could not be read, which is not the same as the user not being in it");
             Eval(absent, InGroup($"\"{GroupName}\""), savedGroups).Should().BeFalse();
-            Eval(absent, NotInGroup($"\"{GroupName}\""), savedGroups).Should().BeTrue();
+            Eval(absent, NotInGroup($"\"{GroupName}\""), savedGroups).Should().BeFalse();
+        }
+
+        /// <summary>
+        /// A group nobody defined is empty rather than unreadable, so a user is legitimately not in
+        /// it and <c>$notInGroup</c> holds. This is the case that separates "no group" from
+        /// <see cref="AnUnresolvableSavedGroupMakesBothOperatorsFalse"/>.
+        /// </summary>
+        [Fact]
+        public void AGroupThatIsNotDefinedAtAllIsAnEmptyGroupRatherThanAnUnreadableOne()
+        {
+            var present = JObject.Parse(@"{ ""id"": ""user-1"" }");
+
+            Eval(present, InGroup("\"nobody-defined-this\""), @"{ ""admins"": [ ""user-1"" ] }").Should().BeFalse();
+            Eval(present, NotInGroup("\"nobody-defined-this\""), @"{ ""admins"": [ ""user-1"" ] }").Should().BeTrue(
+                "because an undefined group is empty, and a user is genuinely not a member of an empty group");
+        }
+
+        /// <summary>
+        /// Alongside a bare array, the reference accepts a group delivered as
+        /// <c>{ type: "list", values: [...] }</c>. Reading only the array shape would silently treat
+        /// every group sent this way as empty.
+        /// </summary>
+        [Fact]
+        public void AListShapedSavedGroupIsReadLikeAPlainArray()
+        {
+            const string listShaped = @"{ ""admins"": { ""type"": ""list"", ""values"": [ ""user-1"" ] } }";
+
+            var member = JObject.Parse(@"{ ""id"": ""user-1"" }");
+            var nonMember = JObject.Parse(@"{ ""id"": ""user-9"" }");
+
+            Eval(member, InGroup($"\"{GroupName}\""), listShaped).Should().BeTrue();
+            Eval(member, NotInGroup($"\"{GroupName}\""), listShaped).Should().BeFalse();
+            Eval(nonMember, InGroup($"\"{GroupName}\""), listShaped).Should().BeFalse();
+            Eval(nonMember, NotInGroup($"\"{GroupName}\""), listShaped).Should().BeTrue();
         }
     }
 }
