@@ -23,6 +23,13 @@ public class AsyncStickyBucketServiceTests : UnitTest
         public int GetAllAssignmentsCallCount { get; private set; }
         public List<StickyAssignmentsDocument> SavedDocuments { get; } = new List<StickyAssignmentsDocument>();
         public Exception SaveException { get; set; }
+        public Exception ReadException { get; set; }
+
+        /// <summary>
+        /// Answers null, which the interface defines as "the store could not be read" rather than
+        /// "the store holds nothing".
+        /// </summary>
+        public bool ReportReadsAsUnanswerable { get; set; }
 
         public void Seed(StickyAssignmentsDocument document) => _documents[document.FormattedAttribute] = document;
 
@@ -50,6 +57,16 @@ public class AsyncStickyBucketServiceTests : UnitTest
         {
             await Task.Yield();
             GetAllAssignmentsCallCount++;
+
+            if (ReadException != null)
+            {
+                throw ReadException;
+            }
+
+            if (ReportReadsAsUnanswerable)
+            {
+                return null;
+            }
 
             return attributes
                 .Where(_documents.ContainsKey)
@@ -257,6 +274,70 @@ public class AsyncStickyBucketServiceTests : UnitTest
         result.ExperimentResult.StickyBucketUsed.Should().BeTrue(
             "because rebinding to user-2 must pull that user's assignment without a separate LoadStickyBucketAssignmentsAsync call");
         result.On.Should().BeTrue("because user-2's stored assignment points at variation index 1");
+    }
+
+    /// <summary>
+    /// A store that cannot be read is not a store that is empty. Replacing the loaded assignments with
+    /// nothing on a failed read would unstick every user the instance had already bucketed, which is the
+    /// one thing sticky bucketing exists to prevent.
+    /// </summary>
+    [Fact]
+    public async Task AStoreThatCannotBeReadLeavesTheLoadedAssignmentsInPlace()
+    {
+        const string FeatureName = "test-feature";
+
+        var service = new FakeAsyncStickyBucketService();
+        await service.SaveAssignmentsAsync(new StickyAssignmentsDocument(
+            "id",
+            "user-1",
+            new Dictionary<string, string> { [$"{FeatureName}__0"] = "1" }));
+
+        var context = new Context
+        {
+            Attributes = JObject.FromObject(new { id = "user-1" }),
+            Features = new Dictionary<string, Feature> { [FeatureName] = CreateExperimentFeature() },
+            AsyncStickyBucketService = service
+        };
+
+        var growthBook = new GrowthBook(context);
+
+        await growthBook.LoadStickyBucketAssignmentsAsync();
+        growthBook.EvalFeature(FeatureName).ExperimentResult.StickyBucketUsed.Should().BeTrue(
+            "because the assignment was there to be loaded in the first place");
+
+        service.ReportReadsAsUnanswerable = true;
+
+        await growthBook.LoadStickyBucketAssignmentsAsync();
+
+        growthBook.EvalFeature(FeatureName).ExperimentResult.StickyBucketUsed.Should().BeTrue(
+            "because a store that could not answer must leave the assignments already held alone");
+    }
+
+    /// <summary>
+    /// The features are applied before the sticky bucket refresh runs, so a store that is down has to leave
+    /// the load reported as the success it was. Evaluation still works without the refreshed assignments.
+    /// </summary>
+    [Fact]
+    public async Task AStickyBucketStoreFailureDoesNotFailAFeatureLoad()
+    {
+        const string FeatureName = "test-feature";
+
+        var service = new FakeAsyncStickyBucketService { ReadException = new InvalidOperationException("the store is down") };
+
+        var context = new Context
+        {
+            Attributes = JObject.FromObject(new { id = "user-1" }),
+            Features = new Dictionary<string, Feature> { [FeatureName] = CreateExperimentFeature() },
+            AsyncStickyBucketService = service,
+            FeatureRepository = new FakeFeatureRepository(new Dictionary<string, Feature> { [FeatureName] = CreateExperimentFeature() })
+        };
+
+        var growthBook = new GrowthBook(context);
+
+        var result = await growthBook.LoadFeaturesWithResult();
+
+        result.Success.Should().BeTrue("because the features were retrieved and applied before the store was ever consulted");
+        growthBook.Features.Should().ContainKey(FeatureName);
     }
 
     private sealed class FakeFeatureRepository : IGrowthBookFeatureRepository

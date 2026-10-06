@@ -34,6 +34,9 @@ public class RedisStickyBucketServiceTests
         public Exception ThrowOnMultiGet { get; set; }
         public Exception ThrowOnSet { get; set; }
 
+        // A client that breaks the one-entry-per-key contract by answering with no array at all.
+        public bool ReturnNullFromMultiGet { get; set; }
+
         public void Put(string key, string value)
         {
             lock (_lock)
@@ -60,6 +63,11 @@ public class RedisStickyBucketServiceTests
             if (ThrowOnMultiGet != null)
             {
                 throw ThrowOnMultiGet;
+            }
+
+            if (ReturnNullFromMultiGet)
+            {
+                return Task.FromResult<string[]>(null);
             }
 
             return Task.FromResult(keys.Select(Get).ToArray());
@@ -240,8 +248,13 @@ public class RedisStickyBucketServiceTests
         read.Should().NotBeNull("because reads have to use the same prefix as writes");
     }
 
+    /// <summary>
+    /// An unreachable store must not break evaluation, but it must not look like an empty one either. The
+    /// caller replaces the assignments it holds with whatever comes back, so an empty set here would drop the
+    /// variations every user had already been bucketed into. Null says "no answer" and leaves them in place.
+    /// </summary>
     [Fact]
-    public async Task ARedisFailureOnReadDegradesToNoAssignments()
+    public async Task ARedisFailureOnReadReportsNoAnswerRatherThanAnEmptyStore()
     {
         var redis = new FakeRedis { ThrowOnMultiGet = new TimeoutException("redis is down") };
         var service = new RedisStickyBucketService(redis);
@@ -249,7 +262,22 @@ public class RedisStickyBucketServiceTests
         Func<Task> read = () => service.GetAllAssignmentsAsync(new[] { "id||user-1" });
 
         await read.Should().NotThrowAsync("because an unreachable store must degrade to unsticky bucketing rather than break evaluation");
-        (await service.GetAllAssignmentsAsync(new[] { "id||user-1" })).Should().BeEmpty();
+        (await service.GetAllAssignmentsAsync(new[] { "id||user-1" })).Should().BeNull(
+            "because an empty set would be read as 'the store holds nothing' and wipe the assignments already loaded");
+    }
+
+    /// <summary>
+    /// The contract is one entry per key, nulls included, so no array at all is a client that failed rather
+    /// than a store with nothing in it.
+    /// </summary>
+    [Fact]
+    public async Task AReadThatReturnsNoArrayAtAllIsTreatedAsAFailure()
+    {
+        var redis = new FakeRedis { ReturnNullFromMultiGet = true };
+        var service = new RedisStickyBucketService(redis);
+
+        (await service.GetAllAssignmentsAsync(new[] { "id||user-1" })).Should().BeNull(
+            "because a client that answered with nothing cannot be distinguished from one that failed");
     }
 
     [Fact]
@@ -436,15 +464,28 @@ public class RedisStickyBucketServiceTests
     }
 
     [Fact]
-    public async Task AFailedReadIsStillReportedAsNoAssignmentsRatherThanThrowing()
+    public async Task AFailedReadIsReportedAsNoAnswerRatherThanThrowing()
     {
         var redis = new FakeRedis { ThrowOnMultiGet = new InvalidOperationException("redis is down") };
         var service = new RedisStickyBucketService(redis);
 
         var documents = await service.GetAllAssignmentsAsync(new[] { "id||user-1" });
 
-        documents.Should().BeEmpty(
-            "because an unreachable store must not fail an evaluation - only a cancelled read is the caller's own doing");
+        documents.Should().BeNull(
+            "because an unreachable store must not fail an evaluation - only a cancelled read is the caller's own doing - but it must not pass for an empty one either");
+    }
+
+    /// <summary>
+    /// The single-document read cannot tell a failed read from an empty store, since both leave it with no
+    /// document. It answers null for both, which is what a caller asking for one identifier can act on.
+    /// </summary>
+    [Fact]
+    public async Task AFailedSingleReadAnswersWithNoDocument()
+    {
+        var redis = new FakeRedis { ThrowOnMultiGet = new InvalidOperationException("redis is down") };
+        var service = new RedisStickyBucketService(redis);
+
+        (await service.GetAssignmentsAsync("id", "user-1")).Should().BeNull();
     }
 
     /// <summary>
