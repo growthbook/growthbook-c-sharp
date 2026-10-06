@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Stopped writing the decryption key to the log. It was logged verbatim at debug level on both feature fetch paths,
+  so anyone with log access could decrypt the payloads it protects. Rotate the key if debug logging has been enabled
+  where those logs are retained or shipped elsewhere.
+- Stopped logging feature payload bodies, both the raw API response and the decrypted one. A payload carries saved
+  groups, which are typically lists of user identifiers, so it is personal data. Character counts are logged instead.
 - Added forced features, via `Context.ForcedFeatures` and `GrowthBook.SetForcedFeatures(...)`. A forced value
   short-circuits evaluation for that key and is reported with the `override` source, matching the reference SDKs.
 - Added `FeatureResult.RuleId`, carrying the id of the rule that produced the result, so a caller can tell which
