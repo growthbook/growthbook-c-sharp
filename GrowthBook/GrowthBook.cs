@@ -12,6 +12,7 @@ using GrowthBook.Providers;
 using GrowthBook.Services;
 using GrowthBook.Utilities;
 using GrowthBook.Exceptions;
+using GrowthBook.Plugin;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -35,6 +36,7 @@ namespace GrowthBook
         private readonly IStickyBucketService _stickyBucketService;
         private readonly IDictionary<string, StickyAssignmentsDocument> _stickyBucketAssignmentDocs;
         private readonly ILogger<GrowthBook> _logger;
+        private readonly PluginRegistry _pluginRegistry;
         private readonly JObject _savedGroups;
         private readonly ILoggerFactory _loggerFactory;
         private readonly bool _ownsLoggerFactory;
@@ -99,6 +101,9 @@ namespace GrowthBook
 
             _logger = _loggerFactory.CreateLogger<GrowthBook>();
             var conditionEvaluatorLogger = _loggerFactory.CreateLogger<ConditionEvaluationProvider>();
+
+            _pluginRegistry = new PluginRegistry(context.Plugins, _logger);
+            _pluginRegistry.InitAll();
 
             _conditionEvaluator = new ConditionEvaluationProvider(conditionEvaluatorLogger);
 
@@ -176,6 +181,7 @@ namespace GrowthBook
                     _subscribers.Clear();
                     _asyncSubscribers.Clear();
                     _featureRepository.Cancel();
+                    _pluginRegistry.CloseAll();
 
                     if (_ownsLoggerFactory && _loggerFactory is IDisposable disposableFactory)
                     {
@@ -429,15 +435,17 @@ namespace GrowthBook
             {
                 LoadFeatures().GetAwaiter().GetResult();
             }
-
-            return EvaluateFeature(featureId);
+            var result = EvaluateFeature(featureId);
+            _pluginRegistry.FireFeatureEvaluated(featureId, result, Attributes);
+            return result;
         }
 
         public async Task<FeatureResult> EvalFeatureAsync(string featureId, CancellationToken? cancellationToken = null)
         {
             await LoadFeatures(cancellationToken: cancellationToken);
-
-            return EvaluateFeature(featureId);
+            var result = EvaluateFeature(featureId);
+            _pluginRegistry.FireFeatureEvaluated(featureId, result, Attributes);
+            return result;
         }
 
         private FeatureResult EvaluateFeature(string featureId, ISet<string> evaluatedFeatures = default)
@@ -527,13 +535,14 @@ namespace GrowthBook
                             continue;
                         }
 
-                        if (_trackingCallback != null && rule.Tracks?.Any() == true)
+                        if (rule.Tracks?.Any() == true)
                         {
                             foreach (var trackData in rule.Tracks)
                             {
                                 try
                                 {
                                     _trackingCallback?.Invoke(trackData.Experiment, trackData.Result);
+                                    _pluginRegistry.FireExperimentViewed(trackData.Experiment, trackData.Result, Attributes);
                                 }
                                 catch (Exception ex)
                                 {
@@ -1078,10 +1087,6 @@ namespace GrowthBook
         /// <param name="result">The result of the assignment.</param>
         private void TryToTrack(Experiment experiment, ExperimentResult result)
         {
-            if (_trackingCallback == null)
-            {
-                return;
-            }
 
             string key = result.HashAttribute + result.HashValue + experiment.Key + result.VariationId;
 
@@ -1101,14 +1106,19 @@ namespace GrowthBook
 
             if (shouldTrack)
             {
-                try
+                if (_trackingCallback != null)
                 {
-                    _trackingCallback(experiment, result);
+                    try
+                    {
+                        _trackingCallback(experiment, result);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Encountered unhandled exception during tracking callback for experiment with combined key \'{Key}\'", key);
+                    }
                 }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Encountered unhandled exception during tracking callback for experiment with combined key \'{Key}\'", key);
-                }
+                _pluginRegistry.FireExperimentViewed(experiment, result, Attributes);
+
             }
         }
 
