@@ -124,22 +124,22 @@ namespace GrowthBook.Api
             try
             {
                 _sseClient?.Dispose();
-
-                var sseLogger = _logger as ILogger<SSEClient> ??
+                
+                var sseLogger = _logger as ILogger<SSEClient> ?? 
                     new Microsoft.Extensions.Logging.Abstractions.NullLogger<SSEClient>();
-
+                
                 _sseClient = new SSEClient(sseLogger, _httpClientFactory, _serverSentEventsApiEndpoint, null, ConfiguredClients.ServerSentEventsApiClient);
-
+                
                 // Add general event listener for all events (handles data field)
                 _sseClient.AddEventListener(null, async (sseEvent) =>
                 {
                     if (sseEvent.HasData)
                     {
                         _logger.LogDebug("Received SSE event: {Data}", sseEvent.Data?.Substring(0, Math.Min(sseEvent.Data?.Length ?? 0, 100)));
-
+                        
                         var features = GetFeaturesFrom(sseEvent.Data);
                         await _cache.RefreshWith(features, _refreshWorkerCancellation.Token);
-
+                        
                         _logger.LogInformation("Cache has been refreshed with server sent event features");
                     }
                 });
@@ -186,7 +186,6 @@ namespace GrowthBook.Api
             }
 
             _logger.LogInformation("API response JSON contained encrypted features, decrypting them now");
-            _logger.LogDebug("Attempting to decrypt features with the configured decryption key");
 
             var decryptedFeaturesJson = featuresResponse.EncryptedFeatures.DecryptWith(_config.DecryptionKey);
 
