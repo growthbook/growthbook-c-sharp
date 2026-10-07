@@ -83,7 +83,9 @@ namespace GrowthBook.Api.Extensions
 
                 var json = await response.Content.ReadAsStringAsync();
 
-                logger.LogDebug($"Read response JSON from default Features API request: '{json}'");
+                // Deliberately not the body: a features payload carries saved groups, which are typically lists of
+                // user identifiers, so dumping it writes personal data into whatever sink the host has configured.
+                logger.LogDebug("Read '{CharacterCount}' characters of response JSON from the default Features API request", json?.Length ?? 0);
 
                 logger.LogDebug($"{nameof(FeatureRefreshWorker)} is configured to prefer server sent events and enabled is now '{isServerSentEventsEnabled}'");
 

@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+- Stopped writing the decryption key to the log. It was logged verbatim at debug level on both feature fetch paths,
+  so anyone with log access could decrypt the payloads it protects. Rotate the key if debug logging has been enabled
+  where those logs are retained or shipped elsewhere.
+- Stopped logging feature payload bodies, both the raw API response and the decrypted one. A payload carries saved
+  groups, which are typically lists of user identifiers, so it is personal data. Character counts are logged instead.
+
 ## [1.2.0]
 
 - Added custom fields support for experiments.
