@@ -81,7 +81,13 @@ namespace GrowthBook.Api
                 // something cached to serve instead. A caller who asked for a refresh outright is owed an
                 // attempt: skipping it here would still report success, telling them a fetch happened when
                 // none did. An empty cache has no stale value to fall back on either.
-                if (!isForced && featureCount > 0 && !IsRefreshAllowedNow())
+                var mayBeSuppressed = !isForced && featureCount > 0;
+
+                // Whether the window allows this is decided inside, under the same lock that starts the
+                // fetch. Deciding out here would read the backoff state before a fetch that has finished
+                // but not yet been accounted for was counted, and the request the window exists to
+                // prevent would already be on its way by the time that outcome landed.
+                if (!TryStartOrJoinRefresh(mayBeSuppressed, out var attempt))
                 {
                     _logger.LogDebug("Skipping the refresh: the previous attempt failed and the backoff window has not elapsed");
 
@@ -91,10 +97,6 @@ namespace GrowthBook.Api
                 _logger.LogInformation("Cache has expired or option to force refresh was set, refreshing the cache from the API");
                 _logger.LogDebug("Cache expired: \'{CacheIsCacheExpired}\' and option to force refresh: \'{OptionsForceRefresh}\'", isCacheExpired, options?.ForceRefresh);
 
-                // Use TaskFactory.StartNew to decouple from the current SynchronizationContext
-                // This prevents threading issues in .NET Framework MVC when the original HttpContext
-                // thread is no longer available after the HTTP request completes
-                var attempt = StartOrJoinRefresh();
                 var refreshTask = attempt.Task;
                 var callerToken = cancellationToken ?? CancellationToken.None;
 
@@ -153,12 +155,18 @@ namespace GrowthBook.Api
 
 
         /// <summary>
-        /// Returns the refresh already in flight, or starts one. Concurrent callers share a single request
-        /// rather than each firing their own, which is also what lets the backoff work: without this, N
-        /// callers arriving together all start a fetch before the first failure has been recorded.
-        /// Mirrors the reference SDK's activeFetches map.
+        /// Hands back the refresh already in flight, or starts one, unless the backoff window forbids it.
+        /// Concurrent callers share a single request rather than each firing their own, which is also what
+        /// lets the backoff work: without this, N callers arriving together all start a fetch before the
+        /// first failure has been recorded. Mirrors the reference SDK's activeFetches map.
         /// </summary>
-        private RefreshAttempt StartOrJoinRefresh()
+        /// <param name="mayBeSuppressed">
+        /// Whether the backoff window applies to this caller. Only the automatic, expiry-driven refresh
+        /// can be held off, and only while the cache still holds something to serve instead.
+        /// </param>
+        /// <param name="attempt">The fetch to await, set only when this returns <c>true</c>.</param>
+        /// <returns>Whether there is a fetch for the caller; <c>false</c> means serve the cache instead.</returns>
+        private bool TryStartOrJoinRefresh(bool mayBeSuppressed, out RefreshAttempt attempt)
         {
             lock (_backoffLock)
             {
@@ -166,21 +174,44 @@ namespace GrowthBook.Api
 
                 if (inFlight != null && !inFlight.IsCompleted)
                 {
-                    return new RefreshAttempt(inFlight, _inFlightRefreshId);
+                    // Joining costs the API nothing, so the window has no say here.
+                    attempt = new RefreshAttempt(inFlight, _inFlightRefreshId);
+
+                    return true;
                 }
 
-                            if (inFlight != null && _inFlightRefreshId > _lastRecordedRefreshId)
+                // A fetch that has finished but whose outcome has not been recorded yet is still
+                // unaccounted for. Account for it before deciding, or the decision is made on state one
+                // failure out of date and lets through the very request the window exists to prevent.
+                if (inFlight != null && _inFlightRefreshId > _lastRecordedRefreshId)
                 {
                     ApplyOutcome(_inFlightRefreshId, inFlight.Status == TaskStatus.RanToCompletion && inFlight.Result != null);
                 }
 
+                if (mayBeSuppressed && IsBackoffWindowOpen())
+                {
+                    attempt = default;
+
+                    return false;
+                }
+
+                // Use TaskFactory.StartNew to decouple from the current SynchronizationContext.
+                // This prevents threading issues in .NET Framework MVC when the original HttpContext
+                // thread is no longer available after the HTTP request completes.
+                //
+                // The shared fetch deliberately answers to no caller's token: others join this task, and
+                // in a web application a token belongs to one request, which could abort and take a fetch
+                // everyone else is waiting on with it. Passing null rather than CancellationToken.None
+                // leaves the worker on its own cancellation, which Cancel() still trips.
                 var taskFactory = new TaskFactory(CancellationToken.None);
-                var started = taskFactory.StartNew(async () => await _backgroundRefreshWorker.RefreshCacheFromApi(CancellationToken.None)).Unwrap();
+                var started = taskFactory.StartNew(async () => await _backgroundRefreshWorker.RefreshCacheFromApi(null)).Unwrap();
 
                 _inFlightRefresh = started;
                 _inFlightRefreshId++;
 
-                return new RefreshAttempt(started, _inFlightRefreshId);
+                attempt = new RefreshAttempt(started, _inFlightRefreshId);
+
+                return true;
             }
         }
 
@@ -227,27 +258,22 @@ namespace GrowthBook.Api
         }
 
         /// <summary>
-        /// Whether a background refresh may start. After a failed attempt the next one is held off for an
-        /// exponentially growing window, so an unreachable API is not hit once per evaluation.
+        /// Whether a previous failure is still holding attempts off. After a failed attempt the next one
+        /// waits out an exponentially growing window, so an unreachable API is not hit once per evaluation.
+        /// Callers must already hold <see cref="_backoffLock"/>.
         /// </summary>
         /// <remarks>
         /// There is deliberately no attempt limit: the window grows to <see cref="MaxBackoffMilliseconds"/>
         /// and stays there, matching the reference SDK, which backs its poller off without ever giving up.
         /// Giving up permanently would leave the caller on a stale cache with no way back.
         /// </remarks>
-        private bool IsRefreshAllowedNow()
-        {
-            lock (_backoffLock)
-            {
-                return _consecutiveFailures == 0 || _utcNow() >= _nextAttemptAllowedAt;
-            }
-        }
+        private bool IsBackoffWindowOpen() => _consecutiveFailures != 0 && _utcNow() < _nextAttemptAllowedAt;
 
         /// <summary>
         /// Records how one fetch ended, at most once for that fetch.
         /// </summary>
         /// <remarks>
-        /// Every caller that joined an in-flight fetch reports its outcome, so without keying on the task
+        /// Every caller that joined an in-flight fetch reports its outcome, so without keying on the fetch
         /// itself a single failed request would advance the failure count once per joiner and overshoot
         /// the backoff window badly.
         /// </remarks>
@@ -260,44 +286,43 @@ namespace GrowthBook.Api
         }
 
         /// <summary>
-        /// Applies one outcome under the lock. Outcomes older than the last recorded one are dropped:
-        /// a late continuation from a failed fetch must not reopen the backoff a newer success closed.
+        /// Applies one outcome. Callers must already hold <see cref="_backoffLock"/>. Outcomes older than
+        /// the last recorded one are dropped: a late recording from a failed fetch must not reopen the
+        /// backoff that a newer success closed.
         /// </summary>
         private void ApplyOutcome(long refreshId, bool succeeded)
         {
+            if (refreshId <= _lastRecordedRefreshId)
             {
-                if (refreshId <= _lastRecordedRefreshId)
-                {
-                    return;
-                }
-
-                _lastRecordedRefreshId = refreshId;
-
-                if (succeeded)
-                {
-                    _consecutiveFailures = 0;
-                    _nextAttemptAllowedAt = DateTime.MinValue;
-
-                    return;
-                }
-
-                _consecutiveFailures++;
-
-                double jitterFactor;
-
-                lock (JitterSource)
-                {
-                    jitterFactor = 1d + JitterSource.NextDouble();
-                }
-
-                var delay = Math.Min(
-                    BaseBackoffMilliseconds * Math.Pow(2, _consecutiveFailures - 1) * jitterFactor,
-                    MaxBackoffMilliseconds);
-
-                _nextAttemptAllowedAt = _utcNow().AddMilliseconds(delay);
-
-                _logger.LogWarning("Feature fetch failed. Consecutive failure {Attempt}, next attempt allowed in {Delay}ms", _consecutiveFailures, (int)delay);
+                return;
             }
+
+            _lastRecordedRefreshId = refreshId;
+
+            if (succeeded)
+            {
+                _consecutiveFailures = 0;
+                _nextAttemptAllowedAt = DateTime.MinValue;
+
+                return;
+            }
+
+            _consecutiveFailures++;
+
+            double jitterFactor;
+
+            lock (JitterSource)
+            {
+                jitterFactor = 1d + JitterSource.NextDouble();
+            }
+
+            var delay = Math.Min(
+                BaseBackoffMilliseconds * Math.Pow(2, _consecutiveFailures - 1) * jitterFactor,
+                MaxBackoffMilliseconds);
+
+            _nextAttemptAllowedAt = _utcNow().AddMilliseconds(delay);
+
+            _logger.LogWarning("Feature fetch failed. Consecutive failure {Attempt}, next attempt allowed in {Delay}ms", _consecutiveFailures, (int)delay);
         }
 
         /// <inheritdoc/>
