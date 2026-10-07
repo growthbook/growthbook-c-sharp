@@ -36,5 +36,13 @@ namespace GrowthBook.MultiUser.Configuration
 
         /// <summary>Pre-loaded sticky bucket assignment docs. If null, loaded automatically from the service.</summary>
         public IDictionary<string, StickyAssignmentsDocument> StickyBucketAssignmentDocs { get; set; }
+
+        /// <summary>
+        /// Keys of the experiment assignments already reported to the tracking callbacks, so the same exposure
+        /// is not sent twice. Left null, one is created for the duration of a single evaluation call, which
+        /// deduplicates within that call only. Supply your own set - and keep it for as long as the request
+        /// lives - to deduplicate across every evaluation the request makes.
+        /// </summary>
+        public ISet<string> TrackedExperiments { get; set; }
     }
 }

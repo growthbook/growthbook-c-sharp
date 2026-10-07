@@ -42,7 +42,10 @@ namespace GrowthBook.MultiUser.Configuration
         /// <summary>Custom feature repository. If set, <see cref="ClientKey"/> and <see cref="ApiHost"/> are ignored.</summary>
         public IGrowthBookFeatureRepository FeatureRepository { get; set; }
 
-        /// <summary>Invoked after features are successfully loaded or refreshed.</summary>
+        /// <summary>
+        /// Invoked after features are loaded or refreshed, with true on success and false on failure.
+        /// A response carrying no change - HTTP 304 - applies nothing and so fires nothing.
+        /// </summary>
         public Action<bool> OnFeaturesRefreshed { get; set; }
 
         /// <summary>
@@ -74,7 +77,12 @@ namespace GrowthBook.MultiUser.Configuration
         /// <summary>Callback providing the latest SSE Last-Event-ID for persistence across restarts.</summary>
         public Action<string> OnStreamingEventId { get; set; }
 
-        /// <summary>Invoked when a user is assigned to an experiment variation. Use to report to your analytics system.</summary>
+        /// <summary>
+        /// Invoked when a user is assigned to an experiment variation. Use to report to your analytics system.
+        /// An assignment is reported once per evaluation call; to report it once per request however many
+        /// evaluations it makes, give each <see cref="UserContext"/> a
+        /// <see cref="UserContext.TrackedExperiments"/> set that lives as long as the request.
+        /// </summary>
         public Action<Experiment, ExperimentResult> TrackingCallback { get; set; }
 
         /// <summary>Service that provides sticky bucketing to ensure consistent experiment assignments across sessions.</summary>

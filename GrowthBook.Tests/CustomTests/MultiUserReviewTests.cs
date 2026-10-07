@@ -534,4 +534,209 @@ public class MultiUserReviewTests
         config.OnFeaturesRefreshed.Should().BeSameAs(context.OnFeaturesRefreshed);
         config.OnStreamingEventId.Should().BeSameAs(context.OnStreamingEventId);
     }
+
+    /// <summary>
+    /// The caller still holds the dictionary it configured, and the shared worker reads it on every
+    /// request from a background thread. Sharing the instance lets a later edit reach requests it was
+    /// never meant to, and an edit during one tears the enumeration.
+    /// </summary>
+    [Fact]
+    public void TheSharedConfigurationCopiesTheHeadersRatherThanSharingThem()
+    {
+        var headers = new Dictionary<string, string> { ["Authorization"] = "Bearer token" };
+        var context = new Context { ClientKey = "key", RequestHeaders = headers };
+
+        var config = GrowthBookFactory.CreateSharedConfiguration(context);
+
+        headers["Authorization"] = "Bearer rotated";
+        headers["X-Added-Later"] = "value";
+
+        config.RequestHeaders.Should().HaveCount(1).And.Contain(
+            new KeyValuePair<string, string>("Authorization", "Bearer token"),
+            "because the configuration was taken when the factory was built, not left pointing at the caller's dictionary");
+    }
+
+    // ---- Follow-up round -------------------------------------------------------------------
+
+    [Fact(Timeout = 40000)]
+    public async Task AnUnauthorizedResponseStopsInsteadOfRetrying()
+    {
+        var handler = new CountingHandler(_ => new HttpResponseMessage(HttpStatusCode.Unauthorized));
+
+        using var client = CreateSseClient(handler);
+
+        using var cancellation = new CancellationTokenSource();
+        cancellation.CancelAfter(TimeSpan.FromSeconds(15));
+
+        await client.ConnectAsync(cancellation.Token);
+
+        handler.Requests.Should().Be(1,
+            "because a key the endpoint will not accept does not start working on the tenth attempt");
+        cancellation.IsCancellationRequested.Should().BeFalse(
+            "and the client stopped on its own rather than being held open until something cancelled it");
+    }
+
+    /// <summary>
+    /// Stands in for the HTTP request: it runs until released, or until the token it was handed is
+    /// cancelled, which is what a real request does when the caller that started it goes away.
+    /// </summary>
+    private sealed class TokenObservingWorker : IGrowthBookFeatureRefreshWorker
+    {
+        private readonly ManualResetEventSlim _release = new ManualResetEventSlim(false);
+        private readonly SemaphoreSlim _entered = new SemaphoreSlim(0);
+
+        public CancellationToken? ReceivedToken { get; private set; }
+
+        public void Cancel() { }
+        public bool WaitUntilEntered() => _entered.Wait(TimeSpan.FromSeconds(5));
+        public void Release() => _release.Set();
+
+        public Task<IDictionary<string, Feature>> RefreshCacheFromApi(CancellationToken? cancellationToken = null)
+        {
+            ReceivedToken = cancellationToken;
+            _entered.Release();
+
+            _release.Wait(TimeSpan.FromSeconds(5), cancellationToken ?? CancellationToken.None);
+
+            return Task.FromResult<IDictionary<string, Feature>>(FeatureSet(true));
+        }
+    }
+
+    /// <summary>
+    /// Callers join one refresh rather than each starting their own, which means the one that happens
+    /// to start it no longer owns it. In a web application its token is the request's, and that request
+    /// aborting must not take down the refresh everyone else is now waiting on.
+    /// </summary>
+    [Fact]
+    public async Task OneCallerAbortingDoesNotCancelTheRefreshTheOthersJoined()
+    {
+        var worker = new TokenObservingWorker();
+        var cache = new InMemoryFeatureCache(0);
+        await cache.RefreshWith(FeatureSet(false));
+
+        var repository = new FeatureRepository(NullLogger<FeatureRepository>.Instance, cache, worker);
+
+        using var aborted = new CancellationTokenSource();
+
+        // The cache has features, so this starts the refresh in the background and returns the stale ones.
+        await repository.GetFeatures(null, aborted.Token);
+        worker.WaitUntilEntered().Should().BeTrue("because the first call starts the refresh");
+
+        var joined = repository.GetFeatures(new GrowthBookRetrievalOptions { WaitForCompletion = true });
+
+        aborted.Cancel();
+        worker.Release();
+
+        var features = await joined;
+
+        features.Should().ContainKey("flag");
+        worker.ReceivedToken.Should().BeNull(
+            "because the shared refresh must not run on whichever caller happened to start it");
+    }
+
+    /// <summary>
+    /// The other half of it: a caller is not made to wait out a refresh it no longer cares about just
+    /// because that refresh is shared and cannot be cancelled on its behalf.
+    /// </summary>
+    [Fact]
+    public async Task ACallerStillStopsWaitingWhenItsOwnTokenIsCancelled()
+    {
+        var worker = new TokenObservingWorker();
+        var cache = new InMemoryFeatureCache(0);
+        await cache.RefreshWith(FeatureSet(false));
+
+        var repository = new FeatureRepository(NullLogger<FeatureRepository>.Instance, cache, worker);
+
+        using var giveUp = new CancellationTokenSource();
+
+        var waiting = repository.GetFeatures(new GrowthBookRetrievalOptions { WaitForCompletion = true }, giveUp.Token);
+        worker.WaitUntilEntered().Should().BeTrue();
+
+        giveUp.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiting);
+
+        worker.Release();
+
+        var features = await repository.GetFeatures(new GrowthBookRetrievalOptions { WaitForCompletion = true });
+        features.Should().ContainKey("flag", "because the refresh itself carried on for everyone else");
+    }
+
+    [Fact]
+    public async Task AnExposureIsReportedOncePerRequestWhenTheUserCarriesTheTrackedSet()
+    {
+        var exposures = new List<string>();
+        var features = new Dictionary<string, Feature> { ["flag"] = ExperimentFeature() };
+
+        var client = CreateClient(new Options
+        {
+            ClientKey = "key",
+            TrackingCallback = (experiment, result) => exposures.Add(experiment.Key)
+        }, features);
+
+        await client.InitializeAsync();
+
+        var user = new UserContext
+        {
+            Attributes = JObject.FromObject(new { id = "user-1" }),
+            TrackedExperiments = new HashSet<string>()
+        };
+
+        client.IsOn("flag", user);
+        client.IsOn("flag", user);
+        client.IsOn("flag", user);
+
+        exposures.Should().HaveCount(1,
+            "because one user seeing one variation is one exposure, however many times the request asks about it");
+    }
+
+    /// <summary>
+    /// Pins the default. Without a set that outlives the call there is nothing to remember the exposure
+    /// in, so each evaluation reports it again - which is why the set is worth supplying.
+    /// </summary>
+    [Fact]
+    public async Task WithoutASetOfItsOwnEachEvaluationReportsTheExposureAgain()
+    {
+        var exposures = new List<string>();
+        var features = new Dictionary<string, Feature> { ["flag"] = ExperimentFeature() };
+
+        var client = CreateClient(new Options
+        {
+            ClientKey = "key",
+            TrackingCallback = (experiment, result) => exposures.Add(experiment.Key)
+        }, features);
+
+        await client.InitializeAsync();
+
+        var user = new UserContext { Attributes = JObject.FromObject(new { id = "user-1" }) };
+
+        client.IsOn("flag", user);
+        client.IsOn("flag", user);
+
+        exposures.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task AGlobalCallbackThrowingStillLetsThePerRequestOneRun()
+    {
+        var perRequestCalls = 0;
+        var features = new Dictionary<string, Feature> { ["flag"] = ExperimentFeature() };
+
+        var client = CreateClient(new Options
+        {
+            ClientKey = "key",
+            TrackingCallback = (experiment, result) => throw new InvalidOperationException("the application's sink is down")
+        }, features);
+
+        await client.InitializeAsync();
+
+        client.IsOn("flag", new UserContext
+        {
+            Attributes = JObject.FromObject(new { id = "user-1" }),
+            TrackingCallback = (experiment, result) => perRequestCalls++
+        });
+
+        perRequestCalls.Should().Be(1,
+            "because the two callbacks belong to different owners - one failing is not a reason to skip the other");
+    }
 }

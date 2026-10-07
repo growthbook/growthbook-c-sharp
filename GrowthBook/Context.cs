@@ -196,6 +196,7 @@ namespace GrowthBook
 
         /// <summary>
         /// Callback fired after features are applied (polling and streaming). True on success.
+        /// A response carrying no change - HTTP 304 - applies nothing and so fires nothing.
         /// </summary>
         public Action<bool> OnFeaturesRefreshed { get; set; }
 

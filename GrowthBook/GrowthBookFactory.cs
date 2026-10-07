@@ -193,10 +193,16 @@ namespace GrowthBook
                 ClientKey = context.ClientKey,
                 DecryptionKey = context.DecryptionKey,
                 PreferServerSentEvents = context.BackgroundSync,
-                RequestHeaders = context.RequestHeaders,
-                StreamingRequestHeaders = context.StreamingRequestHeaders,
+                // Copied rather than shared. The caller still holds these dictionaries, and the shared worker
+                // reads them on every request from a background thread: handing over the same instance would
+                // let a later edit change the headers for everyone, or tear a request mid-enumeration.
+                RequestHeaders = CopyHeaders(context.RequestHeaders),
+                StreamingRequestHeaders = CopyHeaders(context.StreamingRequestHeaders),
                 OnFeaturesRefreshed = context.OnFeaturesRefreshed,
                 OnStreamingEventId = context.OnStreamingEventId
             };
+
+        private static IDictionary<string, string> CopyHeaders(IDictionary<string, string> headers) =>
+            headers is null ? new Dictionary<string, string>() : new Dictionary<string, string>(headers);
     }
 }

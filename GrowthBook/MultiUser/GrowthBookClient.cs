@@ -165,8 +165,9 @@ namespace GrowthBook.MultiUser
             => _options.GlobalAttributes;
 
         /// <summary>
-        /// Returns a snapshot of the currently loaded features. A copy, so a caller changing it cannot
-        /// change what every other user in the process evaluates against.
+        /// Returns a snapshot of the currently loaded features. The map is a copy, so adding or removing
+        /// entries cannot change what every other user in the process evaluates against. The
+        /// <see cref="Feature"/> objects in it are the live ones, however - treat them as read only.
         /// </summary>
         public IDictionary<string, Feature> GetFeatures()
         {
@@ -291,7 +292,10 @@ namespace GrowthBook.MultiUser
                 TrackingCallback = userContext?.TrackingCallback,
                 StickyBucketService = stickyBucketService,
                 Url = userContext?.Url,
-                StickyBucketAssignmentDocs = stickyBucketDocs ?? new Dictionary<string, StickyAssignmentsDocument>()
+                StickyBucketAssignmentDocs = stickyBucketDocs ?? new Dictionary<string, StickyAssignmentsDocument>(),
+                // Without a set carried by the caller, one evaluation's exposures are still deduplicated among
+                // themselves - a feature that reaches the same experiment through several rules reports it once.
+                TrackedExperiments = userContext?.TrackedExperiments ?? new HashSet<string>()
             };
 
             var context = new EvaluationContext(global, user);

@@ -67,7 +67,8 @@ namespace GrowthBook
         /// <summary>
         /// Optional callback fired after features are applied to the cache.
         /// The boolean parameter indicates success (true) or failure (false).
-        /// Fires for both streaming updates and manual refreshes.
+        /// Fires for both streaming updates and manual refreshes. A response carrying no change -
+        /// HTTP 304 - applies nothing and so fires nothing.
         /// </summary>
         public Action<bool> OnFeaturesRefreshed { get; set; }
 

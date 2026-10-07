@@ -295,8 +295,11 @@ namespace GrowthBook.Api.SSE
 
         private int CalculateRetryDelay()
         {
-            // Exponential backoff with jitter
-            var baseDelay = Math.Min(_retryTimeMs * Math.Pow(2, _currentRetryAttempt), 30000); // Max 30 seconds
+            // Exponential backoff with jitter. The exponent counts the attempts already made rather than this
+            // one, so the first reconnect waits exactly the time the server asked for with the `retry:` field
+            // instead of doubling it before anything has gone wrong twice.
+            var completedAttempts = Math.Max(_currentRetryAttempt - 1, 0);
+            var baseDelay = Math.Min(_retryTimeMs * Math.Pow(2, completedAttempts), 30000); // Max 30 seconds
 
             // Jitter in proportion to the delay. A flat second on top would dominate the short retry
             // times a server can ask for with the SSE `retry:` field.
@@ -323,12 +326,22 @@ namespace GrowthBook.Api.SSE
         }
 
         /// <summary>
-        /// Whether the server has ended the subscription rather than failed to serve it. Reconnecting
-        /// after one of these only repeats a request the server has already refused outright.
+        /// Whether the server has refused the subscription outright rather than failed to serve it this time.
+        /// Retrying one of these repeats a request that cannot start succeeding on its own: the subscription
+        /// has ended, or the key it was made with is not one this endpoint will accept.
         /// </summary>
         private static bool IsSubscriptionOver(System.Net.HttpStatusCode statusCode)
         {
-            return statusCode == System.Net.HttpStatusCode.Gone;
+            switch (statusCode)
+            {
+                case System.Net.HttpStatusCode.Gone:
+                case System.Net.HttpStatusCode.Unauthorized:
+                case System.Net.HttpStatusCode.Forbidden:
+                case System.Net.HttpStatusCode.NotFound:
+                    return true;
+                default:
+                    return false;
+            }
         }
 
         /// <summary>

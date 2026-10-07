@@ -296,6 +296,24 @@ public class HomeController : ControllerBase
 }
 ```
 
+#### Reporting an exposure once per request
+
+An assignment is reported to the tracking callback once per evaluation call. A request that asks about the
+same feature from three places therefore sends three exposure events. Give the `UserContext` a
+`TrackedExperiments` set that lives as long as the request to have each assignment reported once:
+
+```csharp
+var userContext = new UserContext
+{
+    Attributes         = JObject.FromObject(new { id = User.Identity?.Name }),
+    TrackedExperiments = new HashSet<string>()
+};
+```
+
+Build the context once per request — in middleware, or a scoped service — and pass the same instance to every
+evaluation that request makes. Do not share one set between requests: it would suppress exposures for everyone
+after the first.
+
 > **When to use `GrowthBookClient` vs `GrowthBook`**
 > - Use `GrowthBookClient` for server-side multiuser apps (ASP.NET Core, workers, APIs).
 > - Use `GrowthBook` for single-user or client-side scenarios where one instance maps to one user.

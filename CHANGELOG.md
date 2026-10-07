@@ -24,8 +24,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Improved
 - `FeatureRefreshWorker` now propagates errors to `OnFeaturesRefreshed` callback (fires `false` on failures).
+- Global and user attributes are merged once per evaluation rather than at each of the nine places that read them,
+  several of which run per rule. The merge copies every value, so a feature with a handful of rules was putting
+  that many copies of the user's attributes on the heap for a single `IsOn` call.
 - SSE event listener filters specifically for `"features"` events and deduplicates via `Last-Event-ID`.
-- `SSEClient` auto-reconnects on 2xx status codes, stops on 410 Gone.
+- `SSEClient` auto-reconnects on 2xx status codes, and stops on a response the server will not serve differently
+  next time: `410 Gone`, `401 Unauthorized`, `403 Forbidden` and `404 Not Found`.
+- `UserContext.TrackedExperiments` — supply a set that lives as long as the request to have an assignment reported
+  to the tracking callback once for the request rather than once per evaluation call.
+- `GrowthBookRetrievalOptions.ForceRefresh` documents that it asks for a refresh rather than a request of its own:
+  a refresh already in flight is joined, which is what keeps concurrent callers from each opening a connection.
+- `OnFeaturesRefreshed` documents that a `304 Not Modified` applies nothing and so reports nothing.
 
 ### Fixed
 - `Subscribe` and `SubscribeAsync` are back on `IGrowthBook`. Removing them compiled for the SDK but broke every
@@ -56,7 +65,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Run`. An identifier from any other source found no document and the user was bucketed again.
 - `GrowthBookFactory` passes the context's request headers, streaming headers, `OnFeaturesRefreshed` and
   `OnStreamingEventId` to the repository it builds. Factory users were making unauthenticated feature and SSE
-  requests and never seeing their callbacks fire.
+  requests and never seeing their callbacks fire. The header dictionaries are copied rather than shared, so a
+  later edit by the caller cannot reach requests it was never meant to, nor tear one mid-enumeration.
+- A shared feature refresh no longer runs on the cancellation token of whichever caller happened to start it.
+  Other callers join that refresh, so in a web application one request aborting cancelled a refresh everyone else
+  was waiting on; it now runs on the worker's own cancellation, which `Cancel()` still trips.
+- A tracking callback that throws no longer stops the other one from running. The global and per-request callbacks
+  belong to different owners and are guarded separately.
+- The tracking callback is no longer invoked repeatedly for the same assignment within one evaluation, and can be
+  deduplicated for a whole request with `UserContext.TrackedExperiments`. `GrowthBookClient` had none of the
+  deduplication the single-user `GrowthBook` does, so migrating multiplied exposure events.
+- The first SSE reconnect waits exactly the time the server asked for with the `retry:` field instead of doubling
+  it before anything had failed twice.
 - Sticky bucket assignment docs now update correctly in-memory after save.
 - Empty string fallback attribute no longer causes incorrect bucket assignment.
 - `ForcedVariations` null reference in `GrowthBook` constructor.

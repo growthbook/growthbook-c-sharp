@@ -254,19 +254,55 @@ namespace GrowthBook.Providers
                 }
             }
 
-            // The assignment is already decided and may already be saved, so a throwing callback must
-            // not change what the user is shown. Elsewhere in evaluation these are guarded the same way.
-            try
-            {
-                context.Global.TrackingCallback?.Invoke(experiment, result);
-                context.User.TrackingCallback?.Invoke(experiment, result);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Encountered unhandled exception in tracking callback for experiment '{ExperimentKey}'", experiment.Key);
-            }
+            TrackExposure(experiment, result, context);
 
             return result;
+        }
+
+        /// <summary>
+        /// Reports the exposure to the tracking callbacks. It is reported once per unique assignment when the
+        /// user context carries a set to record them in, and every callback is guarded separately: the
+        /// assignment is already decided and may already be saved, so neither a throwing callback nor another
+        /// callback having thrown may change what the user is shown.
+        /// </summary>
+        private void TrackExposure(Experiment experiment, ExperimentResult result, EvaluationContext context)
+        {
+            var trackedExperiments = context.User.TrackedExperiments;
+
+            if (trackedExperiments != null && !trackedExperiments.Add(GetTrackingKey(experiment, result)))
+            {
+                _logger.LogDebug("Experiment \'{ExperimentKey}\' has already been tracked for this user, not reporting it again", experiment.Key);
+                return;
+            }
+
+            Invoke(context.Global.TrackingCallback, "global");
+            Invoke(context.User.TrackingCallback, "per-request");
+
+            void Invoke(Action<Experiment, ExperimentResult> callback, string origin)
+            {
+                if (callback is null)
+                {
+                    return;
+                }
+
+                try
+                {
+                    callback(experiment, result);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Encountered unhandled exception in the {Origin} tracking callback for experiment \'{ExperimentKey}\'", origin, experiment.Key);
+                }
+            }
+        }
+
+        /// <summary>
+        /// The identity of an exposure for deduplication purposes. Matches the key the single user
+        /// <see cref="GrowthBook"/> tracks by, so both report the same assignment the same number of times.
+        /// </summary>
+        internal static string GetTrackingKey(Experiment experiment, ExperimentResult result)
+        {
+            return result.HashAttribute + result.HashValue + experiment.Key + result.VariationId;
         }
 
         /// <summary>

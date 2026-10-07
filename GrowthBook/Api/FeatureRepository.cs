@@ -66,9 +66,14 @@ namespace GrowthBook.Api
                         // Use TaskFactory.StartNew to decouple from the current SynchronizationContext
                         // This prevents threading issues in .NET Framework MVC when the original HttpContext
                         // thread is no longer available after the HTTP request completes
-                        var taskFactory = new TaskFactory(cancellationToken ?? CancellationToken.None);
+                        //
+                        // The shared refresh deliberately does not take this caller's token. Others join this
+                        // task, and in a web application the token belongs to one request: were it to abort,
+                        // it would cancel a refresh every other caller is now waiting on. Passing none leaves
+                        // the worker running on its own cancellation, which Cancel() trips.
+                        var taskFactory = new TaskFactory(CancellationToken.None);
                         refreshTask = taskFactory.StartNew(async () =>
-                            await _backgroundRefreshWorker.RefreshCacheFromApi(cancellationToken)).Unwrap();
+                            await _backgroundRefreshWorker.RefreshCacheFromApi(null)).Unwrap();
 
                         _inFlightRefresh = refreshTask;
                     }
@@ -88,7 +93,7 @@ namespace GrowthBook.Api
                         _logger.LogDebug(
                             "Feature count: '{CacheFeatureCount}' and option to wait for completion: '{OptionsWaitForCompletion}'",
                             _cache.FeatureCount, options?.WaitForCompletion);
-                        return await refreshTask;
+                        return await WaitForRefresh(refreshTask, cancellationToken ?? CancellationToken.None);
                     }
                     else
                     {
@@ -110,6 +115,31 @@ namespace GrowthBook.Api
             {
                 _refreshLock.Release();
             }
+        }
+
+        /// <summary>
+        /// Waits for a refresh that is shared with every other caller that arrived while it was in flight.
+        /// The refresh itself answers to none of them, so this caller can stop waiting on it when its own
+        /// token is cancelled without the refresh the others are waiting on going with it.
+        /// </summary>
+        private static async Task<IDictionary<string, Feature>> WaitForRefresh(Task<IDictionary<string, Feature>> refreshTask, CancellationToken cancellationToken)
+        {
+            if (!cancellationToken.CanBeCanceled)
+            {
+                return await refreshTask;
+            }
+
+            var cancelled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            using (cancellationToken.Register(state => ((TaskCompletionSource<bool>)state).TrySetResult(true), cancelled))
+            {
+                if (await Task.WhenAny(refreshTask, cancelled.Task) != refreshTask)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                }
+            }
+
+            return await refreshTask;
         }
 
         /// <inheritdoc/>
