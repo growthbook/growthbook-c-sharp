@@ -137,10 +137,16 @@ public class FeatureFetchBackoffReviewTests : UnitTest
         worker.Attempts.Should().Be(1, "and the request itself is never cancelled on anyone's behalf");
     }
 
+    /// <summary>
+    /// A caller abandoning its own wait says nothing about the API, so it must not count as a failed
+    /// fetch. The cancelled caller is deliberately not the one that finishes the fetch: a joiner awaits
+    /// the same task, so by the time it returns the fetch has provably completed and the call that
+    /// follows meets the gate rather than joining something still in flight.
+    /// </summary>
     [Fact]
     public async Task ACancelledCallerDoesNotOpenTheBackoffWindow()
     {
-        var worker = new BlockingWorker();
+        var worker = new ControlledWorker();
         var clock = new ManualClock();
         var repository = CreateRepository(worker, clock, out var cache);
         await cache.RefreshWith(FeatureSet());
@@ -150,17 +156,21 @@ public class FeatureFetchBackoffReviewTests : UnitTest
         var cancelling = Task.Run(() => repository.GetFeatures(Blocking, cancellation.Token));
         worker.WaitUntilEntered().Should().BeTrue();
 
+        var joiner = repository.GetFeatures(Blocking);
+
         cancellation.Cancel();
         Func<Task> awaitCancelled = () => cancelling;
         await awaitCancelled.Should().ThrowAsync<OperationCanceledException>();
 
-        worker.Release();
+        // The API is healthy: this fetch succeeds. Only the cancellation could open a window here.
+        worker.Finish(0, FeatureSet());
+        await joiner;
 
-        // A healthy API must keep being polled: giving up is the caller's doing, not the API's.
-        await repository.GetFeatures(Blocking);
+        await repository.GetFeatures(Background);
+        worker.WaitUntilEntered().Should().BeTrue(
+            "a healthy API must keep being polled; giving up was the caller's doing, not the API's");
 
-        worker.Attempts.Should().Be(1,
-            "the second call joined the fetch still in flight rather than being held off by a backoff window");
+        worker.Attempts.Should().Be(2);
     }
 
     /// <summary>
@@ -214,9 +224,15 @@ public class FeatureFetchBackoffReviewTests : UnitTest
     }
 
     /// <summary>
-    /// A fetch that has finished but whose continuation has not run yet must still count. Without
-    /// that, an evaluation arriving in the gap passes the gate and hits the unreachable API again.
+    /// A fetch whose outcome has not been recorded yet must still count against the gate.
     /// </summary>
+    /// <remarks>
+    /// The fetch here is orphaned rather than merely slow to record: its only caller cancelled, which
+    /// now records nothing, and a blocking caller leaves no continuation behind. So the failure is
+    /// recorded by nothing except the gate accounting for it, which makes the test deterministic
+    /// instead of a race against a continuation. This state is not contrived - it is exactly what a
+    /// cancelled blocking caller leaves behind.
+    /// </remarks>
     [Fact]
     public async Task AFetchThatFinishedButIsNotRecordedYetStillHoldsTheGate()
     {
@@ -225,13 +241,22 @@ public class FeatureFetchBackoffReviewTests : UnitTest
         var repository = CreateRepository(worker, clock, out var cache);
         await cache.RefreshWith(FeatureSet());
 
-        var first = repository.GetFeatures(Background);
+        using var cancellation = new CancellationTokenSource();
+
+        var cancelling = Task.Run(() => repository.GetFeatures(Blocking, cancellation.Token));
         worker.WaitUntilEntered().Should().BeTrue("the first call starts a fetch");
         worker.Attempts.Should().Be(1);
 
-        // Finish it as a failure without giving its continuation a chance to run.
+        cancellation.Cancel();
+        Func<Task> awaitCancelled = () => cancelling;
+        await awaitCancelled.Should().ThrowAsync<OperationCanceledException>();
+
+        // The API is unreachable. Nothing is left to record this, since the only caller walked away.
         worker.Finish(0, null);
-        await first;
+
+        // Completing the fetch is a thread pool hop the test cannot observe, the fetch having been
+        // deliberately left with no caller and no continuation. Overshooting it costs a moment.
+        await Task.Delay(250);
 
         await repository.GetFeatures(Background);
         worker.WaitForQuiet();
