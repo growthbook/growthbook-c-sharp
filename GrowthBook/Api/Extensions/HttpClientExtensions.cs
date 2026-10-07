@@ -26,7 +26,7 @@ namespace GrowthBook.Api.Extensions
 
         public static async Task<(IDictionary<string, Feature> Features, bool IsServerSentEventsEnabled)> GetFeaturesFrom(this HttpClient httpClient, string endpoint, ILogger logger, GrowthBookConfigurationOptions config, CancellationToken cancellationToken)
         {
-            var response = await GetFeaturesFrom(httpClient, endpoint, logger, config, cancellationToken, etagCache: null);
+            var response = await GetFeaturesFrom(httpClient, endpoint, logger, config, cancellationToken, etagCache: null).ConfigureAwait(false);
 
             return (response.Features, response.IsServerSentEventsEnabled);
         }
@@ -50,7 +50,7 @@ namespace GrowthBook.Api.Extensions
                     }
                 }
 
-                var response = await httpClient.SendAsync(request, cancellationToken);
+                var response = await httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
                 var isServerSentEventsEnabled = response.Headers.TryGetValues(HttpHeaders.ServerSentEvents.Key, out var values) && values.Contains(HttpHeaders.ServerSentEvents.EnabledValue);
 
                 if (response.StatusCode == HttpStatusCode.NotModified)
@@ -81,7 +81,7 @@ namespace GrowthBook.Api.Extensions
                     throw new FeatureLoadException(message, statusCode);
                 }
 
-                var json = await response.Content.ReadAsStringAsync();
+                var json = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
 
                 // Deliberately not the body: a features payload carries saved groups, which are typically lists of
                 // user identifiers, so dumping it writes personal data into whatever sink the host has configured.
@@ -102,7 +102,7 @@ namespace GrowthBook.Api.Extensions
 
         public static async Task UpdateWithFeaturesStreamFrom(this HttpClient httpClient, string endpoint, ILogger logger, GrowthBookConfigurationOptions config, CancellationToken cancellationToken, Func<IDictionary<string, Feature>, Task> onFeaturesRetrieved)
         {
-            var stream = await httpClient.GetStreamAsync(endpoint);
+            var stream = await httpClient.GetStreamAsync(endpoint).ConfigureAwait(false);
 
             using (var reader = new StreamReader(stream))
             {
@@ -135,7 +135,7 @@ namespace GrowthBook.Api.Extensions
 
                     var features = ParseFeaturesFrom(json, logger, config);
 
-                    await onFeaturesRetrieved(features);
+                    await onFeaturesRetrieved(features).ConfigureAwait(false);
                 }
             }
         }

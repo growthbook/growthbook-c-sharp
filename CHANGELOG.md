@@ -12,6 +12,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   where those logs are retained or shipped elsewhere.
 - Stopped logging feature payload bodies, both the raw API response and the decrypted one. A payload carries saved
   groups, which are typically lists of user identifiers, so it is personal data. Character counts are logged instead.
+- Fixed deadlocks on single-threaded synchronization contexts (classic ASP.NET on .NET Framework, WPF, WinForms).
+  No await in the SDK captures the caller's context any more, across `GrowthBook`, `FeatureRepository`,
+  `FeatureRefreshWorker`, `RemoteEvaluationService`, `HttpClientExtensions` and `SSEClient`. An application that
+  blocked on an SDK task could previously hang, and the SDK did it to itself through
+  `EvalFeature(key, alwaysLoadFeatures: true)` and `GetFeatureValue(key, fallback, alwaysLoadFeatures: true)`,
+  which block internally. Those two now also start the load off the calling thread, so a feature repository
+  supplied on the `Context` cannot post a continuation back to the thread they are holding.
+- **Behaviour change:** code after an await inside the SDK now resumes on a thread pool thread. A `TrackingCallback`
+  or a callback registered via `Subscribe` that is reached through the async evaluation APIs (`EvalFeatureAsync`,
+  `GetFeatureValueAsync`, `IsOnAsync`, `IsOffAsync`) therefore runs off the caller's synchronization context.
+  Callbacks that touch context-affine state — UI controls on WPF/WinForms, `HttpContext.Current` on classic
+  ASP.NET — have to marshal back themselves. The synchronous overloads are unaffected: they still invoke callbacks
+  on the calling thread. `SubscribeAsync` was already dispatched off-context and is unchanged. No public API changed.
 
 ## [1.2.0]
 

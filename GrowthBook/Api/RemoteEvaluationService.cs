@@ -84,9 +84,9 @@ namespace GrowthBook.Api
                         _logger.LogDebug("Sending POST request to remote evaluation endpoint");
 
                         // Make the request
-                        using (var response = await httpClient.SendAsync(httpRequest, cancellationToken))
+                        using (var response = await httpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false))
                         {
-                            var responseContent = await response.Content.ReadAsStringAsync();
+                            var responseContent = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
 
                             _logger.LogDebug("Received response with status {StatusCode}: {Response}",
                                 response.StatusCode, responseContent);
