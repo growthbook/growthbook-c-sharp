@@ -224,6 +224,156 @@ public class FeatureFetchBackoffReviewTests : UnitTest
     }
 
     /// <summary>
+    /// A scheduler that queues work and runs it only when the test says so, so a test can hold a
+    /// caller suspended partway through and decide what happens in the meantime.
+    /// </summary>
+    private sealed class ManualScheduler : TaskScheduler
+    {
+        private readonly List<Task> _queued = new List<Task>();
+
+        protected override void QueueTask(Task task)
+        {
+            lock (_queued)
+            {
+                _queued.Add(task);
+            }
+        }
+
+        protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued) => false;
+
+        protected override IEnumerable<Task> GetScheduledTasks()
+        {
+            lock (_queued)
+            {
+                return _queued.ToArray();
+            }
+        }
+
+        /// <summary>
+        /// Runs what is queued right now, not what those tasks go on to queue in turn.
+        /// </summary>
+        public int RunQueued()
+        {
+            Task[] batch;
+
+            lock (_queued)
+            {
+                batch = _queued.ToArray();
+                _queued.Clear();
+            }
+
+            foreach (var task in batch)
+            {
+                TryExecuteTask(task);
+            }
+
+            return batch.Length;
+        }
+    }
+
+    /// <summary>
+    /// A worker whose answers are decided up front and handed back already completed, so a fetch
+    /// never suspends and the only thing a test has to schedule is the caller.
+    /// </summary>
+    private sealed class ScriptedWorker : IGrowthBookFeatureRefreshWorker
+    {
+        private readonly IDictionary<string, Feature>[] _answers;
+        private int _attempts;
+
+        public ScriptedWorker(params IDictionary<string, Feature>[] answers) => _answers = answers;
+
+        public int Attempts => Volatile.Read(ref _attempts);
+        public void Cancel() { }
+
+        /// <summary>
+        /// Waits for a fetch that a fire-and-forget call only promised, so the count is never read
+        /// before the thread pool has got to it.
+        /// </summary>
+        public bool WaitForAttempts(int count) =>
+            SpinWait.SpinUntil(() => Attempts >= count, TimeSpan.FromSeconds(5));
+
+        public Task<IDictionary<string, Feature>> RefreshCacheFromApi(CancellationToken? cancellationToken = null)
+        {
+            var index = Interlocked.Increment(ref _attempts) - 1;
+
+            return Task.FromResult(index < _answers.Length ? _answers[index] : null);
+        }
+    }
+
+    /// <summary>
+    /// An outcome that arrives after a newer fetch has already been accounted for must be dropped.
+    /// Recording it would reopen a backoff window that a success had closed, leaving a healthy API
+    /// unpolled for as long as the stale window had left to run.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The late caller is held on a scheduler the test pumps by hand, which is what makes the ordering
+    /// a decision rather than a race: it is suspended between its fetch failing and its recording of
+    /// that failure, and a second, successful fetch is driven to completion in that gap.
+    /// </para>
+    /// <para>
+    /// Two things keep this right, and this pins the outcome rather than either one of them: outcomes
+    /// older than the last recorded one are dropped, and the gate accounts for the newest finished
+    /// fetch before it decides, which repairs the state a stale record left behind. Removing both
+    /// fails this test; removing either alone does not.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public async Task AnOutcomeOvertakenByANewerOneIsDropped()
+    {
+        var worker = new ScriptedWorker(null, FeatureSet(), FeatureSet());
+        var repository = CreateRepository(worker, new ManualClock(), out var cache);
+        await cache.RefreshWith(FeatureSet());
+
+        // xUnit installs a SynchronizationContext, and an await prefers one of those over the ambient
+        // scheduler, which would hand the caller back to the test runner instead of to the scheduler
+        // this test pumps. Without this the caller cannot be held suspended at all.
+        var testContext = SynchronizationContext.Current;
+        SynchronizationContext.SetSynchronizationContext(null);
+
+        try
+        {
+            var scheduler = new ManualScheduler();
+
+            var late = Task.Factory
+                .StartNew(() => repository.GetFeatures(Blocking), CancellationToken.None, TaskCreationOptions.None, scheduler)
+                .Unwrap();
+
+            // Run the call, then its fetch, then one more step so the fetch's answer reaches the frame
+            // below the caller. The caller's own resumption, which is what records the failure, stays
+            // queued. How many steps that is depends on the async machinery, so it is discovered rather
+            // than hard-coded; both assertions below fail loudly if this lands anywhere else.
+            while (worker.Attempts == 0 && scheduler.RunQueued() > 0)
+            {
+            }
+
+            scheduler.RunQueued();
+
+            late.IsCompleted.Should().BeFalse(
+                "the caller has to still be suspended before it records, which is the point of this test");
+
+            // In the gap: a forced refresh accounts for the failed fetch, makes its own, and succeeds.
+            var forced = await repository.GetFeatures(new GrowthBookRetrievalOptions { ForceRefresh = true, WaitForCompletion = true });
+
+            forced.Should().NotBeNull();
+            worker.Attempts.Should().Be(2, "the failed fetch had finished, so this is a new request rather than a join");
+
+            // Only now does the first caller get to record a failure that a later success has overtaken.
+            scheduler.RunQueued();
+            await late;
+
+            await repository.GetFeatures(Background);
+
+            worker.WaitForAttempts(3).Should().BeTrue(
+                "the stale failure must not reopen the window that the later success closed");
+        }
+        finally
+        {
+            SynchronizationContext.SetSynchronizationContext(testContext);
+        }
+    }
+
+    /// <summary>
     /// A fetch whose outcome has not been recorded yet must still count against the gate.
     /// </summary>
     /// <remarks>
