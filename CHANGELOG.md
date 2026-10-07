@@ -18,10 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reset on success. The window is only applied while the cache still holds features to serve; with an empty cache
   an attempt is always made, and an explicit force refresh is never suppressed.
 - Fixed concurrent callers each starting their own fetch. They now share a single in-flight request, which also
-  keeps a burst of simultaneous callers from registering one failure each.
-- Added `GrowthBook.RefreshFeatures(force, cancellationToken)`, a facade over
-  `LoadFeaturesWithResult(new GrowthBookRetrievalOptions { ForceRefresh = force })`. Added to the class only;
-  `IGrowthBook` is unchanged.
+  keeps a burst of simultaneous callers from registering one failure each. The shared request answers to no
+  caller's cancellation token, so one caller giving up no longer fails the others waiting on it; each caller can
+  still abandon its own wait.
+- Fixed a caller cancelling its own refresh counting as an API failure, which opened the backoff window and held
+  off later automatic refreshes even while the API was healthy. A request that times out still counts.
+- Added `GrowthBook.RefreshFeatures(force, cancellationToken)`, which makes the request and waits for it before
+  reporting the outcome, so a failed refresh is never reported as a success from the cache. Added to the class
+  only; `IGrowthBook` is unchanged.
 
 ## [1.2.0]
 
