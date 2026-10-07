@@ -181,7 +181,10 @@ namespace GrowthBook.Api
 
                         if (sseEvent.HasData)
                         {
-                            _logger.LogDebug("Received SSE features event: {Data}", sseEvent.Data?.Substring(0, Math.Min(sseEvent.Data?.Length ?? 0, 100)));
+                            // Deliberately not the body, nor an excerpt of it: a features payload carries saved
+                            // groups, which are typically lists of user identifiers, so writing any of it out
+                            // puts personal data into whatever sink the host has configured.
+                            _logger.LogDebug("Received an SSE features event carrying \'{CharacterCount}\' characters", sseEvent.Data?.Length ?? 0);
 
                             try
                             {
