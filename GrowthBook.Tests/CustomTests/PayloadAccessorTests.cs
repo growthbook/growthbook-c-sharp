@@ -19,6 +19,32 @@ public class PayloadAccessorTests : UnitTest
     private const string EncryptedPayload = "m5ylFM6ndyOJA2OPadubkw==.Uu7ViqgKEt/dWvCyhI46q088PkAEJbnXKf3KPZjf9IEQQ+A8fojNoxw4wIbPX3aj";
     private const string DecryptionKey = "Zvwv/+uhpFDznZ6SX28Yjg==";
 
+    /// <summary>
+    /// Captures whatever a bad encrypted payload raises, from construction or from the accessor.
+    /// Which layer decrypts is not the point: the requirement is that nothing leaving the SDK
+    /// carries the key or the decrypted text, wherever the failure is noticed.
+    /// </summary>
+    private static Exception DecryptionFailureFor(string encryptedFeatures, string decryptionKey)
+    {
+        try
+        {
+            using var growthBook = new GrowthBook(new Context
+            {
+                Attributes = JObject.FromObject(new { id = "user-1" }),
+                EncryptedFeatures = encryptedFeatures,
+                DecryptionKey = decryptionKey
+            });
+
+            growthBook.GetDecryptedPayload();
+
+            return null;
+        }
+        catch (Exception ex)
+        {
+            return ex;
+        }
+    }
+
     private static Feature Flag(bool value) => new Feature { DefaultValue = value };
 
     private static GrowthBook Unencrypted() => new GrowthBook(new Context
@@ -117,20 +143,14 @@ public class PayloadAccessorTests : UnitTest
     [Fact]
     public void AWrongKeyFailsWithoutPuttingTheKeyInTheMessage()
     {
-        using var growthBook = new GrowthBook(new Context
-        {
-            EncryptedFeatures = EncryptedPayload,
-            DecryptionKey = "AAAAAAAAAAAAAAAAAAAAAA=="
-        });
+        const string WrongKey = "AAAAAAAAAAAAAAAAAAAAAA==";
 
-        Action decrypt = () => growthBook.GetDecryptedPayload();
+        var thrown = DecryptionFailureFor(EncryptedPayload, WrongKey);
 
-        var thrown = decrypt.Should().Throw<DecryptionException>().Which;
-
-        thrown.Message.Should().NotContain("AAAAAAAAAAAAAAAAAAAAAA==",
+        thrown.Should().NotBeNull("a payload that cannot be read has to be reported, not ignored");
+        thrown.ToString().Should().NotContain(WrongKey,
             "a decryption key must never reach an exception message or a log");
-        thrown.ToString().Should().NotContain("AAAAAAAAAAAAAAAAAAAAAA==");
-        thrown.Message.Should().NotContain("position",
+        thrown.ToString().Should().NotContain("position",
             "nor should a fragment of the garbage plaintext leak out through the JSON parser's message");
     }
 
@@ -141,5 +161,81 @@ public class PayloadAccessorTests : UnitTest
 
         growthBook.GetPayload().Should().NotBeNull();
         growthBook.GetDecryptedPayload().Should().NotBeNull();
+    }
+
+    private static string EncryptWith(string plaintext, string key)
+    {
+        var keyBytes = Convert.FromBase64String(key);
+        var plaintextBytes = System.Text.Encoding.UTF8.GetBytes(plaintext);
+
+        using var aes = System.Security.Cryptography.Aes.Create();
+
+        aes.BlockSize = 128;
+        aes.Key = keyBytes;
+        aes.Mode = System.Security.Cryptography.CipherMode.CBC;
+        aes.Padding = System.Security.Cryptography.PaddingMode.PKCS7;
+        aes.GenerateIV();
+
+        using var encryptor = aes.CreateEncryptor();
+
+        var cipherBytes = encryptor.TransformFinalBlock(plaintextBytes, 0, plaintextBytes.Length);
+
+        return $"{Convert.ToBase64String(aes.IV)}.{Convert.ToBase64String(cipherBytes)}";
+    }
+
+    /// <summary>
+    /// The outer message is sanitised, but the parser's own error names what it was reading - which
+    /// is the decrypted payload. Carried as InnerException it reaches ToString(), so an application
+    /// logging the exception logs the content the encryption was there to protect.
+    /// </summary>
+    [Fact]
+    public void AFailureToParseTheDecryptedPayloadDoesNotCarryItsContent()
+    {
+        const string Secret = "super-secret-flag-name";
+
+        var thrown = DecryptionFailureFor(EncryptWith($"{{\"{Secret}\": this is not valid json }}", DecryptionKey), DecryptionKey);
+
+        thrown.Should().NotBeNull("a payload that cannot be parsed has to be reported, not ignored");
+        thrown.ToString().Should().NotContain(Secret,
+            "the whole exception is what gets logged, so no part of it may carry decrypted content");
+        thrown.ToString().Should().NotContain(DecryptionKey, "and the key is not in it either");
+    }
+
+    [Fact]
+    public void ReplacingTheFeaturesStopsTheStaleCiphertextBeingExported()
+    {
+        using var growthBook = Encrypted();
+
+        growthBook.GetPayload()["encryptedFeatures"].Should().NotBeNull("nothing has replaced the features yet");
+
+        growthBook.Features = new Dictionary<string, Feature> { ["fresh-flag"] = Flag(true) };
+
+        var payload = growthBook.GetPayload();
+
+        payload["encryptedFeatures"].Should().BeNull("the ciphertext no longer describes what this instance evaluates");
+        payload["features"]["fresh-flag"].Should().NotBeNull("so the payload carries the features actually in effect");
+    }
+
+    [Fact]
+    public void ReplacingTheFeaturesAlsoStopsTheDecryptedAccessorExportingThem()
+    {
+        using var growthBook = Encrypted();
+
+        growthBook.Features = new Dictionary<string, Feature> { ["fresh-flag"] = Flag(true) };
+
+        var payload = growthBook.GetDecryptedPayload();
+
+        payload["features"]["fresh-flag"].Should().NotBeNull();
+        payload["features"].Children().Should().HaveCount(1, "only the features in effect, not the ones the ciphertext held");
+    }
+
+    [Fact]
+    public void AnUntouchedInstanceStillExportsItsEncryptedPayload()
+    {
+        using var growthBook = Encrypted();
+
+        growthBook.GetPayload()["encryptedFeatures"].Value<string>().Should().Be(EncryptedPayload,
+            "nothing replaced the features, so the ciphertext still describes them");
+        growthBook.GetDecryptedPayload()["features"].Should().NotBeNull();
     }
 }
