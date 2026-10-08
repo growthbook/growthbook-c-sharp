@@ -26,6 +26,8 @@ namespace GrowthBook
     public class GrowthBook : IGrowthBook, IDisposable
     {
         private readonly bool _qaMode;
+        private IDictionary<string, Feature> _features;
+        private string _encryptedFeatures;
         private readonly Dictionary<string, ExperimentAssignment> _assigned;
         private readonly ConcurrentDictionary<string, byte> _tracked;
         private Action<Experiment, ExperimentResult> _trackingCallback;
@@ -133,6 +135,8 @@ namespace GrowthBook
 
                 _featureRepository = new FeatureRepository(featureRepositoryLogger, featureCache, featureRefreshWorker, remoteEvaluationService);
             }
+
+            RetainEncryptedFeatures(context);
         }
 
         private void ApplyEncryptedFeatures(Context context)
@@ -170,9 +174,35 @@ namespace GrowthBook
         public JObject Attributes { get; set; }
 
         /// <summary>
+        /// Records the ciphertext the context carried, once construction has finished assigning the
+        /// features. Assigning Features clears it, so this has to be the last word in the
+        /// constructor - anything that sets the features later is a genuine replacement.
+        /// </summary>
+        private void RetainEncryptedFeatures(Context context)
+        {
+            _encryptedFeatures = context.EncryptedFeatures;
+        }
+
+        /// <summary>
         /// Dictionary of the currently loaded feature objects.
         /// </summary>
-        public IDictionary<string, Feature> Features { get; set; }
+        /// <remarks>
+        /// Assigning this clears the retained ciphertext. The two described the same payload when the
+        /// instance was built, and once the features are replaced they no longer do - exporting the old
+        /// ciphertext would hand another tier definitions this instance is not evaluating.
+        /// </remarks>
+        public IDictionary<string, Feature> Features
+        {
+            get
+            {
+                return _features;
+            }
+            set
+            {
+                _features = value;
+                _encryptedFeatures = null;
+            }
+        }
 
         /// <summary>
         /// The currently loaded experiments (separate from features).
@@ -457,7 +487,7 @@ namespace GrowthBook
         public JObject GetPayload()
         {
             var payload = new JObject();
-            var encryptedFeatures = _context?.EncryptedFeatures;
+            var encryptedFeatures = _encryptedFeatures;
 
             if (encryptedFeatures.IsNullOrWhitespace())
             {
@@ -481,7 +511,7 @@ namespace GrowthBook
         /// <inheritdoc />
         public JObject GetDecryptedPayload()
         {
-            var encryptedFeatures = _context?.EncryptedFeatures;
+            var encryptedFeatures = _encryptedFeatures;
             var payload = GetPayload();
 
             if (encryptedFeatures.IsNullOrWhitespace())
@@ -504,7 +534,8 @@ namespace GrowthBook
             }
             catch (Exception ex)
             {
-                throw new DecryptionException("The encrypted payload could not be decrypted with the configured decryption key", ex);
+                throw new DecryptionException(
+                    $"The encrypted payload could not be decrypted with the configured decryption key ({ex.GetType().Name})");
             }
 
             payload.Remove("encryptedFeatures");
