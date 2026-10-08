@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using GrowthBook.Api;
+using NSubstitute;
 using Newtonsoft.Json.Linq;
 using Xunit;
 
@@ -16,6 +18,31 @@ namespace GrowthBook.Tests.CustomTests;
 /// </summary>
 public class LifecycleCallbackTests : UnitTest
 {
+    private static GrowthBook NewInstanceWithExperiment() => new GrowthBook(new Context
+    {
+        Attributes = JObject.FromObject(new { id = "user-1" }),
+        Features = new Dictionary<string, Feature>
+        {
+            ["experiment-flag"] = new Feature
+            {
+                DefaultValue = false,
+                Rules = new List<FeatureRule>
+                {
+                    new FeatureRule
+                    {
+                        Variations = new JArray(false, true),
+                        Coverage = 1d,
+                        Meta = new List<VariationMeta>
+                        {
+                            new VariationMeta { Key = "0" },
+                            new VariationMeta { Key = "1" }
+                        }
+                    }
+                }
+            }
+        }
+    });
+
     private static GrowthBook NewInstance() => new GrowthBook(new Context
     {
         Attributes = JObject.FromObject(new { id = "user-1" }),
@@ -100,7 +127,7 @@ public class LifecycleCallbackTests : UnitTest
 
         field.Should().NotBeNull("the test needs to see the registry to assert it was released");
 
-        return ((List<Action>)field.GetValue(growthBook)).Count;
+        return ((System.Collections.ICollection)field.GetValue(growthBook)).Count;
     }
 
     [Fact]
@@ -154,9 +181,10 @@ public class LifecycleCallbackTests : UnitTest
     [Fact]
     public void ACallbackStillSeesTheStateItMayNeed()
     {
-        var growthBook = NewInstance();
+        var growthBook = NewInstanceWithExperiment();
 
-        growthBook.EvalFeature("flag");
+        growthBook.EvalFeature("experiment-flag").ExperimentResult.Should().NotBeNull();
+        growthBook.GetAllResults().Should().NotBeEmpty("the assignment is recorded before teardown starts");
 
         var featuresAtTeardown = -1;
         var resultsAtTeardown = -1;
@@ -171,8 +199,10 @@ public class LifecycleCallbackTests : UnitTest
 
         featuresAtTeardown.Should().Be(1,
             "callbacks run before the state is released, so one that needs the features can still read them");
-        resultsAtTeardown.Should().Be(0, "this feature has no experiment rule, so nothing was assigned");
+        resultsAtTeardown.Should().Be(1,
+            "and the assignments it may need to report on are still there while it runs");
         growthBook.Features.Should().BeEmpty("and the release still happened afterwards");
+        growthBook.GetAllResults().Should().BeEmpty("including the assignments, once the callbacks are done");
     }
 
     [Fact]
@@ -375,5 +405,87 @@ public class LifecycleCallbackTests : UnitTest
         Action dispose = () => registration.Dispose();
 
         dispose.Should().NotThrow();
+    }
+
+    /// <summary>
+    /// A callback can unregister another while the batch is already running. The list it was taken
+    /// from has been replaced by then, so removing from the live list leaves the pending callback in
+    /// the batch and it runs after the caller asked for it not to.
+    /// </summary>
+    [Fact]
+    public void ACallbackCancelledByAnEarlierOneDoesNotRun()
+    {
+        var growthBook = NewInstance();
+        var secondRan = false;
+
+        IDisposable second = null;
+
+        growthBook.OnDestroy(() => second.Dispose());
+        second = growthBook.OnDestroy(() => secondRan = true);
+
+        growthBook.Destroy();
+
+        secondRan.Should().BeFalse(
+            "because the handle was disposed before its callback was reached, and disposing a handle means it does not run");
+    }
+
+    /// <summary>
+    /// Features is publicly writable, so a callback can leave it as something Clear cannot be called
+    /// on. Teardown is already past the point of no return by then - nothing can retry it - so the
+    /// resources still have to be released.
+    /// </summary>
+    [Fact]
+    public void ACallbackBreakingTheStateDoesNotStopTheResourcesBeingReleased()
+    {
+        var repository = Substitute.For<IGrowthBookFeatureRepository>();
+
+        var growthBook = new GrowthBook(new Context
+        {
+            Attributes = JObject.FromObject(new { id = "user-1" }),
+            Features = new Dictionary<string, Feature> { ["flag"] = new Feature { DefaultValue = true } },
+            FeatureRepository = repository
+        });
+
+        growthBook.OnDestroy(() => growthBook.Features = null);
+
+        Action destroy = () => growthBook.Destroy();
+
+        destroy.Should().NotThrow("because teardown cannot be retried, so it has to finish");
+        repository.Received(1).Cancel();
+        growthBook.IsDestroyed.Should().BeTrue();
+    }
+
+    /// <summary>
+    /// Two threads disposing at once could both get past the check before either set the flag. The
+    /// one that found no callbacks left to run would then clear the state while the other's
+    /// callbacks were still reading it. Hammered, since the window is only reachable by a race.
+    /// </summary>
+    [Fact]
+    public void ConcurrentTeardownDoesNotClearTheStateACallbackIsReading()
+    {
+        for (var attempt = 0; attempt < 2000; attempt++)
+        {
+            var growthBook = NewInstance();
+            var featuresSeen = -1;
+
+            growthBook.OnDestroy(() =>
+            {
+                // Long enough for a second teardown to reach the state clearing if it is going to.
+                Thread.SpinWait(2000);
+                featuresSeen = growthBook.Features?.Count ?? -1;
+            });
+
+            var ready = new ManualResetEventSlim(false);
+
+            var racers = Enumerable.Range(0, 6)
+                .Select(_ => Task.Run(() => { ready.Wait(); growthBook.Destroy(); }))
+                .ToArray();
+
+            ready.Set();
+            Task.WaitAll(racers, TimeSpan.FromSeconds(10));
+
+            featuresSeen.Should().Be(1,
+                "because only one teardown may run, and the callbacks it fires must still see the state they were promised");
+        }
     }
 }
