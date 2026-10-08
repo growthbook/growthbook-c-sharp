@@ -258,5 +258,35 @@ namespace GrowthBook.Tests.CustomTests
             Eval(nonMember, InGroup($"\"{GroupName}\""), listShaped).Should().BeFalse();
             Eval(nonMember, NotInGroup($"\"{GroupName}\""), listShaped).Should().BeTrue();
         }
+
+        /// <summary>
+        /// A malformed group definition is bad payload, not a reason to abandon the evaluation: the
+        /// condition still has to produce a result the caller can act on. The explicit cast on `type`
+        /// throws for anything that is not a primitive.
+        /// </summary>
+        [Theory]
+        [InlineData(@"{ ""admins"": { ""type"": { ""nested"": true }, ""values"": [ ""user-1"" ] } }")]
+        [InlineData(@"{ ""admins"": { ""type"": [ ""list"" ], ""values"": [ ""user-1"" ] } }")]
+        [InlineData(@"{ ""admins"": { ""type"": 42, ""values"": [ ""user-1"" ] } }")]
+        public void AGroupWhoseTypeIsNotAStringDoesNotInterruptTheEvaluation(string savedGroups)
+        {
+            var attributes = JObject.Parse(@"{ ""id"": ""user-1"" }");
+
+            // Both false, like every other unresolvable group - see
+            // AnUnresolvableSavedGroupMakesBothOperatorsFalse. The point here is that it answers at
+            // all rather than throwing part way through the evaluation.
+            Eval(attributes, InGroup($"\"{GroupName}\""), savedGroups).Should().BeFalse();
+            Eval(attributes, NotInGroup($"\"{GroupName}\""), savedGroups).Should().BeFalse();
+        }
+
+        [Fact]
+        public void AWellFormedListGroupStillResolves()
+        {
+            const string listGroup = @"{ ""admins"": { ""type"": ""list"", ""values"": [ ""user-1"" ] } }";
+            var attributes = JObject.Parse(@"{ ""id"": ""user-1"" }");
+
+            Eval(attributes, InGroup($"\"{GroupName}\""), listGroup).Should().BeTrue(
+                "because the shape the API actually sends has to keep working");
+        }
     }
 }

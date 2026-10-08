@@ -441,8 +441,10 @@ namespace GrowthBook.Providers
                 return values;
             }
 
-            // The other shape the reference accepts, alongside a bare array.
-            if (entry is JObject group && (string)group["type"] == "list")
+            // The other shape the reference accepts, alongside a bare array. The type is read as a
+            // string only when it is one: casting an object or an array throws, and a malformed
+            // group is unresolvable rather than a reason to abandon the evaluation.
+            if (entry is JObject group && group["type"]?.Type == JTokenType.String && (string)group["type"] == "list")
             {
                 return group["values"] as JArray;
             }
