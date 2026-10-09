@@ -27,6 +27,8 @@ namespace GrowthBook
     {
         private readonly bool _qaMode;
         private readonly Dictionary<string, ExperimentAssignment> _assigned;
+        private readonly object _destroyCallbackLock = new object();
+        private List<DestroyRegistration> _destroyCallbacks = new List<DestroyRegistration>();
         private readonly ConcurrentDictionary<string, byte> _tracked;
         private Action<Experiment, ExperimentResult> _trackingCallback;
         private bool _disposedValue;
@@ -200,26 +202,63 @@ namespace GrowthBook
         /// <param name="disposing">If true, dispose of large objects.</param>
         protected virtual void Dispose(bool disposing)
         {
-            if (!_disposedValue)
+            if (!disposing)
             {
-                if (disposing)
-                {
-                    Attributes = null;
-                    Features.Clear();
-                    ForcedVariations = null;
-                    _trackingCallback = null;
-                    _assigned.Clear();
-                    _tracked.Clear();
-                    _subscribers.Clear();
-                    _asyncSubscribers.Clear();
-                    _featureRepository.Cancel();
+                // There is nothing unmanaged to release, and a consumer's destroy callback must never run
+                // on the finalizer thread. Leaving the flag alone keeps a later real Dispose able to work.
+                return;
+            }
 
-                    if (_ownsLoggerFactory && _loggerFactory is IDisposable disposableFactory)
-                    {
-                        disposableFactory.Dispose();
-                    }
+            lock (_destroyCallbackLock)
+            {
+                // Checked and set together: two threads disposing at once could otherwise both get
+                // past the check, and the one that found no callbacks to run would clear the state
+                // out from under the callbacks the other was still running.
+                if (_disposedValue)
+                {
+                    return;
                 }
+
+                // Set before the callbacks run and before the state is cleared, so a callback asking
+                // IsDestroyed sees the teardown it was called for.
                 _disposedValue = true;
+            }
+
+            FireDestroyCallbacks();
+
+            try
+            {
+                Attributes = null;
+                Features?.Clear();
+                ForcedVariations = null;
+                _trackingCallback = null;
+                _assigned.Clear();
+                _tracked.Clear();
+                _subscribers.Clear();
+                _asyncSubscribers.Clear();
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "Encountered unhandled exception while releasing instance state");
+            }
+
+            try
+            {
+                // A consumer-supplied repository, and the built-in one's CancellationTokenSource, can both
+                // throw. The instance is already marked destroyed, so an escape would strand it with the
+                // rest of the teardown undone and no way to retry.
+                _featureRepository.Cancel();
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "Encountered unhandled exception while cancelling the feature repository");
+            }
+            finally
+            {
+                if (_ownsLoggerFactory && _loggerFactory is IDisposable disposableFactory)
+                {
+                    disposableFactory.Dispose();
+                }
             }
         }
 
@@ -238,6 +277,102 @@ namespace GrowthBook
         public void Destroy()
         {
             Dispose();
+        }
+
+        /// <inheritdoc />
+        public bool IsDestroyed => _disposedValue;
+
+        /// <inheritdoc />
+        public IDisposable OnDestroy(Action callback)
+        {
+            if (callback is null)
+            {
+                return new Subscription(() => { });
+            }
+
+            lock (_destroyCallbackLock)
+            {
+                if (!_disposedValue)
+                {
+                    var registration = new DestroyRegistration(callback);
+
+                    _destroyCallbacks.Add(registration);
+
+                    return new Subscription(() =>
+                    {
+                        lock (_destroyCallbackLock)
+                        {
+                            registration.Removed = true;
+                            _destroyCallbacks.Remove(registration);
+                        }
+                    });
+                }
+            }
+
+            // A callback queued against a destroyed instance would never run.
+            _logger?.LogDebug("A destroy callback was registered after teardown, running it immediately");
+
+            InvokeDestroyCallback(callback);
+
+            return new Subscription(() => { });
+        }
+
+        /// <summary>
+        /// Runs the registered destroy callbacks and releases them.
+        /// </summary>
+        private void FireDestroyCallbacks()
+        {
+            List<DestroyRegistration> callbacks;
+
+            lock (_destroyCallbackLock)
+            {
+                callbacks = _destroyCallbacks;
+                _destroyCallbacks = new List<DestroyRegistration>();
+            }
+
+            foreach (var registration in callbacks)
+            {
+                bool removed;
+
+                lock (_destroyCallbackLock)
+                {
+                    removed = registration.Removed;
+                }
+
+                if (removed)
+                {
+                    continue;
+                }
+
+                InvokeDestroyCallback(registration.Callback);
+            }
+        }
+
+        private sealed class DestroyRegistration
+        {
+            public DestroyRegistration(Action callback)
+            {
+                Callback = callback;
+            }
+
+            public Action Callback { get; }
+
+            public bool Removed { get; set; }
+        }
+
+        /// <summary>
+        /// Calls a destroy callback, absorbing anything it throws.
+        /// </summary>
+        private void InvokeDestroyCallback(Action callback)
+        {
+            try
+            {
+                callback();
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "Encountered unhandled exception in a destroy callback");
+            }
         }
 
         /// <summary>
