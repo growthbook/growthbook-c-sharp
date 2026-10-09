@@ -49,6 +49,14 @@ namespace GrowthBook.Api.Extensions
                         etagCache.Remove(endpoint);
                     }
                 }
+                // Apply any configured request headers (e.g., Authorization)
+                if (config?.RequestHeaders != null)
+                {
+                    foreach (var header in config.RequestHeaders)
+                    {
+                        httpClient.DefaultRequestHeaders.TryAddWithoutValidation(header.Key, header.Value);
+                    }
+                }
 
                 var response = await httpClient.SendAsync(request, cancellationToken);
                 var isServerSentEventsEnabled = response.Headers.TryGetValues(HttpHeaders.ServerSentEvents.Key, out var values) && values.Contains(HttpHeaders.ServerSentEvents.EnabledValue);

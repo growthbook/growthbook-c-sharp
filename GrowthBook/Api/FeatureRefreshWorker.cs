@@ -33,9 +33,11 @@ namespace GrowthBook.Api
         private readonly LruETagCache _etagCache;
         private readonly string _featuresApiEndpoint;
         private readonly string _serverSentEventsApiEndpoint;
-        private bool _isServerSentEventsEnabled;
+        private volatile bool _isServerSentEventsEnabled;
         private SSEClient _sseClient;
+        private readonly object _sseClientLock = new object();
         private CancellationTokenSource _refreshWorkerCancellation = new CancellationTokenSource();
+        private string _lastKnownEventId; // Track last processed event ID to prevent duplicates
 
         public FeatureRefreshWorker(ILogger<FeatureRefreshWorker> logger, IHttpClientFactory httpClientFactory, GrowthBookConfigurationOptions config, IGrowthBookFeatureCache cache)
         {
@@ -58,14 +60,19 @@ namespace GrowthBook.Api
         public void Cancel()
         {
             _refreshWorkerCancellation.Cancel();
-            _sseClient?.Disconnect();
+            lock (_sseClientLock)
+            {
+                _sseClient?.Disconnect();
+            }
         }
 
         public async Task<IDictionary<string, Feature>> RefreshCacheFromApi(CancellationToken? cancellationToken = null)
         {
             _logger.LogInformation("Making an HTTP request to the default Features API endpoint \'{FeaturesApiEndpoint}\'", _featuresApiEndpoint);
 
-            var httpClient = _httpClientFactory.CreateClient(ConfiguredClients.DefaultApiClient);
+            try
+            {
+                var httpClient = _httpClientFactory.CreateClient(ConfiguredClients.DefaultApiClient);
 
             var response = await httpClient.GetFeaturesFrom(_featuresApiEndpoint, _logger, _config, cancellationToken ?? _refreshWorkerCancellation.Token, _etagCache);
 
@@ -81,10 +88,12 @@ namespace GrowthBook.Api
 
             if (response.Features is null)
             {
+                NotifyFeaturesRefreshed(false);
                 return null;
             }
 
             await _cache.RefreshWith(response.Features, cancellationToken);
+            NotifyFeaturesRefreshed(true);
 
             // Now that the cache has been populated at least once, we need to see if we're allowed
             // to kick off the server sent events listener and make sure we're in the intended mode
@@ -96,25 +105,53 @@ namespace GrowthBook.Api
                 EnsureCorrectRefreshModeIsActive();
             }
 
-            return response.Features;
+                return response.Features;
+            }
+            catch (Exception)
+            {
+                NotifyFeaturesRefreshed(false);
+                throw;
+            }
+        }
+
+        private void NotifyFeaturesRefreshed(bool succeeded)
+        {
+            var callback = _config?.OnFeaturesRefreshed;
+
+            if (callback == null)
+            {
+                return;
+            }
+
+            try
+            {
+                callback(succeeded);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "The OnFeaturesRefreshed callback threw while being told the refresh {Outcome}", succeeded ? "succeeded" : "failed");
+            }
         }
 
         private void EnsureCorrectRefreshModeIsActive()
         {
-            if (_isServerSentEventsEnabled)
+            lock (_sseClientLock)
             {
-                if (_sseClient == null || _sseClient.ConnectionStatus == SSEConnectionStatus.Disconnected)
+                if (_isServerSentEventsEnabled)
                 {
-                    _logger.LogDebug("Server sent events are enabled but not connected, starting SSE client now");
-                    StartSSEClient();
+                    if (_sseClient == null || _sseClient.ConnectionStatus == SSEConnectionStatus.Disconnected)
+                    {
+                        _logger.LogDebug("Server sent events are enabled but not connected, starting SSE client now");
+                        StartSSEClient();
+                    }
                 }
-            }
-            else
-            {
-                if (_sseClient != null && _sseClient.ConnectionStatus != SSEConnectionStatus.Disconnected)
+                else
                 {
-                    _logger.LogDebug("Server sent events are disabled but client is connected, disconnecting now");
-                    _sseClient.Disconnect();
+                    if (_sseClient != null && _sseClient.ConnectionStatus != SSEConnectionStatus.Disconnected)
+                    {
+                        _logger.LogDebug("Server sent events are disabled but client is connected, disconnecting now");
+                        _sseClient.Disconnect();
+                    }
                 }
             }
         }
@@ -124,23 +161,59 @@ namespace GrowthBook.Api
             try
             {
                 _sseClient?.Dispose();
-                
-                var sseLogger = _logger as ILogger<SSEClient> ?? 
+
+                var sseLogger = _logger as ILogger<SSEClient> ??
                     new Microsoft.Extensions.Logging.Abstractions.NullLogger<SSEClient>();
-                
-                _sseClient = new SSEClient(sseLogger, _httpClientFactory, _serverSentEventsApiEndpoint, null, ConfiguredClients.ServerSentEventsApiClient);
-                
-                // Add general event listener for all events (handles data field)
-                _sseClient.AddEventListener(null, async (sseEvent) =>
+
+                _sseClient = new SSEClient(sseLogger, _httpClientFactory, _serverSentEventsApiEndpoint, _config?.StreamingRequestHeaders != null ? new Dictionary<string, string>(_config.StreamingRequestHeaders) : null, ConfiguredClients.ServerSentEventsApiClient);
+
+                // Add event listener specifically for "features" events
+                _sseClient.AddEventListener("features", async (sseEvent) =>
                 {
-                    if (sseEvent.HasData)
+                    try
                     {
-                        _logger.LogDebug("Received SSE event: {Data}", sseEvent.Data?.Substring(0, Math.Min(sseEvent.Data?.Length ?? 0, 100)));
-                        
-                        var features = GetFeaturesFrom(sseEvent.Data);
-                        await _cache.RefreshWith(features, _refreshWorkerCancellation.Token);
-                        
-                        _logger.LogInformation("Cache has been refreshed with server sent event features");
+                        // Check for duplicate events by comparing event ID
+                        if (!string.IsNullOrEmpty(sseEvent.Id) && _lastKnownEventId == sseEvent.Id)
+                        {
+                            _logger.LogDebug("Skipping duplicate SSE event with ID: {EventId}", sseEvent.Id);
+                            return;
+                        }
+
+                        if (sseEvent.HasData)
+                        {
+                            // Deliberately not the body, nor an excerpt of it: a features payload carries saved
+                            // groups, which are typically lists of user identifiers, so writing any of it out
+                            // puts personal data into whatever sink the host has configured.
+                            _logger.LogDebug("Received an SSE features event carrying \'{CharacterCount}\' characters", sseEvent.Data?.Length ?? 0);
+
+                            try
+                            {
+                                var features = GetFeaturesFrom(sseEvent.Data);
+                                await _cache.RefreshWith(features, _refreshWorkerCancellation.Token);
+                                NotifyFeaturesRefreshed(true);
+
+                                // Update last known event ID to prevent duplicates
+                                if (!string.IsNullOrEmpty(sseEvent.Id))
+                                {
+                                    _lastKnownEventId = sseEvent.Id;
+                                    _config?.OnStreamingEventId?.Invoke(sseEvent.Id);
+                                }
+
+                                _logger.LogInformation("Cache has been refreshed with server sent event features");
+                            }
+                            catch (Exception ex)
+                            {
+                                // Handle JSON parsing/decryption errors
+                                _logger.LogError(ex, "Error parsing SSE features data");
+                                NotifyFeaturesRefreshed(false);
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        // Handle any other errors in event processing
+                        _logger.LogError(ex, "Error processing SSE features event");
+                        NotifyFeaturesRefreshed(false);
                     }
                 });
 
@@ -152,7 +225,9 @@ namespace GrowthBook.Api
 
                 _sseClient.ConnectionError += (exception) =>
                 {
+                    // Propagate connection errors to callback
                     _logger.LogError(exception, "SSE connection error occurred");
+                    NotifyFeaturesRefreshed(false);
                 };
 
                 // Start the connection
@@ -164,7 +239,9 @@ namespace GrowthBook.Api
                     }
                     catch (Exception ex)
                     {
+                        // Handle initial connection errors
                         _logger.LogError(ex, "Failed to start SSE client");
+                        NotifyFeaturesRefreshed(false);
                     }
                 });
             }
@@ -199,7 +276,10 @@ namespace GrowthBook.Api
         public void Dispose()
         {
             Cancel();
-            _sseClient?.Dispose();
+            lock (_sseClientLock)
+            {
+                _sseClient?.Dispose();
+            }
             _refreshWorkerCancellation?.Dispose();
         }
     }

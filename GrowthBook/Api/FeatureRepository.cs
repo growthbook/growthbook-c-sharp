@@ -21,6 +21,9 @@ namespace GrowthBook.Api
         private readonly IRemoteEvaluationService _remoteEvaluationService;
         private readonly ConcurrentDictionary<string, ExperimentAssignment> _assigned;
         private readonly ConcurrentDictionary<string, byte> _tracked;
+        private readonly SemaphoreSlim _refreshLock = new SemaphoreSlim(1, 1);
+
+        private Task<IDictionary<string, Feature>> _inFlightRefresh;
 
         public FeatureRepository(ILogger<FeatureRepository> logger, IGrowthBookFeatureCache cache, IGrowthBookFeatureRefreshWorker backgroundRefreshWorker, IRemoteEvaluationService remoteEvaluationService = null)
         {
@@ -45,41 +48,98 @@ namespace GrowthBook.Api
             // first initialized, it should be pre-expired so that this is automatically hit
             // in order to populate the initial cache values.
 
-            if (_cache.IsCacheExpired || options?.ForceRefresh == true)
+            await _refreshLock.WaitAsync(cancellationToken ?? CancellationToken.None);
+            try
             {
-                _logger.LogInformation("Cache has expired or option to force refresh was set, refreshing the cache from the API");
-                _logger.LogDebug("Cache expired: \'{CacheIsCacheExpired}\' and option to force refresh: \'{OptionsForceRefresh}\'", _cache.IsCacheExpired, options?.ForceRefresh);
-
-                // Use TaskFactory.StartNew to decouple from the current SynchronizationContext
-                // This prevents threading issues in .NET Framework MVC when the original HttpContext
-                // thread is no longer available after the HTTP request completes
-                var taskFactory = new TaskFactory(cancellationToken ?? CancellationToken.None);
-                var refreshTask = taskFactory.StartNew(async () => await _backgroundRefreshWorker.RefreshCacheFromApi(cancellationToken)).Unwrap();
-
-                // When there aren't any features in the cache to begin with, we need to just wait until
-                // that has been officially refreshed to proceed (otherwise the caller gets nothing up front
-                // and has no way of determining when to check back). The other way to wait is if they explicitly
-                // have noted that this is something they'd like to do.
-                if (_cache.FeatureCount == 0 || options?.WaitForCompletion == true)
+                if (_cache.IsCacheExpired || options?.ForceRefresh == true)
                 {
-                    _logger.LogInformation("Either cache currently has no features or the option to wait for completion was set, waiting for cache to refresh");
-                    _logger.LogDebug("Feature count: '{CacheFeatureCount}' and option to wait for completion: '{OptionsWaitForCompletion}'", _cache.FeatureCount, options?.WaitForCompletion);
-                    return await refreshTask;
-                }
-                else
-                {
-                    // Start the refresh but don't wait - fire and forget
-                    _ = refreshTask.ContinueWith(t =>
+                    _logger.LogInformation(
+                        "Cache has expired or option to force refresh was set, refreshing the cache from the API");
+                    _logger.LogDebug(
+                        "Cache expired: \'{CacheIsCacheExpired}\' and option to force refresh: \'{OptionsForceRefresh}\'",
+                        _cache.IsCacheExpired, options?.ForceRefresh);
+
+                    var refreshTask = _inFlightRefresh;
+
+                    if (refreshTask == null || refreshTask.IsCompleted)
                     {
-                        if (t.IsFaulted)
-                            _logger.LogError(t.Exception, "Background cache refresh failed");
-                    }, TaskContinuationOptions.OnlyOnFaulted);
+                        // Use TaskFactory.StartNew to decouple from the current SynchronizationContext
+                        // This prevents threading issues in .NET Framework MVC when the original HttpContext
+                        // thread is no longer available after the HTTP request completes
+                        //
+                        // The shared refresh deliberately does not take this caller's token. Others join this
+                        // task, and in a web application the token belongs to one request: were it to abort,
+                        // it would cancel a refresh every other caller is now waiting on. Passing none leaves
+                        // the worker running on its own cancellation, which Cancel() trips.
+                        var taskFactory = new TaskFactory(CancellationToken.None);
+                        refreshTask = taskFactory.StartNew(async () =>
+                            await _backgroundRefreshWorker.RefreshCacheFromApi(null)).Unwrap();
+
+                        _inFlightRefresh = refreshTask;
+                    }
+                    else
+                    {
+                        _logger.LogDebug("A cache refresh is already in flight, joining it rather than starting another");
+                    }
+
+                    // When there aren't any features in the cache to begin with, we need to just wait until
+                    // that has been officially refreshed to proceed (otherwise the caller gets nothing up front
+                    // and has no way of determining when to check back). The other way to wait is if they explicitly
+                    // have noted that this is something they'd like to do.
+                    if (_cache.FeatureCount == 0 || options?.WaitForCompletion == true)
+                    {
+                        _logger.LogInformation(
+                            "Either cache currently has no features or the option to wait for completion was set, waiting for cache to refresh");
+                        _logger.LogDebug(
+                            "Feature count: '{CacheFeatureCount}' and option to wait for completion: '{OptionsWaitForCompletion}'",
+                            _cache.FeatureCount, options?.WaitForCompletion);
+                        return await WaitForRefresh(refreshTask, cancellationToken ?? CancellationToken.None);
+                    }
+                    else
+                    {
+                        // Start the refresh but don't wait - fire and forget
+                        _ = refreshTask.ContinueWith(t =>
+                        {
+                            if (t.IsFaulted)
+                                _logger.LogError(t.Exception, "Background cache refresh failed");
+                        }, TaskContinuationOptions.OnlyOnFaulted);
+                    }
+                }
+
+                _logger.LogInformation(
+                    "Cache is not expired and the option to force refresh was not set, retrieving features from cache");
+
+                return await _cache.GetFeatures(cancellationToken);
+            }
+            finally
+            {
+                _refreshLock.Release();
+            }
+        }
+
+        /// <summary>
+        /// Waits for a refresh that is shared with every other caller that arrived while it was in flight.
+        /// The refresh itself answers to none of them, so this caller can stop waiting on it when its own
+        /// token is cancelled without the refresh the others are waiting on going with it.
+        /// </summary>
+        private static async Task<IDictionary<string, Feature>> WaitForRefresh(Task<IDictionary<string, Feature>> refreshTask, CancellationToken cancellationToken)
+        {
+            if (!cancellationToken.CanBeCanceled)
+            {
+                return await refreshTask;
+            }
+
+            var cancelled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            using (cancellationToken.Register(state => ((TaskCompletionSource<bool>)state).TrySetResult(true), cancelled))
+            {
+                if (await Task.WhenAny(refreshTask, cancelled.Task) != refreshTask)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
                 }
             }
 
-            _logger.LogInformation("Cache is not expired and the option to force refresh was not set, retrieving features from cache");
-
-            return await _cache.GetFeatures(cancellationToken);
+            return await refreshTask;
         }
 
         /// <inheritdoc/>

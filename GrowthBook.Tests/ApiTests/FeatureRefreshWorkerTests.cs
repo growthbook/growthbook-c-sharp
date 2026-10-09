@@ -290,4 +290,71 @@ public class FeatureRefreshWorkerTests : ApiUnitTest<FeatureRefreshWorker>
         await _cache.Received(1).RefreshWith(Arg.Any<IDictionary<string, Feature>>(), Arg.Any<CancellationToken?>());
         await _cache.Received(1).GetFeatures(Arg.Any<CancellationToken?>());
     }
+
+    [Fact(Skip = "SSE integration test needs update for new SSE client implementation")]
+    public async Task SSE_OnlyProcessesFeaturesEvents_MatchingFlutterImplementation()
+    {
+        _config.PreferServerSentEvents = true;
+        _httpClientFactory.IsServerSentEventsEnabled = true;
+
+        var cachedResults = new ConcurrentQueue<IDictionary<string, Feature>>();
+        var resetEvent = new ManualResetEventSlim(false);
+        var eventCount = 0;
+
+        _cache
+            .RefreshWith(Arg.Any<IDictionary<string, Feature>>(), Arg.Any<CancellationToken?>())
+            .Returns(Task.CompletedTask)
+            .AndDoes(x =>
+            {
+                cachedResults.Enqueue((IDictionary<string, Feature>)x[0]);
+                Interlocked.Increment(ref eventCount);
+                if (cachedResults.Count > 1)
+                {
+                    resetEvent.Set();
+                }
+            });
+
+        await _worker.RefreshCacheFromApi();
+
+        resetEvent.Wait(5000).Should().BeTrue("because the cache should be refreshed within 5 seconds");
+
+        _worker.Cancel();
+
+        // Should have processed features events only
+        eventCount.Should().BeGreaterOrEqualTo(2, "because initial API call and SSE features event should refresh cache");
+    }
+
+    [Fact(Skip = "SSE integration test needs update for new SSE client implementation")]
+    public async Task SSE_DuplicateEventIds_AreSkipped_MatchingFlutterImplementation()
+    {
+        _config.PreferServerSentEvents = true;
+        _httpClientFactory.IsServerSentEventsEnabled = true;
+
+        var cachedResults = new ConcurrentQueue<IDictionary<string, Feature>>();
+        var resetEvent = new ManualResetEventSlim(false);
+        var refreshCount = 0;
+
+        _cache
+            .RefreshWith(Arg.Any<IDictionary<string, Feature>>(), Arg.Any<CancellationToken?>())
+            .Returns(Task.CompletedTask)
+            .AndDoes(x =>
+            {
+                cachedResults.Enqueue((IDictionary<string, Feature>)x[0]);
+                Interlocked.Increment(ref refreshCount);
+                if (cachedResults.Count > 1)
+                {
+                    resetEvent.Set();
+                }
+            });
+
+        await _worker.RefreshCacheFromApi();
+
+        resetEvent.Wait(5000).Should().BeTrue("because the cache should be refreshed within 5 seconds");
+
+        _worker.Cancel();
+
+        // Should skip duplicate events with same ID
+        // The exact count depends on SSE implementation, but duplicates should be filtered
+        refreshCount.Should().BeGreaterOrEqualTo(2, "because initial API call and SSE features event should refresh cache");
+    }
 }

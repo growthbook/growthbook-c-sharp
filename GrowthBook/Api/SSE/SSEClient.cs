@@ -28,6 +28,7 @@ namespace GrowthBook.Api.SSE
         private int _retryTimeMs = 3000; // Default retry time
         private int _maxRetryAttempts = 10;
         private int _currentRetryAttempt = 0;
+        private System.Net.HttpStatusCode? _lastStatusCode; // Track last status code for reconnection logic
 
         public SSEConnectionStatus ConnectionStatus => _connectionStatus;
         public string LastEventId => _lastEventId;
@@ -129,19 +130,49 @@ namespace GrowthBook.Api.SSE
 
                     using (var response = await httpClient.GetAsync(_endpoint, HttpCompletionOption.ResponseHeadersRead, cancellationToken))
                     {
+                        _lastStatusCode = response.StatusCode; // Store status code for reconnection logic
+                        
                         if (!response.IsSuccessStatusCode)
                         {
+                            if (IsSubscriptionOver(response.StatusCode))
+                            {
+                               _logger.LogInformation("SSE endpoint returned {StatusCode}, the subscription is over and will not be retried", response.StatusCode);
+                                SetConnectionStatus(SSEConnectionStatus.Disconnected);
+                                break;
+                            }
+
                             throw new HttpRequestException($"SSE connection failed with status code: {response.StatusCode}");
                         }
 
                         SetConnectionStatus(SSEConnectionStatus.Connected);
-                        _currentRetryAttempt = 0; // Reset retry counter on successful connection
-                        
+
+                        var deliveredEvents = false;
+
                         using (var stream = await response.Content.ReadAsStreamAsync())
                         using (var reader = new StreamReader(stream))
                         {
-                            await ProcessStreamAsync(reader, cancellationToken);
+                            deliveredEvents = await ProcessStreamAsync(reader, cancellationToken);
                         }
+
+                        if (deliveredEvents)
+                        {
+                           _currentRetryAttempt = 0;
+                        }
+
+                        if (!ShouldReconnect(_lastStatusCode.Value))
+                        {
+                            _logger.LogInformation("SSE connection closed with status {StatusCode}, not reconnecting", _lastStatusCode.Value);
+                            break;
+                        }
+
+                        _logger.LogInformation("SSE connection closed with status {StatusCode}, attempting to reconnect...", _lastStatusCode.Value);
+
+                        if (!await WaitBeforeReconnecting(cancellationToken))
+                        {
+                            break;
+                        }
+
+                        continue;
                     }
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -182,10 +213,15 @@ namespace GrowthBook.Api.SSE
             }
         }
 
-        private async Task ProcessStreamAsync(StreamReader reader, CancellationToken cancellationToken)
+        /// <summary>
+        /// Reads the stream to its end, returning whether it delivered any event. A connection that
+        /// delivered nothing is not evidence that the endpoint is healthy.
+        /// </summary>
+        private async Task<bool> ProcessStreamAsync(StreamReader reader, CancellationToken cancellationToken)
         {
             var buffer = new char[4096];
-            
+            var deliveredEvents = false;
+
             while (!cancellationToken.IsCancellationRequested)
             {
                 var bytesRead = await reader.ReadAsync(buffer, 0, buffer.Length);
@@ -200,9 +236,12 @@ namespace GrowthBook.Api.SSE
 
                 foreach (var sseEvent in events)
                 {
+                    deliveredEvents = true;
                     await ProcessEventAsync(sseEvent);
                 }
             }
+
+            return deliveredEvents;
         }
 
         private async Task ProcessEventAsync(SSEEvent sseEvent)
@@ -256,10 +295,88 @@ namespace GrowthBook.Api.SSE
 
         private int CalculateRetryDelay()
         {
-            // Exponential backoff with jitter
-            var baseDelay = Math.Min(_retryTimeMs * Math.Pow(2, _currentRetryAttempt), 30000); // Max 30 seconds
-            var jitter = new Random().Next(0, 1000); // Add up to 1 second jitter
+            // Exponential backoff with jitter. The exponent counts the attempts already made rather than this
+            // one, so the first reconnect waits exactly the time the server asked for with the `retry:` field
+            // instead of doubling it before anything has gone wrong twice.
+            var completedAttempts = Math.Max(_currentRetryAttempt - 1, 0);
+            var baseDelay = Math.Min(_retryTimeMs * Math.Pow(2, completedAttempts), 30000); // Max 30 seconds
+
+            // Jitter in proportion to the delay. A flat second on top would dominate the short retry
+            // times a server can ask for with the SSE `retry:` field.
+            var jitterCeiling = (int)Math.Min(baseDelay / 2, 1000);
+            var jitter = 0;
+
+            if (jitterCeiling > 0)
+            {
+                jitter = new Random().Next(0, jitterCeiling);
+            }
+
             return (int)baseDelay + jitter;
+        }
+
+        /// <summary>
+        /// Determines if SSE connection should be reconnected based on status code
+        /// </summary>
+        /// <param name="statusCode">HTTP status code</param>
+        /// <returns>True if status code is 200-299, false otherwise</returns>
+        private bool ShouldReconnect(System.Net.HttpStatusCode statusCode)
+        {
+            var statusCodeInt = (int)statusCode;
+            return statusCodeInt >= 200 && statusCodeInt < 300;
+        }
+
+        /// <summary>
+        /// Whether the server has refused the subscription outright rather than failed to serve it this time.
+        /// Retrying one of these repeats a request that cannot start succeeding on its own: the subscription
+        /// has ended, or the key it was made with is not one this endpoint will accept.
+        /// </summary>
+        private static bool IsSubscriptionOver(System.Net.HttpStatusCode statusCode)
+        {
+            switch (statusCode)
+            {
+                case System.Net.HttpStatusCode.Gone:
+                case System.Net.HttpStatusCode.Unauthorized:
+                case System.Net.HttpStatusCode.Forbidden:
+                case System.Net.HttpStatusCode.NotFound:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        /// <summary>
+        /// Counts a reconnect and waits out the backoff before it. Returns false when the attempts are
+        /// spent or the wait was cancelled, meaning the caller should stop.
+        /// </summary>
+        private async Task<bool> WaitBeforeReconnecting(CancellationToken cancellationToken)
+        {
+            _currentRetryAttempt++;
+
+            if (_currentRetryAttempt >= _maxRetryAttempts)
+            {
+                _logger.LogWarning("SSE connection gave up after {Attempts} attempts", _currentRetryAttempt);
+                SetConnectionStatus(SSEConnectionStatus.Disconnected);
+
+                return false;
+            }
+
+            SetConnectionStatus(SSEConnectionStatus.Reconnecting);
+
+            var delay = CalculateRetryDelay();
+            _logger.LogInformation("Retrying SSE connection in {Delay}ms", delay);
+
+            try
+            {
+                await Task.Delay(delay, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                SetConnectionStatus(SSEConnectionStatus.Disconnected);
+
+                return false;
+            }
+
+            return true;
         }
 
         private void SetConnectionStatus(SSEConnectionStatus status)

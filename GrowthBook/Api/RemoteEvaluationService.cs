@@ -59,12 +59,6 @@ namespace GrowthBook.Api
             {
                 using (var httpClient = _httpClientFactory.CreateClient(ConfiguredClients.DefaultApiClient))
                 {
-                    // Set default timeout if not configured
-                    if (httpClient.Timeout == Timeout.InfiniteTimeSpan)
-                    {
-                        httpClient.Timeout = TimeSpan.FromSeconds(30);
-                    }
-
                     // Prepare the request
                     using (var httpRequest = new HttpRequestMessage(HttpMethod.Post, url))
                     {

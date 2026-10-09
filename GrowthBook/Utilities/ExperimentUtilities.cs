@@ -91,7 +91,8 @@ namespace GrowthBook.Utilities
         /// <param name="coverage">The experiment's coverage (defaults to 1).</param>
         /// <param name="weights">Optional list of variant weights.</param>
         /// <returns>A list of bucket ranges.</returns>
-        public static IEnumerable<BucketRange> GetBucketRanges(int numVariations, double coverage = 1f, IEnumerable<double> weights = null)
+        public static IEnumerable<BucketRange> GetBucketRanges(int numVariations, double coverage = 1f,
+            IEnumerable<double> weights = null)
         {
             if (coverage < 0)
             {
@@ -236,8 +237,7 @@ namespace GrowthBook.Utilities
 
             var comparisons = new List<(string Actual, string Expected, bool IsPath)>
             {
-                (actual.Host, expectedUri.Host, false),
-                (actual.AbsolutePath, expectedUri.AbsolutePath, true)
+                (actual.Host, expectedUri.Host, false), (actual.AbsolutePath, expectedUri.AbsolutePath, true)
             };
 
             // We only want to compare hashes if it's explicitly being targeted
@@ -250,7 +250,7 @@ namespace GrowthBook.Utilities
             var actualQueryParameters = HttpUtility.ParseQueryString(actual.Query);
             var expectedQueryParameters = HttpUtility.ParseQueryString(expectedUri.Query);
 
-            for(var i = 0; i < expectedQueryParameters.Count; i++)
+            for (var i = 0; i < expectedQueryParameters.Count; i++)
             {
                 comparisons.Add((actualQueryParameters[i] ?? string.Empty, expectedQueryParameters[i], false));
             }
@@ -293,27 +293,36 @@ namespace GrowthBook.Utilities
             }
         }
 
-        public static (StickyAssignmentsDocument Document, bool IsChanged) GenerateStickyBucketAssignment(IStickyBucketService stickyBucketService, string attributeName, string attributeValue, IDictionary<string, string> assignments)
+        public static (StickyAssignmentsDocument Document, bool IsChanged) GenerateStickyBucketAssignment(
+            IStickyBucketService stickyBucketService, string attributeName, string attributeValue,
+            IDictionary<string, string> assignments)
         {
-            var existingDocument = stickyBucketService is null ? new StickyAssignmentsDocument(attributeName, attributeValue) : stickyBucketService.GetAssignments(attributeName, attributeValue);
-            var newAssignments = new Dictionary<string, string>(existingDocument?.Assignments ?? new Dictionary<string, string>());
+            var existingDocument = stickyBucketService is null
+                ? new StickyAssignmentsDocument(attributeName, attributeValue)
+                : stickyBucketService.GetAssignments(attributeName, attributeValue);
+            var newAssignments =
+                new Dictionary<string, string>(existingDocument?.Assignments ?? new Dictionary<string, string>());
 
             newAssignments.MergeWith(new[] { assignments });
 
-            var isChanged = JsonConvert.SerializeObject(existingDocument?.Assignments) != JsonConvert.SerializeObject(newAssignments);
+            var isChanged = JsonConvert.SerializeObject(existingDocument?.Assignments) !=
+                            JsonConvert.SerializeObject(newAssignments);
             var document = new StickyAssignmentsDocument(attributeName, attributeValue, newAssignments);
 
             return (document, isChanged);
         }
 
-        public static StickyBucketVariation GetStickyBucketVariation(Experiment experiment, int bucketVersion, int minBucketVersion, IList<VariationMeta> meta, JObject attributes, IDictionary<string, StickyAssignmentsDocument> document)
+        public static StickyBucketVariation GetStickyBucketVariation(Experiment experiment, int bucketVersion,
+            int minBucketVersion, IList<VariationMeta> meta, JObject attributes,
+            IDictionary<string, StickyAssignmentsDocument> document)
         {
             var id = GetStickyBucketExperimentKey(experiment.Key, experiment.BucketVersion);
-            var assignments = GetStickyBucketAssignments(attributes, document, experiment.HashAttribute, experiment.FallbackAttribute);
+            var assignments = GetStickyBucketAssignments(attributes, document, experiment.HashAttribute,
+                experiment.FallbackAttribute);
 
             if (experiment.MinBucketVersion > 0)
             {
-                for(var i = 0; i < experiment.MinBucketVersion; i++)
+                for (var i = 0; i < experiment.MinBucketVersion; i++)
                 {
                     var blockedKey = GetStickyBucketExperimentKey(experiment.Key, i);
 
@@ -330,11 +339,13 @@ namespace GrowthBook.Utilities
             }
 
             var variationIndex = FindVariationIndex(meta, variationKey);
-                        
+
             return new StickyBucketVariation(variationIndex, isVersionBlocked: false);
         }
 
-        private static IDictionary<string, string> GetStickyBucketAssignments(JObject attributes, IDictionary<string, StickyAssignmentsDocument> stickyAssignmentDocs, string hashAttribute, string fallbackAttribute)
+        private static IDictionary<string, string> GetStickyBucketAssignments(JObject attributes,
+            IDictionary<string, StickyAssignmentsDocument> stickyAssignmentDocs, string hashAttribute,
+            string fallbackAttribute)
         {
             var mergedAssignments = new Dictionary<string, string>();
 
@@ -343,17 +354,20 @@ namespace GrowthBook.Utilities
                 return mergedAssignments;
             }
 
-            (var hashAttributeWithoutFallback, var hashValueWithoutFallback) = attributes.GetHashAttributeAndValue(hashAttribute, default);
+            (var hashAttributeWithoutFallback, var hashValueWithoutFallback) =
+                attributes.GetHashAttributeAndValue(hashAttribute, default);
             var hashKey = new StickyAssignmentsDocument(hashAttributeWithoutFallback, hashValueWithoutFallback);
 
-            (var hashAttributeWithFallback, var hashValueWithFallback) = attributes.GetHashAttributeAndValue(fallbackAttribute, default);
+            (var hashAttributeWithFallback, var hashValueWithFallback) =
+                attributes.GetHashAttributeAndValue(fallbackAttribute, default);
             var fallbackKey = new StickyAssignmentsDocument(hashAttributeWithFallback, hashValueWithFallback);
 
             var pendingAssignments = new List<IDictionary<string, string>>();
 
             // We're grabbing any fallback values first so that the original can override them if present as well.
 
-            if (fallbackKey.HasValue && stickyAssignmentDocs.TryGetValue(fallbackKey.FormattedAttribute, out var fallbackDocument))
+            if (fallbackKey.HasValue && !string.IsNullOrEmpty(hashValueWithFallback) &&
+                stickyAssignmentDocs.TryGetValue(fallbackKey.FormattedAttribute, out var fallbackDocument))
             {
                 pendingAssignments.Add(fallbackDocument.Assignments);
             }
@@ -368,7 +382,7 @@ namespace GrowthBook.Utilities
 
         private static int FindVariationIndex(IList<VariationMeta> meta, string key)
         {
-            for(var i = 0; i < meta.Count; i++)
+            for (var i = 0; i < meta.Count; i++)
             {
                 if (meta[i].Key == key)
                 {
@@ -380,5 +394,100 @@ namespace GrowthBook.Utilities
         }
 
         public static string GetStickyBucketExperimentKey(string key, int bucketVersion) => $"{key}__{bucketVersion}";
+
+        public static bool IsFilteredOut(IEnumerable<Filter> filters, JObject attributes)
+        {
+            foreach (var filter in filters)
+            {
+                (_, var hashValue) = attributes.GetHashAttributeAndValue(filter.Attribute);
+
+                if (hashValue.IsNullOrWhitespace())
+                {
+                    return true;
+                }
+
+                var bucket = HashUtilities.Hash(filter.Seed, hashValue, filter.HashVersion);
+
+                var isInAnyRange = filter.Ranges.Any(x => ExperimentUtilities.InRange(bucket.Value, x));
+
+                if (!isInAnyRange)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        public static bool IsIncludedInRollout(string seed, JObject attributes, string hashAttribute = null,
+            BucketRange range = null, double? coverage = null, int? hashVersion = null)
+        {
+            if (coverage == null && range == null)
+            {
+                return true;
+            }
+
+            if (range is null && coverage == 0)
+            {
+                return false;
+            }
+
+            (_, var hashValue) = attributes.GetHashAttributeAndValue(hashAttribute);
+
+            if (hashValue is null)
+            {
+                return false;
+            }
+
+            var bucket = HashUtilities.Hash(seed, hashValue, hashVersion ?? 1);
+
+            if (range != null)
+            {
+                return ExperimentUtilities.InRange(bucket.Value, range);
+            }
+
+            if (coverage != null)
+            {
+                return bucket <= coverage;
+            }
+
+            return true;
+        }
+
+        public static IEnumerable<string> DeriveIdentifierAttributes(IDictionary<string, Feature> features,
+            IList<Experiment> experiments,
+            JObject attributes
+        )
+        {
+            var attributeNames = new HashSet<string>();
+
+            // Scan feature rules — only rules with variations use sticky bucketing
+            foreach (var feature in features.Values)
+            {
+                foreach (var rule in feature?.Rules ?? Enumerable.Empty<FeatureRule>())
+                {
+                    if (!rule.Variations.IsNull())
+                    {
+                        attributeNames.Add(rule.HashAttribute ?? "id");
+                        if (!string.IsNullOrEmpty(rule.FallbackAttribute))
+                            attributeNames.Add(rule.FallbackAttribute);
+                    }
+                }
+            }
+
+            // Scan experiments
+            foreach (var experiment in experiments ?? Enumerable.Empty<Experiment>())
+            {
+                attributeNames.Add(experiment.HashAttribute ?? "id");
+                if (!string.IsNullOrEmpty(experiment.FallbackAttribute))
+                    attributeNames.Add(experiment.FallbackAttribute);
+            }
+
+            // Map attribute names to current user values and format as "name||value"
+            return attributeNames
+                .Select(name => (name, value: attributes?[name]?.ToString()))
+                .Where(pair => !string.IsNullOrEmpty(pair.value))
+                .Select(pair => $"{pair.name}||{pair.value}");
+        }
     }
 }

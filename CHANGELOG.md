@@ -24,6 +24,92 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Stopped logging feature payload bodies, both the raw API response and the decrypted one. A payload carries saved
   groups, which are typically lists of user identifiers, so it is personal data. Character counts are logged instead.
 
+### Added
+- `GrowthBookClient` — new thread-safe singleton client for multiuser server-side scenarios (ASP.NET Core, Azure Functions, workers). Accepts a per-request `UserContext` for each evaluation, with no per-user object allocation.
+- `UserContext` — per-request DTO for user attributes, forced variations, forced feature values, tracking callback, and sticky bucket data.
+- `Options` — configuration class for `GrowthBookClient` with support for global attributes, forced variations, forced feature values, tracking callback, and sticky bucket service.
+- `ForcedFeatureValues` support in `Context` and `GrowthBook` for overriding feature evaluation results (source: "override").
+- `SetGlobalAttributes()`, `SetGlobalForcedVariations()`, `SetGlobalForcedFeatureValues()`, `SetTrackingCallback()` — runtime setters on `GrowthBookClient`.
+- `GetFeatures()`, `GetGlobalAttributes()` — getters on `GrowthBookClient`.
+
+- `BackgroundSync` — alias for `PreferServerSentEvents` on `Context` and `GrowthBookConfigurationOptions`.
+- `RequestHeaders` — custom headers for polling requests.
+- `StreamingRequestHeaders` — custom headers for SSE connection (e.g. `Authorization`, `Last-Event-ID`).
+- `OnFeaturesRefreshed` on `Context` — fires for both manual and background SSE updates.
+- `OnStreamingEventId` — callback for persisting `Last-Event-ID` across restarts.
+- `AddGrowthBookClient` DI extension for ASP.NET Core — registers `GrowthBookClient` as singleton.
+
+### Improved
+- `FeatureRefreshWorker` now propagates errors to `OnFeaturesRefreshed` callback (fires `false` on failures).
+- Global and user attributes are merged once per evaluation rather than at each of the nine places that read them,
+  several of which run per rule. The merge copies every value, so a feature with a handful of rules was putting
+  that many copies of the user's attributes on the heap for a single `IsOn` call.
+- SSE event listener filters specifically for `"features"` events and deduplicates via `Last-Event-ID`.
+- `SSEClient` auto-reconnects on 2xx status codes, and stops on a response the server will not serve differently
+  next time: `410 Gone`, `401 Unauthorized`, `403 Forbidden` and `404 Not Found`.
+- `UserContext.TrackedExperiments` — supply a set that lives as long as the request to have an assignment reported
+  to the tracking callback once for the request rather than once per evaluation call.
+- `GrowthBookRetrievalOptions.ForceRefresh` documents that it asks for a refresh rather than a request of its own:
+  a refresh already in flight is joined, which is what keeps concurrent callers from each opening a connection.
+- `OnFeaturesRefreshed` documents that a `304 Not Modified` applies nothing and so reports nothing.
+
+### Fixed
+- `Subscribe` and `SubscribeAsync` are back on `IGrowthBook`. Removing them compiled for the SDK but broke every
+  caller holding the interface, including anyone resolving it from DI.
+- A forced rule notifies subscribers again, as it did before the evaluation move into `FeatureEvaluationProvider`.
+- A feature override now applies to a key the loaded payload does not contain. It was checked after the lookup, so
+  an override for a feature that had not loaded did nothing — the reference checks it first.
+- An SSE endpoint that accepts the request and closes the stream immediately is backed off from rather than
+  reconnected to in a tight unbounded loop. A connection that delivered events still starts its next attempt from a
+  fresh budget, so only the base retry time applies to a healthy stream.
+- A `410 Gone` from the SSE endpoint stops the client instead of being retried: the server has ended the
+  subscription, so repeating the request only delays shutdown.
+- Reconnect jitter is now proportional to the delay rather than a flat second, which otherwise dominated the short
+  reconnect times a server can ask for with the SSE `retry:` field.
+- Callers arriving while a background feature refresh is in flight join it instead of each starting another. The
+  refresh lock was released while the request was still running and the cache stayed expired until it landed, so
+  every caller in that window produced a duplicate API request.
+- An `OnFeaturesRefreshed` subscriber that throws no longer has one successful refresh reported as both succeeded
+  and failed, and no longer stops the SSE mode from being established.
+- A tracking callback that throws no longer changes the assignment the user is given. The exception escaped after
+  the sticky assignment had been saved, so evaluation fell back to the feature default while the store disagreed.
+- `GrowthBookClient` installs refreshed features before reporting the refresh, and drops a refresh that was
+  overtaken by a newer one, so an evaluation can no longer see the previous feature set or be rolled back to it.
+- `GrowthBookClient.GetFeatures()` hands out a snapshot. It returned the live dictionary, so a caller changing it
+  changed what every user in the process evaluated against.
+- `GrowthBookClient` loads sticky bucket documents using the same merged attributes the evaluation hashes on —
+  global, user and overrides — rather than the user attributes alone, and covers an experiment passed straight to
+  `Run`. An identifier from any other source found no document and the user was bucketed again.
+- `GrowthBookFactory` passes the context's request headers, streaming headers, `OnFeaturesRefreshed` and
+  `OnStreamingEventId` to the repository it builds. Factory users were making unauthenticated feature and SSE
+  requests and never seeing their callbacks fire. The header dictionaries are copied rather than shared, so a
+  later edit by the caller cannot reach requests it was never meant to, nor tear one mid-enumeration.
+- A shared feature refresh no longer runs on the cancellation token of whichever caller happened to start it.
+  Other callers join that refresh, so in a web application one request aborting cancelled a refresh everyone else
+  was waiting on; it now runs on the worker's own cancellation, which `Cancel()` still trips.
+- A tracking callback that throws no longer stops the other one from running. The global and per-request callbacks
+  belong to different owners and are guarded separately.
+- The tracking callback is no longer invoked repeatedly for the same assignment within one evaluation, and can be
+  deduplicated for a whole request with `UserContext.TrackedExperiments`. `GrowthBookClient` had none of the
+  deduplication the single-user `GrowthBook` does, so migrating multiplied exposure events.
+- The first SSE reconnect waits exactly the time the server asked for with the `retry:` field instead of doubling
+  it before anything had failed twice.
+- Sticky bucket assignment docs now update correctly in-memory after save.
+- Empty string fallback attribute no longer causes incorrect bucket assignment.
+- `ForcedVariations` null reference in `GrowthBook` constructor.
+- `RefreshStickyBuckets` is now called after features refresh in `LoadFeaturesWithResult`.
+- `GrowthBookFactory.CreateForUser` assigned the per-user tracking callback unconditionally, so calling it without
+  one — the default — wiped the base context's callback and silently stopped tracking that user's experiment
+  exposures. It now only overrides when a callback is actually supplied.
+- The shared repository `GrowthBookFactory` builds internally was missing the remote evaluation service, so a
+  context with `RemoteEval` set evaluated remotely through `new GrowthBook(context)` but not through the factory.
+- `GrowthBookFactory.Dispose` now disposes a logger factory it created itself. One supplied through
+  `Context.LoggerFactory` is left alone, since the caller may still be using it.
+
+### Deprecated
+- `GrowthBookFactory` — use `GrowthBookClient` instead.
+- `AddGrowthBook` DI extension — use `AddGrowthBookClient` instead.
+
 ## [1.2.0]
 
 - Added custom fields support for experiments.

@@ -1,5 +1,96 @@
 # GrowthBook - SDK (C#)
 
+## Real-time Updates (SSE) — Background Sync
+
+Enable a lightweight Server-Sent Events (SSE) connection to receive near real-time feature updates. Recommended when admin toggles are frequent or you need low-latency updates. Prefer polling/manual refresh if updates are infrequent or the app is battery/latency-sensitive.
+
+### Initialization
+
+```csharp
+// Example storage helpers for Last-Event-ID persistence
+static class Storage
+{
+    public static Task<string> ReadAsync(string key)
+        => Task.FromResult(System.IO.File.Exists(key) ? System.IO.File.ReadAllText(key) : null);
+    public static Task WriteAsync(string key, string value)
+    {
+        System.IO.File.WriteAllText(key, value ?? string.Empty);
+        return Task.CompletedTask;
+    }
+}
+
+// Load previously persisted Last-Event-ID (optional)
+var lastEventId = await Storage.ReadAsync("gb_last_event_id");
+
+var ctx = new GrowthBook.Context
+{
+    ApiHost = "https://cdn.growthbook.io",
+    ClientKey = "sdk-abc123",
+
+    // Enable streaming updates
+    BackgroundSync = true,
+
+    // Optional request headers for polling/manual fetches
+    RequestHeaders = new Dictionary<string, string>
+    {
+        { "Authorization", "Bearer <token>" }
+    },
+
+    // Optional headers for SSE connection (Authorization, Last-Event-ID)
+    StreamingRequestHeaders = new Dictionary<string, string>
+    {
+        { "Authorization", "Bearer <token>" },
+        { "Last-Event-ID", lastEventId ?? string.Empty } // resume after restarts
+    },
+
+    // Fires on both initial/manual refresh and streaming updates
+    OnFeaturesRefreshed = success =>
+    {
+        if (success)
+        {
+            // e.g., notify listeners / rebuild UI / invalidate caches
+        }
+        else
+        {
+            // network failure or payload issue
+        }
+    },
+
+    // Provides the latest SSE Last-Event-ID so you can persist it
+    OnStreamingEventId = async eventId =>
+    {
+        if (!string.IsNullOrEmpty(eventId))
+        {
+            await Storage.WriteAsync("gb_last_event_id", eventId);
+        }
+    }
+};
+
+using var gb = new GrowthBook.GrowthBook(ctx);
+
+// Perform initial load (subsequent updates will arrive via SSE if enabled)
+await gb.LoadFeatures();
+
+// Example usage
+var isNewCheckoutOn = await gb.IsOnAsync("new-checkout");
+```
+
+### GrowthBookClient (multiuser)
+
+`GrowthBookClient` supports the same SSE mechanism via `Options.BackgroundSync`. See the [GrowthBookClient section](#growthbookclient-multiuser-mode) for a full example.
+
+### Lifecycle and Teardown
+
+- The SDK maintains a single SSE connection in the background when `BackgroundSync = true`.
+- On network errors, it uses an exponential backoff strategy and auto-reconnects.
+- Persist and reuse `Last-Event-ID` to avoid duplicate events on resume (see `OnStreamingEventId`).
+- Dispose your `GrowthBook` instance on shutdown; the SSE connection will close automatically.
+
+```csharp
+// When your app is shutting down:
+gb.Destroy(); // or gb.Dispose();
+```
+
 ![growthbook banner with csharp logo](https://camo.githubusercontent.com/b6cc3335dcf09b9c3baf421e28ded771ae34a5efaf87b794eef364f10384d904/68747470733a2f2f646f63732e67726f777468626f6f6b2e696f2f696d616765732f6865726f2d6373686172702d73646b2e706e67)
 
 Powerful feature flagging and A/B testing for C# apps using [GrowthBook](https://www.growthbook.io/).
@@ -11,6 +102,7 @@ Powerful feature flagging and A/B testing for C# apps using [GrowthBook](https:/
 - [Overview](#overview)
 - [Installation](#installation)
 - [Integration](#integration)
+- [GrowthBookClient (Multiuser Mode)](#growthbookclient-multiuser-mode)
 - [Usage Guide](#usage-guide)
 - [Sticky Bucketing](#sticky-bucketing)
 - [Models](#models)
@@ -118,6 +210,161 @@ To load your features from the GrowthBook API use the following example:
         }
     );
     ```
+> **Tip:** For server-side applications, consider using [`GrowthBookClient`](#growthbookclient-multiuser-mode) instead — it handles feature loading and caching automatically without manual HTTP calls.
+
+---
+
+## GrowthBookClient (Multiuser Mode)
+
+`GrowthBookClient` is a thread-safe singleton designed for server-side applications where many users are evaluated concurrently (ASP.NET Core, Azure Functions, etc.). Unlike `GrowthBook`, it holds shared state (features, configuration) and accepts a per-request `UserContext` for each evaluation — no per-user object allocation needed.
+
+### Console / Worker
+
+```csharp
+using GrowthBook.MultiUser;
+using Newtonsoft.Json.Linq;
+
+var client = new GrowthBookClient(new Options
+{
+    ClientKey = "sdk-abc123",
+
+    // Enable background SSE streaming (opt-in, default false)
+    BackgroundSync = true,
+
+    // Optional: override cache and HTTP timeout defaults (both default to 60s)
+    CacheExpirationInSeconds  = 30,
+    HttpRequestTimeoutInSeconds = 10,
+
+    // Fires after each successful or failed feature refresh (initial load and SSE updates)
+    OnFeaturesRefreshed = success =>
+        Console.WriteLine($"Features refreshed: {success}"),
+
+    TrackingCallback = (experiment, result) =>
+        Console.WriteLine($"[tracking] {experiment.Key} → variant {result.VariationId}")
+});
+
+await client.InitializeAsync();
+
+var userContext = new UserContext
+{
+    Attributes = JObject.FromObject(new { id = "user-123", country = "US" })
+};
+
+bool isOn    = client.IsOn("my-feature", userContext);
+string theme = client.GetFeature<string>("app-theme", "light", userContext);
+```
+
+### ASP.NET Core
+
+Register `GrowthBookClient` as a singleton in `Program.cs`:
+
+```csharp
+using GrowthBook.Extensions;
+using GrowthBook.MultiUser.Configuration;
+
+builder.Services.AddGrowthBookClient(options =>
+{
+    options.ClientKey = "sdk-abc123";
+    options.OnFeaturesRefreshed = success =>
+        Console.WriteLine($"Features refreshed: {success}");
+});
+```
+
+Inject and use in a controller or service:
+
+```csharp
+public class HomeController : ControllerBase
+{
+    private readonly GrowthBookClient _gb;
+
+    public HomeController(GrowthBookClient gb) => _gb = gb;
+
+    public IActionResult Index()
+    {
+        var userContext = new UserContext
+        {
+            Attributes = JObject.FromObject(new
+            {
+                id      = User.Identity?.Name,
+                country = "US"
+            })
+        };
+
+        bool showNewDashboard = _gb.IsOn("new-dashboard", userContext);
+        return View(showNewDashboard ? "NewDashboard" : "Dashboard");
+    }
+}
+```
+
+#### Reporting an exposure once per request
+
+An assignment is reported to the tracking callback once per evaluation call. A request that asks about the
+same feature from three places therefore sends three exposure events. Give the `UserContext` a
+`TrackedExperiments` set that lives as long as the request to have each assignment reported once:
+
+```csharp
+var userContext = new UserContext
+{
+    Attributes         = JObject.FromObject(new { id = User.Identity?.Name }),
+    TrackedExperiments = new HashSet<string>()
+};
+```
+
+Build the context once per request — in middleware, or a scoped service — and pass the same instance to every
+evaluation that request makes. Do not share one set between requests: it would suppress exposures for everyone
+after the first.
+
+> **When to use `GrowthBookClient` vs `GrowthBook`**
+> - Use `GrowthBookClient` for server-side multiuser apps (ASP.NET Core, workers, APIs).
+> - Use `GrowthBook` for single-user or client-side scenarios where one instance maps to one user.
+>
+> **Why not register `GrowthBook` as a singleton in DI?**
+> It may seem convenient to register the single-user `GrowthBook` class as a singleton,
+> but it is **not thread-safe** for concurrent requests. When multiple requests share one
+> instance and update `Attributes` simultaneously, users receive each other's data — a race
+> condition confirmed to occur in ~99% of parallel requests in practice.
+> `GrowthBookClient` was built specifically to solve this: it keeps features in shared state
+> and accepts a per-request `UserContext`, making it safe to use as a singleton.
+
+---
+
+### Dependency Injection (ASP.NET Core)
+
+Register `GrowthBookClient` as a singleton using the provided extension:
+
+```csharp
+// Program.cs
+using GrowthBook.Extensions;
+using GrowthBook.MultiUser;
+using GrowthBook.MultiUser.Configuration;
+
+builder.Services.AddGrowthBookClient(options =>
+{
+    options.ClientKey = "YOUR_CLIENT_KEY";
+    options.OnFeaturesRefreshed = success =>
+        Console.WriteLine($"Features refreshed: {success}");
+});
+```
+
+Inject `GrowthBookClient` and pass a per-request `UserContext`:
+
+```csharp
+app.MapGet("/feature/{userId}", (GrowthBookClient gb, string userId) =>
+{
+    var userContext = new UserContext
+    {
+        Attributes = JObject.FromObject(new { id = userId, country = "US" })
+    };
+    var isOn = gb.IsOn("my-feature-key", userContext);
+    return Results.Ok(new { on = isOn });
+});
+```
+
+> **Note:** The legacy `AddGrowthBook` extension (registers `GrowthBookFactory`) is deprecated. Use `AddGrowthBookClient` instead.
+
+Notes:
+- `GrowthBookFactory` is registered as a singleton.
+- `IGrowthBook` is registered as scoped. For per-request customization, prefer using the factory.
 
 ---
 
@@ -135,7 +382,7 @@ Evaluate feature flags to determine their state or retrieve their values.
 
 - **Retrieve Feature Values**:
   ```csharp
-  string theme = growthBook.GetFeatureValue("app-theme");
+  string theme = growthBook.GetFeatureValue<string>("app-theme", "light");
   ```
 
 - **Evaluate a Feature with Detailed Results**:
@@ -194,29 +441,25 @@ Manage the lifecycle of the `GrowthBook` instance, including cleanup and resourc
 ### 5. **Sticky Bucketing**
 
 ```csharp
-context.StickyBucketService = new StickyBucketService();
+context.StickyBucketService = new InMemoryStickyBucketService();
 ```
 or create it when initializing
 
 ---
 
 ## Sticky Bucketing
-Implement a `StickyBucketService`:
+
+Sticky bucketing ensures users always see the same experiment variant across sessions, even when experiment parameters change.
+
+To enable sticky bucketing, set a `StickyBucketService` on your context. For simple in-memory persistence use the built-in implementation:
 
 ```csharp
-public class StickyBucketService
-{
-    public Dictionary<string, object> GetGroups(string userId) => LoadFromStorage(userId);
-}
+context.StickyBucketService = new InMemoryStickyBucketService();
 ```
 
-```csharp
-context.StickyBucketService = new StickyBucketService();
-```
+For persistent storage (e.g. Redis, database), implement `IStickyBucketService`.
 
-or pass it during initialization
-
-Sticky bucketing ensures that users see the same experiment variant, even when user session, user login status, or experiment parameters change. See the [Sticky Bucketing docs](/app/sticky-bucketing) for more information. If your organization and experiment supports sticky bucketing, you must implement an instance of the `StickyBucketService` to use Sticky Bucketing. For simple bucket persistence using the browser's LocalStorage (can be polyfilled for other environments).
+See the [Sticky Bucketing docs](https://docs.growthbook.io/app/sticky-bucketing) for more information.
 
 ---
 
@@ -269,6 +512,9 @@ public class Context
     /// Forces specific experiments to always assign a specific variation (used for QA).
     public IDictionary<string, int> ForcedVariations { get; set; } = new Dictionary<string, int>();
 
+    /// Forces specific feature values regardless of evaluation rules (used for QA and testing).
+    public IDictionary<string, JToken> ForcedFeatureValues { get; set; }
+
     /// Saved groups for sticky bucketing or other purposes. Optional.
     public JObject SavedGroups { get; set; }
 
@@ -281,11 +527,36 @@ public class Context
     /// A repository implementation for retrieving and caching features. Optional.
     public IGrowthBookFeatureRepository FeatureRepository { get; set; }
 
+    /// A custom cache implementation (e.g. Redis-backed) to replace the default InMemoryFeatureCache. Optional.
+    public IGrowthBookFeatureCache FeatureCache { get; set; }
+
     /// A logger factory implementation that will enable logging throughout the SDK. Optional.
     public ILoggerFactory LoggerFactory { get; set; }
 
     /// Custom cache directory path for the cache manager. Uses system temp directory if not specified.
     public string CachePath { get; set; }
+
+    /// Enable background streaming updates (SSE). Defaults to false (opt-in).
+    public bool BackgroundSync { get; set; } = false;
+
+    /// How long in seconds before the feature cache is considered expired. Defaults to 60.
+    public int CacheExpirationInSeconds { get; set; } = 60;
+
+    /// Timeout in seconds for HTTP requests to the GrowthBook API (polling and SSE). Defaults to 60.
+    public int HttpRequestTimeoutInSeconds { get; set; } = 60;
+
+    /// Optional custom headers for feature fetch (polling) requests.
+    public IDictionary<string, string> RequestHeaders { get; set; }
+
+    /// Optional custom headers for the SSE streaming connection (e.g. Authorization, Last-Event-ID).
+    public IDictionary<string, string> StreamingRequestHeaders { get; set; }
+
+    /// Callback fired after features are applied to the cache. True on success, false on failure.
+    /// Fires for both manual refreshes and background SSE updates.
+    public Action<bool> OnFeaturesRefreshed { get; set; }
+
+    /// Callback providing the latest SSE Last-Event-ID for persistence across restarts.
+    public Action<string> OnStreamingEventId { get; set; }
 }
 ```
 
@@ -578,6 +849,57 @@ Represents the track data associated with a feature rule. This class is used to 
         //The tracked experiment result.
         public ExperimentResult Result { get; set; }
     }
+```
+
+---
+
+## Remote Evaluation
+
+By default the SDK fetches all feature definitions and evaluates them locally. With Remote Evaluation the SDK sends user attributes to the GrowthBook server instead, and the server returns only the evaluated results — keeping your targeting rules and business logic private.
+
+> **When to use:** client-side scenarios (mobile, desktop, browser) where you don't want targeting rules visible to end users. For server-side code (ASP.NET Core, workers) local evaluation is preferred since rules are never exposed to clients anyway.
+
+**Limitations:**
+- Not available with `GrowthBookClient` — only the single-user `GrowthBook` class
+- Cannot be combined with `DecryptionKey`
+- Requires `ClientKey` and `ApiHost`
+
+### Usage
+
+```csharp
+var ctx = new Context
+{
+    ClientKey = "sdk-abc123",
+    ApiHost   = "https://cdn.growthbook.io",
+
+    RemoteEval = true,
+
+    Attributes = JObject.Parse("""{"id":"user-1","country":"US"}"""),
+
+    // Optional: only re-evaluate when these specific attributes change.
+    // Without this, any attribute change triggers a new request.
+    CacheKeyAttributes = new[] { "id", "country" }
+};
+
+var gb = new GrowthBook.GrowthBook(ctx);
+
+// Sends POST /api/eval/{clientKey} with user attributes,
+// receives pre-evaluated features back from the server.
+await gb.LoadFeatures();
+
+bool isOn = gb.IsOn("dark-mode");
+```
+
+### Automatic re-evaluation
+
+When `RemoteEval = true`, calling `UpdateAttributes` or `MergeAttributes` automatically triggers a new remote evaluation request if the relevant attributes changed:
+
+```csharp
+// Triggers a new POST /api/eval request because "country" is in CacheKeyAttributes
+gb.UpdateAttributes(new { id = "user-1", country = "DE" });
+
+// Does NOT trigger a new request — "age" is not in CacheKeyAttributes
+gb.MergeAttributes(new { age = 30 });
 ```
 
 ---
