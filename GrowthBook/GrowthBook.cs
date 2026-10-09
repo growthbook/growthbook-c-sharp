@@ -439,18 +439,36 @@ namespace GrowthBook
             }
 
             var result = EvaluateFeature(key);
-            var value = result.Value;
 
-            return value.IsNull() ? fallback : value.ToObject<T>();
+            return ConvertFeatureValue(key, result.Value, fallback);
         }
 
         /// <inheritdoc />
         public async Task<T> GetFeatureValueAsync<T>(string key, T fallback, CancellationToken? cancellationToken = null)
         {
             var result = await EvalFeatureAsync(key, cancellationToken);
-            var value = result.Value;
 
-            return value.IsNull() ? fallback : value.ToObject<T>();
+            return ConvertFeatureValue(key, result.Value, fallback);
+        }
+        
+        /// <inheritdoc />
+        private T ConvertFeatureValue<T>(string key, JToken value, T fallback)
+        {
+            if (value.IsNull())
+            {
+                return fallback;
+            }
+
+            try
+            {
+                return value.ToObject<T>();
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "Feature '{FeatureId}' has a value of type '{ValueType}' that cannot be read as '{RequestedType}', returning the fallback instead", key, value.Type, typeof(T).Name);
+
+                return fallback;
+            }
         }
 
         /// <inheritdoc />
