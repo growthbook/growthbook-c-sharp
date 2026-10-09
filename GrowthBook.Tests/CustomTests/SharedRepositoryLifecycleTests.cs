@@ -121,6 +121,31 @@ public class SharedRepositoryLifecycleTests : UnitTest
         repository.CancelCallCount.Should().Be(1);
     }
 
+    /// <summary>
+    /// Reads the token the instance-created refresh worker runs under. The repository is built
+    /// internally so a test has no handle on it, and asserting only that Dispose does not throw
+    /// would hold just as well if the owned-repository cancellation were removed entirely.
+    /// </summary>
+    private static bool OwnedRefreshWorkerIsCancelled(GrowthBook growthBook)
+    {
+        const System.Reflection.BindingFlags Private =
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+
+        var repository = typeof(GrowthBook)
+            .GetField("_featureRepository", Private)
+            .GetValue(growthBook);
+
+        var worker = repository.GetType()
+            .GetField("_backgroundRefreshWorker", Private)
+            .GetValue(repository);
+
+        var cancellation = (CancellationTokenSource)worker.GetType()
+            .GetField("_refreshWorkerCancellation", Private)
+            .GetValue(worker);
+
+        return cancellation.IsCancellationRequested;
+    }
+
     [Fact]
     public void DisposingAnInstanceStillCancelsARepositoryItCreatedItself()
     {
@@ -134,8 +159,11 @@ public class SharedRepositoryLifecycleTests : UnitTest
 
         var growthBook = new GrowthBook(context);
 
-        // Nothing to assert on a private repository beyond this not throwing; the behavior is pinned by the
-        // sibling tests above, which prove the owned/not-owned distinction is what drives cancellation.
+        OwnedRefreshWorkerIsCancelled(growthBook).Should().BeFalse("the worker is running until the instance is disposed");
+
         growthBook.Dispose();
+
+        OwnedRefreshWorkerIsCancelled(growthBook).Should().BeTrue(
+            "an instance that built its own repository owns it, so nothing else will ever stop its background worker");
     }
 }
