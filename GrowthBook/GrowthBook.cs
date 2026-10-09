@@ -990,12 +990,28 @@ namespace GrowthBook
 
             string stringifiedValue = JsonConvert.SerializeObject(result.Value);
 
-            if (_featureUsageTracked.TryGetValue(featureId, out string previousValue) && previousValue == stringifiedValue)
+            while (true)
             {
-                return;
-            }
+                if (_featureUsageTracked.TryGetValue(featureId, out string previousValue))
+                {
+                    if (previousValue == stringifiedValue)
+                    {
+                        return;
+                    }
 
-            _featureUsageTracked[featureId] = stringifiedValue;
+                    if (_featureUsageTracked.TryUpdate(featureId, stringifiedValue, previousValue))
+                    {
+                        break;
+                    }
+
+                    continue;
+                }
+
+                if (_featureUsageTracked.TryAdd(featureId, stringifiedValue))
+                {
+                    break;
+                }
+            }
 
             try
             {

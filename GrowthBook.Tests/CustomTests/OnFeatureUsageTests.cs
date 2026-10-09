@@ -1,5 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
+using System.Linq;
 using FluentAssertions;
 using Newtonsoft.Json.Linq;
 using Xunit;
@@ -190,5 +193,73 @@ public class OnFeatureUsageTests : UnitTest
         });
 
         usages.Should().BeEmpty("because OnFeatureUsage only fires from feature evaluation, not from Run()");
+    }
+
+    /// <summary>
+    /// Two threads evaluating the same feature could both read the old value before either wrote it,
+    /// so both reported the same usage. The dictionary makes each operation safe; it is the
+    /// check-and-update sequence that has to be atomic.
+    /// </summary>
+    [Fact]
+    public void ParallelEvaluationsOfTheSameValueReportUsageOnce()
+    {
+        const string FeatureName = "checkout-flow";
+
+        for (var attempt = 0; attempt < 200; attempt++)
+        {
+            var usages = 0;
+
+            using var growthBook = new GrowthBook(new Context
+            {
+                Attributes = JObject.FromObject(new { id = "user-1" }),
+                Features = new Dictionary<string, Feature>
+                {
+                    [FeatureName] = new Feature { DefaultValue = false }
+                },
+                OnFeatureUsage = (key, result) => Interlocked.Increment(ref usages)
+            });
+
+            var ready = new CountdownEvent(8);
+
+            var racers = Enumerable.Range(0, 8).Select(_ => Task.Run(() =>
+            {
+                ready.Signal();
+                ready.Wait(TimeSpan.FromSeconds(5));
+
+                growthBook.EvalFeature(FeatureName);
+            })).ToArray();
+
+            Task.WaitAll(racers, TimeSpan.FromSeconds(10));
+
+            usages.Should().Be(1,
+                "the value never changed, so however many threads evaluated it there is one usage to report");
+        }
+    }
+
+    [Fact]
+    public void AChangedValueIsStillReported()
+    {
+        const string FeatureName = "checkout-flow";
+
+        var usages = 0;
+
+        using var growthBook = new GrowthBook(new Context
+        {
+            Attributes = JObject.FromObject(new { id = "user-1" }),
+            Features = new Dictionary<string, Feature>
+            {
+                [FeatureName] = new Feature { DefaultValue = false }
+            },
+            OnFeatureUsage = (key, result) => Interlocked.Increment(ref usages)
+        });
+
+        growthBook.EvalFeature(FeatureName);
+        growthBook.Features = new Dictionary<string, Feature>
+        {
+            [FeatureName] = new Feature { DefaultValue = true }
+        };
+        growthBook.EvalFeature(FeatureName);
+
+        usages.Should().Be(2, "deduping is per value, not per feature - a changed value is new usage");
     }
 }
