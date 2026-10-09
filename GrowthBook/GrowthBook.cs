@@ -32,12 +32,16 @@ namespace GrowthBook
         private bool _disposedValue;
         private readonly IConditionEvaluationProvider _conditionEvaluator;
         private readonly IGrowthBookFeatureRepository _featureRepository;
+        private readonly bool _ownsFeatureRepository;
         private readonly IStickyBucketService _stickyBucketService;
         private readonly IDictionary<string, StickyAssignmentsDocument> _stickyBucketAssignmentDocs;
         private readonly ILogger<GrowthBook> _logger;
         private readonly JObject _savedGroups;
         private readonly ILoggerFactory _loggerFactory;
         private readonly bool _ownsLoggerFactory;
+        private readonly IDisposable _refreshSubscription;
+        private readonly object _featuresLock = new object();
+        private long _installedRefreshVersion;
         private readonly Context _context;
 
         /// <summary>
@@ -116,6 +120,8 @@ namespace GrowthBook
             }
             else
             {
+                _ownsFeatureRepository = true;
+
                 var featureCache = new InMemoryFeatureCache(cacheExpirationInSeconds: 60);
                 var httpClientFactory = new HttpClientFactory(requestTimeoutInSeconds: 60);
 
@@ -132,6 +138,68 @@ namespace GrowthBook
                 }
 
                 _featureRepository = new FeatureRepository(featureRepositoryLogger, featureCache, featureRefreshWorker, remoteEvaluationService);
+            }
+
+            if (_featureRepository is IFeatureRefreshSource refreshSource)
+            {
+                _refreshSubscription = refreshSource.SubscribeToRefresh(OnFeaturesRefreshed);
+            }
+        }
+
+        private void OnFeaturesRefreshed(FeatureRefresh refresh)
+        {
+            if (_disposedValue || refresh?.Features is null)
+            {
+                return;
+            }
+
+            lock (_featuresLock)
+            {
+                // Refreshes are fanned out without a lock, so one can overtake another on its way here.
+                // The later arrival of the two is only worth installing if it is also the newer one.
+                if (refresh.Version <= _installedRefreshVersion)
+                {
+                    _logger.LogDebug("Discarded a refresh at version '{Version}', already at '{InstalledVersion}'", refresh.Version, _installedRefreshVersion);
+
+                    return;
+                }
+
+                _installedRefreshVersion = refresh.Version;
+
+                // Every subscriber is handed the same dictionary, and Dispose() clears Features. Adopting the
+                // pushed reference directly would let one instance being disposed empty the map for all the
+                // others still using it.
+                Features = new Dictionary<string, Feature>(refresh.Features);
+            }
+
+            _logger.LogDebug("Adopted '{FeatureCount}' refreshed feature(s) pushed from the repository", refresh.Features.Count);
+        }
+
+        /// <summary>
+        /// Installs the result of a load that started while <paramref name="startedAtVersion"/> was the
+        /// newest refresh installed. A refresh that arrived since is newer than anything the load was
+        /// waiting on, so the load's result is dropped rather than rolling the instance back.
+        /// </summary>
+        private bool TryInstallLoadedFeatures(IDictionary<string, Feature> features, long startedAtVersion)
+        {
+            lock (_featuresLock)
+            {
+                if (_installedRefreshVersion != startedAtVersion)
+                {
+                    return false;
+                }
+
+                Features = features;
+
+                return true;
+            }
+        }
+
+        private long CurrentRefreshVersion()
+        {
+            lock (_featuresLock)
+            {
+                return _installedRefreshVersion;
             }
         }
 
@@ -212,7 +280,15 @@ namespace GrowthBook
                     _tracked.Clear();
                     _subscribers.Clear();
                     _asyncSubscribers.Clear();
+                    _refreshSubscription?.Dispose();
                     _featureRepository.Cancel();
+
+                    // A repository supplied on the Context belongs to the caller and may be shared with
+                    // other instances, so only one this instance built is disposed here.
+                    if (_ownsFeatureRepository && _featureRepository is IDisposable disposableRepository)
+                    {
+                        disposableRepository.Dispose();
+                    }
 
                     if (_ownsLoggerFactory && _loggerFactory is IDisposable disposableFactory)
                     {
@@ -699,6 +775,7 @@ namespace GrowthBook
             {
                 _logger.LogInformation("Loading features from the repository");
                 IDictionary<string, Feature> features;
+                var startedAtVersion = CurrentRefreshVersion();
 
                 // Use remote evaluation if enabled and configured
                 if (_context.RemoteEval && RemoteEvaluationUtilities.IsValidForRemoteEvaluation(_context))
@@ -718,7 +795,13 @@ namespace GrowthBook
                     return FeatureLoadResult.CreateFailure(errorMessage);
                 }
 
-                Features = features;
+                if (!TryInstallLoadedFeatures(features, startedAtVersion))
+                {
+                    _logger.LogInformation("Loading features has completed, but a newer refresh arrived while it was in flight and was kept");
+
+                    return FeatureLoadResult.CreateSuccess(Features.Count);
+                }
+
                 var featureCount = Features.Count;
 
                 _logger.LogInformation($"Loading features has completed, retrieved '{featureCount}' features");
@@ -1225,12 +1308,12 @@ namespace GrowthBook
             {
                 _logger?.LogDebug("Triggering remote evaluation due to attribute changes");
 
+                var startedAtVersion = CurrentRefreshVersion();
                 var currentContext = CreateCurrentContext();
                 var features = await _featureRepository.GetFeaturesWithContext(currentContext);
 
-                if (features != null)
+                if (features != null && TryInstallLoadedFeatures(features, startedAtVersion))
                 {
-                    Features = features;
                     _logger?.LogDebug("Remote evaluation completed, updated {Count} features", features.Count);
                 }
             }

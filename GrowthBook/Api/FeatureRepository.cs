@@ -13,7 +13,7 @@ using Newtonsoft.Json.Linq;
 
 namespace GrowthBook.Api
 {
-    public class FeatureRepository : IGrowthBookFeatureRepository
+    public class FeatureRepository : IGrowthBookFeatureRepository, IFeatureRefreshSource, IDisposable
     {
         private readonly ILogger<FeatureRepository> _logger;
         private readonly IGrowthBookFeatureCache _cache;
@@ -21,6 +21,8 @@ namespace GrowthBook.Api
         private readonly IRemoteEvaluationService _remoteEvaluationService;
         private readonly ConcurrentDictionary<string, ExperimentAssignment> _assigned;
         private readonly ConcurrentDictionary<string, byte> _tracked;
+        private readonly FeatureRefreshSubscriptions _refreshSubscriptions = new FeatureRefreshSubscriptions();
+        private readonly IDisposable _cacheSubscription;
 
         public FeatureRepository(ILogger<FeatureRepository> logger, IGrowthBookFeatureCache cache, IGrowthBookFeatureRefreshWorker backgroundRefreshWorker, IRemoteEvaluationService remoteEvaluationService = null)
         {
@@ -30,6 +32,31 @@ namespace GrowthBook.Api
             _assigned = new ConcurrentDictionary<string, ExperimentAssignment>();
             _tracked = new ConcurrentDictionary<string, byte>();
             _remoteEvaluationService = remoteEvaluationService;
+
+            if (cache is IFeatureRefreshSource refreshSource)
+            {
+                _cacheSubscription = refreshSource.SubscribeToRefresh(OnCacheRefreshed);
+            }
+        }
+
+        /// <inheritdoc/>
+        public IDisposable SubscribeToRefresh(Action<FeatureRefresh> handler) => _refreshSubscriptions.Add(handler);
+
+        /// <summary>
+        /// Detaches this repository from the cache it was listening to. A cache supplied on the
+        /// <see cref="Context"/> is owned by the caller and outlives the repository, so without this a
+        /// discarded repository stays subscribed and keeps fanning refreshes out to dead subscribers.
+        /// </summary>
+        public void Dispose()
+        {
+            _cacheSubscription?.Dispose();
+        }
+
+        private void OnCacheRefreshed(FeatureRefresh refresh)
+        {
+            _logger.LogDebug("Cache reported '{FeatureCount}' refreshed feature(s), notifying subscribers", refresh.Features?.Count ?? 0);
+
+            _refreshSubscriptions.Notify(refresh, ex => _logger.LogError(ex, "A feature refresh subscriber threw an exception"));
         }
 
         /// <inheritdoc/>
