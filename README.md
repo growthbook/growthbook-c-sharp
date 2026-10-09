@@ -13,6 +13,7 @@ Powerful feature flagging and A/B testing for C# apps using [GrowthBook](https:/
 - [Integration](#integration)
 - [Usage Guide](#usage-guide)
 - [Sticky Bucketing](#sticky-bucketing)
+- [Custom Request Headers and a Dedicated Streaming Host](#custom-request-headers-and-a-dedicated-streaming-host)
 - [Models](#models)
 - [Streaming Updates](#streaming-updates)
 - [Remote Evaluation](#remote-evaluation)
@@ -220,6 +221,34 @@ Sticky bucketing ensures that users see the same experiment variant, even when u
 
 ---
 
+## Custom Request Headers and a Dedicated Streaming Host
+
+If your GrowthBook deployment sits behind an authenticated gateway/proxy, or you use a dedicated
+domain for streaming updates, configure the following on `Context`:
+
+```csharp
+var context = new Context
+{
+    ApiHost = "https://growthbook.internal.example.com",
+    ApiHostRequestHeaders = new Dictionary<string, string>
+    {
+        ["Authorization"] = "Bearer <token>"
+    },
+    StreamingHost = "https://streaming.growthbook.io",
+    StreamingHostRequestHeaders = new Dictionary<string, string>
+    {
+        ["Authorization"] = "Bearer <token>"
+    }
+};
+```
+
+- `ApiHostRequestHeaders` are attached to every Features GET request and Remote Evaluation POST request.
+- `StreamingHost` is used for the Server-Sent Events connection instead of `ApiHost` when set; if not set, streaming falls back to `ApiHost`.
+- `StreamingHostRequestHeaders` are attached to the Server-Sent Events connection.
+- Header names managed by the SDK itself (`User-Agent`, `If-None-Match`, `Cache-Control`) are reserved and will throw an `ArgumentException` at construction if included, case-insensitively. `StreamingHost`, if set, must be a well-formed absolute `http`/`https` URL or construction will throw.
+
+---
+
 ## Models
 
 The GrowthBook C# SDK uses a set of core models to define the context, features, experiments, and results. These models are essential for configuring the SDK, evaluating feature flags, and running experiments. Below is the documentation for the key models used in the SDK.
@@ -238,6 +267,21 @@ public class Context
 
     /// The GrowthBook API Host. Optional.
     public string ApiHost { get; set; }
+
+    /// Headers to attach to every Features GET request and Remote Evaluation POST request. Optional.
+    /// Useful for self-hosted deployments behind an authenticated gateway/proxy. Reserved header
+    /// names managed by the SDK itself (User-Agent, If-None-Match, Cache-Control) are rejected at
+    /// construction, case-insensitively.
+    public IDictionary<string, string> ApiHostRequestHeaders { get; set; } = new Dictionary<string, string>();
+
+    /// A separate host for the Server-Sent Events streaming connection. Optional - falls back to
+    /// ApiHost when not set. Useful when streaming is served from a dedicated domain (e.g.
+    /// GrowthBook Cloud's streaming endpoint).
+    public string StreamingHost { get; set; }
+
+    /// Headers to attach to the Server-Sent Events streaming connection. Optional. Same
+    /// reserved-header restrictions as ApiHostRequestHeaders apply.
+    public IDictionary<string, string> StreamingHostRequestHeaders { get; set; } = new Dictionary<string, string>();
 
     /// The key used to fetch features from the GrowthBook API. Optional.
     public string ClientKey { get; set; }

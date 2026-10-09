@@ -42,5 +42,20 @@ namespace GrowthBook
         /// The maximum number of ETags to keep for conditional feature API requests.
         /// </summary>
         public int EtagCacheSize { get; set; } = 100;
+
+        /// <summary>
+        /// Headers to attach to the Features GET request and the Remote Evaluation POST request. Optional.
+        /// </summary>
+        public IDictionary<string, string> ApiHostRequestHeaders { get; set; }
+
+        /// <summary>
+        /// A separate host for the SSE streaming connection. Optional. Falls back to <see cref="ApiHost"/> when null or empty.
+        /// </summary>
+        public string StreamingHost { get; set; }
+
+        /// <summary>
+        /// Headers to attach to the SSE streaming connection. Optional.
+        /// </summary>
+        public IDictionary<string, string> StreamingHostRequestHeaders { get; set; }
     }
 }

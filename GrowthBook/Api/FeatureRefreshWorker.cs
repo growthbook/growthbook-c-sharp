@@ -45,14 +45,30 @@ namespace GrowthBook.Api
             _cache = cache;
             _etagCache = new LruETagCache(config.EtagCacheSize);
 
-            var hostEndpoint = config.ApiHost;
-            var trimmedHostEndpoint = new string(hostEndpoint?.Reverse().SkipWhile(x => x == '/').Reverse().ToArray());
+            var trimmedHostEndpoint = TrimTrailingSlashes(config.ApiHost);
 
             _featuresApiEndpoint = $"{trimmedHostEndpoint}/api/features/{config.ClientKey}";
-            _serverSentEventsApiEndpoint = $"{trimmedHostEndpoint}/sub/{config.ClientKey}";
+
+            string streamingHostEndpoint;
+
+            if (string.IsNullOrWhiteSpace(config.StreamingHost))
+            {
+                streamingHostEndpoint = trimmedHostEndpoint;
+            }
+            else
+            {
+                streamingHostEndpoint = TrimTrailingSlashes(config.StreamingHost);
+            }
+
+            _serverSentEventsApiEndpoint = $"{streamingHostEndpoint}/sub/{config.ClientKey}";
 
             _logger.LogDebug("Features GrowthBook API endpoint: \'{FeaturesApiEndpoint}\'", _featuresApiEndpoint);
-            _logger.LogDebug("Features GrowthBook API endpoint (Server Sent Events): \'{FeaturesApiEndpoint}\'", _featuresApiEndpoint);
+            _logger.LogDebug("Features GrowthBook API endpoint (Server Sent Events): \'{ServerSentEventsApiEndpoint}\'", _serverSentEventsApiEndpoint);
+        }
+
+        private static string TrimTrailingSlashes(string host)
+        {
+            return new string(host?.Reverse().SkipWhile(x => x == '/').Reverse().ToArray());
         }
 
         public void Cancel()
@@ -128,7 +144,18 @@ namespace GrowthBook.Api
                 var sseLogger = _logger as ILogger<SSEClient> ?? 
                     new Microsoft.Extensions.Logging.Abstractions.NullLogger<SSEClient>();
                 
-                _sseClient = new SSEClient(sseLogger, _httpClientFactory, _serverSentEventsApiEndpoint, null, ConfiguredClients.ServerSentEventsApiClient);
+                Dictionary<string, string> streamingHeaders;
+
+                if (_config.StreamingHostRequestHeaders != null)
+                {
+                    streamingHeaders = new Dictionary<string, string>(_config.StreamingHostRequestHeaders);
+                }
+                else
+                {
+                    streamingHeaders = null;
+                }
+
+                _sseClient = new SSEClient(sseLogger, _httpClientFactory, _serverSentEventsApiEndpoint, streamingHeaders, ConfiguredClients.ServerSentEventsApiClient);
                 
                 // Add general event listener for all events (handles data field)
                 _sseClient.AddEventListener(null, async (sseEvent) =>
