@@ -21,7 +21,9 @@ namespace GrowthBook.Api.SSE
         Disconnected,
 
         /// <summary>
-        /// Connection failed due to an error
+        /// No longer reported. The client retries indefinitely with a capped backoff rather than entering a
+        /// terminal failure state, so a connection that is down is <see cref="Reconnecting"/> instead. Kept
+        /// so that consumers switching on this enum still compile.
         /// </summary>
         Failed,
 
