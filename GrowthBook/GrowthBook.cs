@@ -28,7 +28,9 @@ namespace GrowthBook
         private readonly bool _qaMode;
         private readonly Dictionary<string, ExperimentAssignment> _assigned;
         private readonly ConcurrentDictionary<string, byte> _tracked;
+        private readonly ConcurrentDictionary<string, string> _featureUsageTracked;
         private Action<Experiment, ExperimentResult> _trackingCallback;
+        private Action<string, FeatureResult> _onFeatureUsage;
         private bool _disposedValue;
         private readonly IConditionEvaluationProvider _conditionEvaluator;
         private readonly IGrowthBookFeatureRepository _featureRepository;
@@ -70,8 +72,10 @@ namespace GrowthBook
 
             _qaMode = context.QaMode;
             _trackingCallback = context.TrackingCallback;
+            _onFeatureUsage = context.OnFeatureUsage;
             _assigned = new Dictionary<string, ExperimentAssignment>();
             _tracked = new ConcurrentDictionary<string, byte>();
+            _featureUsageTracked = new ConcurrentDictionary<string, string>();
             _stickyBucketService = context.StickyBucketService;
             _stickyBucketAssignmentDocs = context.StickyBucketAssignmentDocs ?? new Dictionary<string, StickyAssignmentsDocument>();
             _savedGroups = context.SavedGroups;
@@ -208,8 +212,10 @@ namespace GrowthBook
                     Features.Clear();
                     ForcedVariations = null;
                     _trackingCallback = null;
+                    _onFeatureUsage = null;
                     _assigned.Clear();
                     _tracked.Clear();
+                    _featureUsageTracked.Clear();
                     _subscribers.Clear();
                     _asyncSubscribers.Clear();
                     _featureRepository.Cancel();
@@ -405,6 +411,16 @@ namespace GrowthBook
             return new Subscription(() => _asyncSubscribers.Remove(callback));
         }
 
+        /// <inheritdoc />
+        public void SetFeatureUsageCallback(Action<string, FeatureResult> callback)
+        {
+            _onFeatureUsage = callback;
+
+            _featureUsageTracked.Clear();
+
+            _logger?.LogDebug("Feature usage callback was {Action}", callback == null ? "cleared" : "replaced");
+        }
+
         private class Subscription : IDisposable
         {
             private readonly Action _unsubscribe;
@@ -504,14 +520,14 @@ namespace GrowthBook
 
                 if (evaluatedFeatures.Contains(featureId))
                 {
-                    return GetFeatureResult(default, FeatureResult.SourceId.CyclicPrerequisite);
+                    return GetFeatureResult(default, FeatureResult.SourceId.CyclicPrerequisite, featureId);
                 }
 
                 evaluatedFeatures.Add(featureId);
 
                 if (!Features.TryGetValue(featureId, out Feature feature))
                 {
-                    return GetFeatureResult(null, FeatureResult.SourceId.UnknownFeature);
+                    return GetFeatureResult(null, FeatureResult.SourceId.UnknownFeature, featureId);
                 }
 
                 _logger.LogDebug("Evaluating feature '{FeatureId}' with {RuleCount} rules", featureId, feature?.Rules?.Count ?? 0);
@@ -535,7 +551,7 @@ namespace GrowthBook
                             if (parentResult.Source == FeatureResult.SourceId.CyclicPrerequisite)
                             {
                                 _logger.LogWarning("Detected cyclic prerequisite while evaluating parent feature '{ParentId}' for feature '{FeatureId}'. Evaluated: {EvaluatedFeatures}", parentCondition.Id, featureId, string.Join(",", evaluatedFeatures));
-                                return GetFeatureResult(default, FeatureResult.SourceId.CyclicPrerequisite);
+                                return GetFeatureResult(default, FeatureResult.SourceId.CyclicPrerequisite, featureId);
                             }
 
                             var evaluationObject = new JObject { ["value"] = parentResult.Value };
@@ -549,7 +565,7 @@ namespace GrowthBook
                                 if (parentCondition.Gate)
                                 {
                                     _logger.LogDebug("Rule {RuleIndex}: Gated prerequisite '{ParentId}' failed for feature '{FeatureId}', aborting", ruleIndex, parentCondition.Id, featureId);
-                                    return GetFeatureResult(default, FeatureResult.SourceId.Prerequisite);
+                                    return GetFeatureResult(default, FeatureResult.SourceId.Prerequisite, featureId);
                                 }
 
                                 passedPrerequisiteEvaluations = false;
@@ -605,7 +621,7 @@ namespace GrowthBook
                         });
 
                         _logger.LogDebug("Rule {RuleIndex}: returning forced value for feature '{FeatureId}'", ruleIndex, featureId);
-                        return GetFeatureResult(rule.Force, FeatureResult.SourceId.Force);
+                        return GetFeatureResult(rule.Force, FeatureResult.SourceId.Force, featureId);
                     }
 
                     var experiment = new Experiment
@@ -641,11 +657,11 @@ namespace GrowthBook
 
                     NotifySubscribers(experiment, result);
 
-                    return GetFeatureResult(result.Value, FeatureResult.SourceId.Experiment, experiment, result);
+                    return GetFeatureResult(result.Value, FeatureResult.SourceId.Experiment, featureId, experiment, result);
                 }
 
                 _logger.LogDebug("No rules matched for feature '{FeatureId}', returning default value", featureId);
-                return GetFeatureResult(feature.DefaultValue ?? null, FeatureResult.SourceId.DefaultValue);
+                return GetFeatureResult(feature.DefaultValue ?? null, FeatureResult.SourceId.DefaultValue, featureId);
             }
             catch (Exception ex)
             {
@@ -653,10 +669,10 @@ namespace GrowthBook
 
                 if (!Features.TryGetValue(featureId, out Feature feature))
                 {
-                    return GetFeatureResult(null, FeatureResult.SourceId.UnknownFeature);
+                    return GetFeatureResult(null, FeatureResult.SourceId.UnknownFeature, featureId);
                 }
 
-                return GetFeatureResult(feature.DefaultValue ?? null, FeatureResult.SourceId.DefaultValue);
+                return GetFeatureResult(feature.DefaultValue ?? null, FeatureResult.SourceId.DefaultValue, featureId);
             }
         }
 
@@ -1006,15 +1022,45 @@ namespace GrowthBook
             return result;
         }
 
-        private FeatureResult GetFeatureResult(JToken value, string source, Experiment experiment = null, ExperimentResult experimentResult = null)
+        private FeatureResult GetFeatureResult(JToken value, string source, string featureId, Experiment experiment = null, ExperimentResult experimentResult = null)
         {
-            return new FeatureResult
+            var result = new FeatureResult
             {
                 Value = value,
                 Source = source,
                 Experiment = experiment,
                 ExperimentResult = experimentResult
             };
+
+            NotifyFeatureUsage(featureId, result);
+
+            return result;
+        }
+
+        private void NotifyFeatureUsage(string featureId, FeatureResult result)
+        {
+            if (_onFeatureUsage == null || featureId == null)
+            {
+                return;
+            }
+
+            string stringifiedValue = JsonConvert.SerializeObject(result.Value);
+
+            if (_featureUsageTracked.TryGetValue(featureId, out string previousValue) && previousValue == stringifiedValue)
+            {
+                return;
+            }
+
+            _featureUsageTracked[featureId] = stringifiedValue;
+
+            try
+            {
+                _onFeatureUsage(featureId, result);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Encountered unhandled exception in feature usage callback for feature '{FeatureId}'", featureId);
+            }
         }
 
         private bool IsFilteredOut(IEnumerable<Filter> filters)
