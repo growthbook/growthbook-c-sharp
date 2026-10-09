@@ -26,6 +26,7 @@ namespace GrowthBook
     public class GrowthBook : IGrowthBook, IDisposable
     {
         private readonly bool _qaMode;
+        private readonly object _assignedLock = new object();
         private readonly Dictionary<string, ExperimentAssignment> _assigned;
         private readonly ConcurrentDictionary<string, byte> _tracked;
         private Action<Experiment, ExperimentResult> _trackingCallback;
@@ -208,7 +209,10 @@ namespace GrowthBook
                     Features.Clear();
                     ForcedVariations = null;
                     _trackingCallback = null;
-                    _assigned.Clear();
+                    lock (_assignedLock)
+                    {
+                        _assigned.Clear();
+                    }
                     _tracked.Clear();
                     _subscribers.Clear();
                     _asyncSubscribers.Clear();
@@ -456,7 +460,10 @@ namespace GrowthBook
         /// <inheritdoc />
         public IDictionary<string, ExperimentAssignment> GetAllResults()
         {
-            return _assigned;
+            lock (_assignedLock)
+            {
+                return new Dictionary<string, ExperimentAssignment>(_assigned);
+            }
         }
 
         /// <inheritdoc />
@@ -749,12 +756,15 @@ namespace GrowthBook
             bool shouldFireCallbacks = false;
 
             // Always record the assignment locally for GetAllResults()
-            if (!_assigned.TryGetValue(experiment.Key, out ExperimentAssignment prev)
-                || prev.Result.InExperiment != result.InExperiment
-                || prev.Result.VariationId != result.VariationId)
+            lock (_assignedLock)
             {
-                _assigned[experiment.Key] = assignment;
-                shouldFireCallbacks = true;
+                if (!_assigned.TryGetValue(experiment.Key, out ExperimentAssignment prev)
+                    || prev.Result.InExperiment != result.InExperiment
+                    || prev.Result.VariationId != result.VariationId)
+                {
+                    _assigned[experiment.Key] = assignment;
+                    shouldFireCallbacks = true;
+                }
             }
 
             // Also use repository tracking if available (for preventing duplicate callbacks across instances)
