@@ -323,21 +323,17 @@ namespace GrowthBook.Providers
             }
             if (op == "$inGroup")
             {
-                if (attributeValue != null && conditionValue != null)
-                {
-                    var array = savedGroups[conditionValue.ToString()]?.AsArray() ?? new JArray();
+                var inGroupValues = GetSavedGroupValues(savedGroups, conditionValue);
 
-                    return IsIn(array, attributeValue);
-                }
+                // The null check sits outside the negation on purpose, so a group that could not be
+                // resolved answers false for both operators rather than true for this one by default.
+                return inGroupValues != null && IsIn(inGroupValues, attributeValue);
             }
             if (op == "$notInGroup")
             {
-                if (attributeValue != null && conditionValue != null)
-                {
-                    var array = savedGroups[conditionValue.ToString()]?.AsArray() ?? new JArray();
+                var notInGroupValues = GetSavedGroupValues(savedGroups, conditionValue);
 
-                    return !IsIn(array, attributeValue);
-                }
+                return notInGroupValues != null && !IsIn(notInGroupValues, attributeValue);
             }
 
             _logger.LogWarning("Unable to handle unsupported operator condition \'{Op}\', failing the condition", op);
@@ -408,6 +404,52 @@ namespace GrowthBook.Providers
             {
                 return false;
             }
+        }
+
+        /// <summary>
+        /// Resolves a saved group to the values it holds, mirroring the reference's
+        /// <c>getSavedGroupArrayValues</c>.
+        /// </summary>
+        /// <remarks>
+        /// Three outcomes, not two. A group nobody has defined is an empty one, and a user is
+        /// legitimately not in it. A group that is defined but isn't a usable list - a bare string, a
+        /// number, a JSON null, an object that isn't a list - cannot be resolved at all, and the SDK
+        /// has nothing to say about membership either way. Null is that case, and the caller answers
+        /// false for both operators rather than letting <c>$notInGroup</c> target everyone through a
+        /// negation. Returning an empty array for it instead would do exactly that.
+        /// </remarks>
+        /// <returns>The group's values, or null when the group could not be resolved.</returns>
+        private static JArray GetSavedGroupValues(JObject savedGroups, JToken groupId)
+        {
+            if (savedGroups is null || groupId is null)
+            {
+                return new JArray();
+            }
+
+            var entry = savedGroups[groupId.ToString()];
+
+            // A key that isn't there at all is null here, which is the reference's `undefined` case.
+            // A key present with a JSON null is a JValue instead, and falls through to the end as a
+            // group that is defined but unusable - the same split the reference's truthiness check makes.
+            if (entry is null)
+            {
+                return new JArray();
+            }
+
+            if (entry is JArray values)
+            {
+                return values;
+            }
+
+            // The other shape the reference accepts, alongside a bare array. The type is read as a
+            // string only when it is one: casting an object or an array throws, and a malformed
+            // group is unresolvable rather than a reason to abandon the evaluation.
+            if (entry is JObject group && group["type"]?.Type == JTokenType.String && (string)group["type"] == "list")
+            {
+                return group["values"] as JArray;
+            }
+
+            return null;
         }
 
         private bool IsIn(JToken conditionValue, JToken actualValue, StringComparison? stringComparison = null)
