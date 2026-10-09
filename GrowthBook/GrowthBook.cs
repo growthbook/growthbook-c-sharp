@@ -162,7 +162,7 @@ namespace GrowthBook
             }
             catch (Exception ex)
             {
-                throw new DecryptionException("The decrypted value was not a valid feature payload", ex);
+                throw new DecryptionException($"The decrypted value was not a valid feature payload ({ex.GetType().Name})");
             }
 
             _logger.LogInformation("Decrypted '{FeatureCount}' feature(s) from the context", Features.Count);
