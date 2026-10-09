@@ -145,7 +145,7 @@ namespace GrowthBook
 
         public override bool Equals(object obj)
         {
-            if (obj.GetType() == typeof(Experiment))
+            if (obj?.GetType() == typeof(Experiment))
             {
                 Experiment objExp = (Experiment)obj;
                 return Active == objExp.Active
@@ -176,9 +176,33 @@ namespace GrowthBook
             return true;
         }
 
+        /// <summary>
+        /// A hash over exactly the fields Equals compares, so equal instances hash equally.
+        /// </summary>
+        /// <remarks>Condition, Variations and CustomFields are compared with DeepEquals/by name, which ignore ordering, so no serialized form of them hashes consistently with Equals. Leaving them out only costs distribution.</remarks>
         public override int GetHashCode()
         {
-            throw new NotImplementedException();
+            unchecked
+            {
+                var hash = 17;
+
+                hash = hash * 31 + Active.GetHashCode();
+                hash = hash * 31 + (Coverage?.GetHashCode() ?? 0);
+                hash = hash * 31 + (Force?.GetHashCode() ?? 0);
+                hash = hash * 31 + (HashAttribute?.GetHashCode() ?? 0);
+                hash = hash * 31 + (Key?.GetHashCode() ?? 0);
+                hash = hash * 31 + (Namespace?.GetHashCode() ?? 0);
+
+                if (Weights != null)
+                {
+                    foreach (var weight in Weights)
+                    {
+                        hash = hash * 31 + weight.GetHashCode();
+                    }
+                }
+
+                return hash;
+            }
         }
     }
 }
