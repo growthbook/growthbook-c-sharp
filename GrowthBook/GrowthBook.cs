@@ -26,7 +26,7 @@ namespace GrowthBook
     public class GrowthBook : IGrowthBook, IDisposable
     {
         private readonly bool _qaMode;
-        private readonly Dictionary<string, ExperimentAssignment> _assigned;
+        private readonly ConcurrentDictionary<string, ExperimentAssignment> _assigned;
         private readonly ConcurrentDictionary<string, byte> _tracked;
         private Action<Experiment, ExperimentResult> _trackingCallback;
         private bool _disposedValue;
@@ -38,6 +38,7 @@ namespace GrowthBook
         private readonly JObject _savedGroups;
         private readonly ILoggerFactory _loggerFactory;
         private readonly bool _ownsLoggerFactory;
+        private readonly bool _ownsFeatureRepository;
         private readonly Context _context;
 
         /// <summary>
@@ -70,7 +71,7 @@ namespace GrowthBook
 
             _qaMode = context.QaMode;
             _trackingCallback = context.TrackingCallback;
-            _assigned = new Dictionary<string, ExperimentAssignment>();
+            _assigned = new ConcurrentDictionary<string, ExperimentAssignment>();
             _tracked = new ConcurrentDictionary<string, byte>();
             _stickyBucketService = context.StickyBucketService;
             _stickyBucketAssignmentDocs = context.StickyBucketAssignmentDocs ?? new Dictionary<string, StickyAssignmentsDocument>();
@@ -113,9 +114,12 @@ namespace GrowthBook
             if (context.FeatureRepository != null)
             {
                 _featureRepository = context.FeatureRepository;
+                _ownsFeatureRepository = false;
             }
             else
             {
+                _ownsFeatureRepository = true;
+
                 var featureCache = new InMemoryFeatureCache(cacheExpirationInSeconds: 60);
                 var httpClientFactory = new HttpClientFactory(requestTimeoutInSeconds: 60);
 
@@ -212,7 +216,10 @@ namespace GrowthBook
                     _tracked.Clear();
                     _subscribers.Clear();
                     _asyncSubscribers.Clear();
-                    _featureRepository.Cancel();
+                    if (_ownsFeatureRepository)
+                    {
+                        _featureRepository.Cancel();
+                    }
 
                     if (_ownsLoggerFactory && _loggerFactory is IDisposable disposableFactory)
                     {
@@ -456,7 +463,7 @@ namespace GrowthBook
         /// <inheritdoc />
         public IDictionary<string, ExperimentAssignment> GetAllResults()
         {
-            return _assigned;
+            return new Dictionary<string, ExperimentAssignment>(_assigned);
         }
 
         /// <inheritdoc />

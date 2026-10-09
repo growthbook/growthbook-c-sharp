@@ -86,11 +86,22 @@ namespace GrowthBook
         }
 
         /// <summary>
-        /// Disposes of factory resources.
+        /// Disposes of factory resources, cancelling the shared feature repository.
         /// </summary>
+        /// <remarks>
+        /// The per-user instances this factory creates deliberately do not cancel the shared repository when
+        /// they are disposed, since that would stop feature refresh and SSE for every other user. The factory
+        /// owns that lifetime, so cancelling it belongs here.
+        /// </remarks>
         public void Dispose()
         {
+            if (_disposed)
+            {
+                return;
+            }
+
             _disposed = true;
+            _sharedRepository?.Cancel();
         }
     }
 }
