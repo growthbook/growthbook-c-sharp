@@ -38,7 +38,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   on the calling thread. `SubscribeAsync` was already dispatched off-context and is unchanged. No public API changed.
 - Added `GetFeatures()` and `GetExperiments()` on `IGrowthBook`, returning read-only snapshots of the
   loaded state for debug, health and export use. Empty rather than null before the first load. The
-  mutable `Features` and `Experiments` properties are unchanged.
+  snapshots are deep copies, so editing what one holds cannot change what the instance evaluates, and
+  they keep the key comparer the caller chose. The mutable `Features` and `Experiments` properties are
+  unchanged.
+- **Breaking for implementors of `IGrowthBook`.** The target is `netstandard2.0`, which has no default
+  interface members, so a hand-written test double or wrapper has to implement the two new methods
+  before it will compile. Callers holding the interface are unaffected.
 
 ## [1.2.0]
 

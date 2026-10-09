@@ -132,4 +132,95 @@ public class ReadOnlyStateAccessorTests : UnitTest
         growthBook.GetFeatures().Should().HaveCount(2, "a DI-injected consumer only sees IGrowthBook");
         growthBook.GetExperiments().Should().HaveCount(1);
     }
+
+    /// <summary>
+    /// A read-only container over the instance's own objects is not read-only state. Editing what it
+    /// holds changes what the instance evaluates, which is the thing these accessors exist to prevent.
+    /// </summary>
+    [Fact]
+    public void EditingASnapshottedFeatureDoesNotChangeWhatIsEvaluated()
+    {
+        using var growthBook = new GrowthBook(new Context
+        {
+            Attributes = JObject.FromObject(new { id = "user-1" }),
+            Features = new Dictionary<string, Feature> { ["first"] = new Feature { DefaultValue = true } }
+        });
+
+        growthBook.IsOn("first").Should().BeTrue();
+
+        growthBook.GetFeatures()["first"].DefaultValue = false;
+
+        growthBook.IsOn("first").Should().BeTrue("the snapshot is a copy, so editing it cannot turn a flag off");
+        growthBook.GetFeatures()["first"].DefaultValue.Value<bool>().Should().BeTrue();
+    }
+
+    [Fact]
+    public void EditingASnapshottedFeaturesRulesDoesNotChangeWhatIsEvaluated()
+    {
+        var feature = new Feature
+        {
+            DefaultValue = false,
+            Rules = new List<FeatureRule> { new FeatureRule { Force = true } }
+        };
+
+        using var growthBook = new GrowthBook(new Context
+        {
+            Attributes = JObject.FromObject(new { id = "user-1" }),
+            Features = new Dictionary<string, Feature> { ["forced"] = feature }
+        });
+
+        growthBook.IsOn("forced").Should().BeTrue();
+
+        growthBook.GetFeatures()["forced"].Rules.Clear();
+
+        growthBook.IsOn("forced").Should().BeTrue("the nested rules are copied too, not shared");
+    }
+
+    [Fact]
+    public void EditingASnapshottedExperimentDoesNotChangeTheStoredOne()
+    {
+        using var growthBook = new GrowthBook(new Context
+        {
+            Attributes = JObject.FromObject(new { id = "user-1" }),
+            Experiments = new List<Experiment>
+            {
+                new Experiment { Key = "exp", Variations = new JArray(0, 1) }
+            }
+        });
+
+        growthBook.GetExperiments()[0].Variations = new JArray(9, 9, 9);
+        growthBook.GetExperiments()[0].Key = "renamed";
+
+        var stored = growthBook.GetExperiments()[0];
+
+        stored.Key.Should().Be("exp");
+        stored.Variations.Should().HaveCount(2, "the stored experiment is untouched by edits to a snapshot");
+    }
+
+    /// <summary>
+    /// A caller can hand the SDK a case-insensitive dictionary, and evaluation honours it. A snapshot
+    /// taken under the default rules would reject keys the instance itself accepts.
+    /// </summary>
+    [Fact]
+    public void ASnapshotKeepsTheKeyComparerTheCallerChose()
+    {
+        using var growthBook = new GrowthBook(new Context
+        {
+            Attributes = JObject.FromObject(new { id = "user-1" })
+        });
+
+        // Assigned to the property rather than passed on the Context: the constructor copies with
+        // ToDictionary, which drops the comparer, so only a direct assignment keeps it.
+        growthBook.Features = new Dictionary<string, Feature>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["First"] = new Feature { DefaultValue = true }
+        };
+
+        growthBook.IsOn("first").Should().BeTrue("the instance itself accepts the key either way");
+
+        var snapshot = growthBook.GetFeatures();
+
+        snapshot.ContainsKey("first").Should().BeTrue("the instance accepts this key, so the snapshot has to as well");
+        snapshot["FIRST"].Should().NotBeNull();
+    }
 }
