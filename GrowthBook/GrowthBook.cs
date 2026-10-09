@@ -32,6 +32,7 @@ namespace GrowthBook
             new ReadOnlyCollection<Experiment>(new List<Experiment>());
 
         private readonly bool _qaMode;
+        private static readonly JsonSerializer StateSerializer = JsonSerializer.CreateDefault();
         private readonly Dictionary<string, ExperimentAssignment> _assigned;
         private readonly ConcurrentDictionary<string, byte> _tracked;
         private Action<Experiment, ExperimentResult> _trackingCallback;
@@ -464,9 +465,20 @@ namespace GrowthBook
         {
             var features = Features;
 
-            return features is null
-                ? EmptyFeatures
-                : new ReadOnlyDictionary<string, Feature>(new Dictionary<string, Feature>(features));
+            if (features is null)
+            {
+                return EmptyFeatures;
+            }
+
+            var comparer = (features as Dictionary<string, Feature>)?.Comparer ?? EqualityComparer<string>.Default;
+            var snapshot = new Dictionary<string, Feature>(features.Count, comparer);
+
+            foreach (var feature in features)
+            {
+                snapshot[feature.Key] = CopyState(feature.Value);
+            }
+
+            return new ReadOnlyDictionary<string, Feature>(snapshot);
         }
 
         /// <inheritdoc />
@@ -474,9 +486,29 @@ namespace GrowthBook
         {
             var experiments = Experiments;
 
-            return experiments is null
-                ? EmptyExperiments
-                : new ReadOnlyCollection<Experiment>(new List<Experiment>(experiments));
+            if (experiments is null)
+            {
+                return EmptyExperiments;
+            }
+
+            var snapshot = new List<Experiment>(experiments.Count);
+
+            foreach (var experiment in experiments)
+            {
+                snapshot.Add(CopyState(experiment));
+            }
+
+            return new ReadOnlyCollection<Experiment>(snapshot);
+        }
+
+        private static T CopyState<T>(T value) where T : class
+        {
+            if (value is null)
+            {
+                return null;
+            }
+
+            return JToken.FromObject(value, StateSerializer).ToObject<T>(StateSerializer);
         }
 
         /// <inheritdoc />
