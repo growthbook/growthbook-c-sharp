@@ -40,6 +40,7 @@ namespace GrowthBook
         private readonly ILoggerFactory _loggerFactory;
         private readonly bool _ownsLoggerFactory;
         private readonly IDisposable _refreshSubscription;
+        private readonly bool _canEvaluateRemotely;
         private readonly object _featuresLock = new object();
         private long _installedRefreshVersion;
         private long _remoteEvaluationSequence;
@@ -138,6 +139,23 @@ namespace GrowthBook
             {
                 _refreshSubscription = refreshSource.SubscribeToRefresh(OnFeaturesRefreshed);
             }
+
+            _canEvaluateRemotely = CanRepositoryEvaluateRemotely();
+        }
+
+        private bool CanRepositoryEvaluateRemotely()
+        {
+            if (!_context.RemoteEval)
+            {
+                return false;
+            }
+
+            if (_featureRepository is IRemoteEvaluationCapability capability)
+            {
+                return capability.CanEvaluateRemotely;
+            }
+
+            return true;
         }
 
         private void OnFeaturesRefreshed(FeatureRefresh refresh)
@@ -149,7 +167,7 @@ namespace GrowthBook
 
             lock (_featuresLock)
             {
-                if (_context.RemoteEval && _publishedRemoteEvaluation > 0)
+                if (_publishedRemoteEvaluation > 0)
                 {
                     _logger.LogDebug("Ignored a shared refresh: this instance is evaluated remotely and has its own result");
 
@@ -747,6 +765,14 @@ namespace GrowthBook
                 IDictionary<string, Feature> features;
                 var startedAtVersion = CurrentRefreshVersion();
 
+                var isRemoteEvaluation = _canEvaluateRemotely && RemoteEvaluationUtilities.IsValidForRemoteEvaluation(_context);
+                long sequence = 0;
+
+                if (isRemoteEvaluation)
+                {
+                    sequence = Interlocked.Increment(ref _remoteEvaluationSequence);
+                }
+
                 // Use remote evaluation if enabled and configured
                 if (_context.RemoteEval && RemoteEvaluationUtilities.IsValidForRemoteEvaluation(_context))
                 {
@@ -765,7 +791,16 @@ namespace GrowthBook
                     return FeatureLoadResult.CreateFailure(errorMessage);
                 }
 
-                if (!TryInstallLoadedFeatures(features, startedAtVersion))
+                if (isRemoteEvaluation)
+                {
+                    if (!TryInstallRemoteEvaluation(features, sequence))
+                    {
+                        _logger.LogInformation("Loading features has completed, but a newer remote evaluation arrived while it was in flight and was kept");
+
+                        return FeatureLoadResult.CreateSuccess(Features.Count);
+                    }
+                }
+                else if (!TryInstallLoadedFeatures(features, startedAtVersion))
                 {
                     _logger.LogInformation("Loading features has completed, but a newer refresh arrived while it was in flight and was kept");
 
@@ -1279,10 +1314,26 @@ namespace GrowthBook
                 _logger?.LogDebug("Triggering remote evaluation due to attribute changes");
 
                 var sequence = Interlocked.Increment(ref _remoteEvaluationSequence);
+                var startedAtVersion = CurrentRefreshVersion();
                 var currentContext = CreateCurrentContext();
-                var features = await _featureRepository.GetFeaturesWithContext(currentContext);
+                var features = await _featureRepository.GetFeaturesWithContext(currentContext).ConfigureAwait(false);
 
-                if (features != null && TryInstallRemoteEvaluation(features, sequence))
+                if (features is null)
+                {
+                    return;
+                }
+
+                if (!_canEvaluateRemotely)
+                {
+                    if (TryInstallLoadedFeatures(features, startedAtVersion))
+                    {
+                        _logger?.LogDebug("Adopted {Count} features from a cache read made in place of a remote evaluation", features.Count);
+                    }
+
+                    return;
+                }
+
+                if (TryInstallRemoteEvaluation(features, sequence))
                 {
                     _logger?.LogDebug("Remote evaluation completed, updated {Count} features", features.Count);
                 }

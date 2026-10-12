@@ -13,7 +13,7 @@ using Newtonsoft.Json.Linq;
 
 namespace GrowthBook.Api
 {
-    public class FeatureRepository : IGrowthBookFeatureRepository, IFeatureRefreshSource, IDisposable
+    public class FeatureRepository : IGrowthBookFeatureRepository, IFeatureRefreshSource, IRemoteEvaluationCapability, IDisposable
     {
         private readonly ILogger<FeatureRepository> _logger;
         private readonly IGrowthBookFeatureCache _cache;
@@ -37,6 +37,12 @@ namespace GrowthBook.Api
             {
                 _cacheSubscription = refreshSource.SubscribeToRefresh(OnCacheRefreshed);
             }
+        }
+
+        /// <inheritdoc/>
+        public bool CanEvaluateRemotely
+        {
+            get { return _remoteEvaluationService != null; }
         }
 
         /// <inheritdoc/>

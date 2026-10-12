@@ -481,14 +481,16 @@ public class PushRefreshedFeaturesTests
     private sealed class GatedRemoteRepository : IGrowthBookFeatureRepository, IFeatureRefreshSource
     {
         private readonly List<Action<FeatureRefresh>> _handlers = new List<Action<FeatureRefresh>>();
-        private readonly ManualResetEventSlim _release = new ManualResetEventSlim(false);
         private readonly SemaphoreSlim _entered = new SemaphoreSlim(0);
+
+        private readonly TaskCompletionSource<IDictionary<string, Feature>> _evaluation =
+            new TaskCompletionSource<IDictionary<string, Feature>>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public IDictionary<string, Feature> SharedFeatures { get; set; } = FeatureSet(false);
         public IDictionary<string, Feature> RemoteFeatures { get; set; } = FeatureSet(true);
 
         public bool WaitUntilEvaluating() => _entered.Wait(TimeSpan.FromSeconds(5));
-        public void FinishEvaluation() => _release.Set();
+        public void FinishEvaluation() => _evaluation.TrySetResult(RemoteFeatures);
 
         public void Push(long version, IDictionary<string, Feature> features)
         {
@@ -521,9 +523,8 @@ public class PushRefreshedFeaturesTests
         public Task<IDictionary<string, Feature>> GetFeaturesWithContext(Context context, GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null)
         {
             _entered.Release();
-            _release.Wait(TimeSpan.FromSeconds(5));
 
-            return Task.FromResult(RemoteFeatures);
+            return _evaluation.Task;
         }
 
         public void Cancel() { }
@@ -593,5 +594,165 @@ public class PushRefreshedFeaturesTests
 
         growthBook.IsOn("flag").Should().BeTrue(
             "the remote result is this user's own answer - a shared refresh is not a newer one, so it must not discard it");
+    }
+
+    /// <summary>
+    /// The same for an explicit load. Ordering it against the shared refreshes would throw the remote
+    /// answer away whenever one landed while the load was waiting, and still report success.
+    /// </summary>
+    [Fact]
+    public async Task ACacheRefreshDoesNotDiscardALoadedRemoteEvaluation()
+    {
+        var repository = new GatedRemoteRepository();
+
+        using var growthBook = new GrowthBook(new Context
+        {
+            Attributes = JObject.FromObject(new { id = "user-1" }),
+            Features = FeatureSet(false),
+            RemoteEval = true,
+            ClientKey = "sdk-key",
+            ApiHost = "https://api.example.test",
+            FeatureRepository = repository
+        });
+
+        var load = growthBook.LoadFeaturesWithResult();
+
+        repository.WaitUntilEvaluating().Should().BeTrue("the remote evaluation has to be in flight");
+
+        repository.Push(1, FeatureSet(false));
+
+        repository.FinishEvaluation();
+
+        var result = await load;
+
+        result.Success.Should().BeTrue();
+
+        growthBook.IsOn("flag").Should().BeTrue(
+            "the load asked for this user's own answer, and a shared refresh arriving meanwhile is not a newer version of it");
+    }
+
+    /// <summary>
+    /// Remote evaluation is configured but the repository has nothing to evaluate with, so a context
+    /// read is answered from the shared cache. Treating that as this user's own result would make the
+    /// instance ignore every later refresh, which is the one thing this change exists to deliver.
+    /// </summary>
+    [Fact]
+    public void AFallbackCacheReadDoesNotSilenceLaterRefreshes()
+    {
+        var repository = new FallbackReadRepository();
+
+        using var growthBook = new GrowthBook(new Context
+        {
+            Attributes = JObject.FromObject(new { id = "user-1" }),
+            Features = FeatureSet(false),
+            RemoteEval = true,
+            ClientKey = "sdk-key",
+            ApiHost = "https://api.example.test",
+            FeatureRepository = repository
+        });
+
+        growthBook.UpdateAttributes(new { id = "user-2" });
+
+        repository.WaitUntilRead().Should().BeTrue("the attribute change has to reach the repository");
+
+        repository.Push(1, FeatureSet(true));
+
+        growthBook.IsOn("flag").Should().BeTrue(
+            "the instance never received a remote answer of its own, so it still belongs to the shared set");
+    }
+
+    [Fact]
+    public void ARepositoryReportsWhetherItCanActuallyEvaluateRemotely()
+    {
+        var withoutService = CreateRepository(out _);
+
+        var withService = new FeatureRepository(
+            NullLogger<FeatureRepository>.Instance,
+            new InMemoryFeatureCache(cacheExpirationInSeconds: 60),
+            Substitute.For<IGrowthBookFeatureRefreshWorker>(),
+            Substitute.For<IRemoteEvaluationService>());
+
+        withoutService.CanEvaluateRemotely.Should().BeFalse(
+            "without a service it answers a context read from the cache, which is not a remote evaluation");
+
+        withService.CanEvaluateRemotely.Should().BeTrue();
+    }
+
+    /// <summary>
+    /// A repository that has remote evaluation configured but unavailable, which is what
+    /// <see cref="FeatureRepository"/> is when it was given no <see cref="IRemoteEvaluationService"/>.
+    /// </summary>
+    private sealed class FallbackReadRepository : IGrowthBookFeatureRepository, IFeatureRefreshSource, IRemoteEvaluationCapability
+    {
+        private readonly List<Action<FeatureRefresh>> _handlers = new List<Action<FeatureRefresh>>();
+        private readonly SemaphoreSlim _read = new SemaphoreSlim(0);
+
+        public IDictionary<string, Feature> SharedFeatures { get; set; } = FeatureSet(false);
+
+        public bool CanEvaluateRemotely => false;
+
+        public bool WaitUntilRead() => _read.Wait(TimeSpan.FromSeconds(5));
+
+        public void Push(long version, IDictionary<string, Feature> features)
+        {
+            Action<FeatureRefresh>[] handlers;
+
+            lock (_handlers)
+            {
+                handlers = _handlers.ToArray();
+            }
+
+            foreach (var handler in handlers)
+            {
+                handler(new FeatureRefresh(version, features));
+            }
+        }
+
+        public IDisposable SubscribeToRefresh(Action<FeatureRefresh> handler)
+        {
+            lock (_handlers)
+            {
+                _handlers.Add(handler);
+            }
+
+            return new Unsubscriber(this, handler);
+        }
+
+        public Task<IDictionary<string, Feature>> GetFeatures(GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null) =>
+            Task.FromResult(SharedFeatures);
+
+        public Task<IDictionary<string, Feature>> GetFeaturesWithContext(Context context, GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null)
+        {
+            _read.Release();
+
+            return Task.FromResult(SharedFeatures);
+        }
+
+        public void Cancel() { }
+        public bool HasIdenticalAssignment(string experimentKey, ExperimentAssignment assignment) => false;
+        public void RecordAssignment(string experimentKey, ExperimentAssignment assignment) { }
+        public bool IsAlreadyTracked(string trackingKey) => false;
+        public void MarkAsTracked(string trackingKey) { }
+        public bool TryMarkAsTracked(string trackingKey) => true;
+
+        private sealed class Unsubscriber : IDisposable
+        {
+            private readonly FallbackReadRepository _owner;
+            private readonly Action<FeatureRefresh> _handler;
+
+            public Unsubscriber(FallbackReadRepository owner, Action<FeatureRefresh> handler)
+            {
+                _owner = owner;
+                _handler = handler;
+            }
+
+            public void Dispose()
+            {
+                lock (_owner._handlers)
+                {
+                    _owner._handlers.Remove(_handler);
+                }
+            }
+        }
     }
 }
