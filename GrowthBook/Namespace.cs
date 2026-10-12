@@ -40,7 +40,7 @@ namespace GrowthBook
 
         public override bool Equals(object obj)
         {
-            if (obj.GetType() == typeof(Namespace))
+            if (obj?.GetType() == typeof(Namespace))
             {
                 var objNamespace = (Namespace)obj;
                 return Id == objNamespace.Id && Start == objNamespace.Start && End == objNamespace.End;
@@ -48,9 +48,21 @@ namespace GrowthBook
             return false;
         }
 
+        /// <summary>
+        /// A hash over exactly the fields Equals compares, so equal instances hash equally.
+        /// </summary>
         public override int GetHashCode()
         {
-            throw new NotImplementedException();
+            unchecked
+            {
+                var hash = 17;
+
+                hash = hash * 31 + (Id?.GetHashCode() ?? 0);
+                hash = hash * 31 + Start.GetHashCode();
+                hash = hash * 31 + End.GetHashCode();
+
+                return hash;
+            }
         }
     }
 }
