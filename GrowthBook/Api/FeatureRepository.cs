@@ -136,15 +136,6 @@ namespace GrowthBook.Api
                     // Canceled, which is exactly what HttpClient raises when its Timeout elapses. Reading
                     // Result then throws inside the continuation, whose exception nothing observes.
                     RecordRefreshOutcome(attempt.Id, t.Status == TaskStatus.RanToCompletion && t.Result != null);
-
-                    if (t.IsFaulted)
-                    {
-                        _logger.LogError(t.Exception, "Background cache refresh failed");
-                    }
-                    else if (t.IsCanceled)
-                    {
-                        _logger.LogWarning("Background cache refresh was cancelled or timed out");
-                    }
                 });
             }
 
@@ -211,6 +202,8 @@ namespace GrowthBook.Api
 
                 attempt = new RefreshAttempt(started, _inFlightRefreshId);
 
+                ObserveFailure(started);
+
                 return true;
             }
         }
@@ -269,14 +262,21 @@ namespace GrowthBook.Api
         /// </remarks>
         private bool IsBackoffWindowOpen() => _consecutiveFailures != 0 && _utcNow() < _nextAttemptAllowedAt;
 
-        /// <summary>
-        /// Records how one fetch ended, at most once for that fetch.
-        /// </summary>
-        /// <remarks>
-        /// Every caller that joined an in-flight fetch reports its outcome, so without keying on the fetch
-        /// itself a single failed request would advance the failure count once per joiner and overshoot
-        /// the backoff window badly.
-        /// </remarks>
+        private void ObserveFailure(Task<IDictionary<string, Feature>> refresh)
+        {
+            _ = refresh.ContinueWith(t =>
+            {
+                if (t.IsFaulted)
+                {
+                    _logger.LogError(t.Exception, "Background cache refresh failed");
+                }
+                else if (t.IsCanceled)
+                {
+                    _logger.LogWarning("Background cache refresh was cancelled or timed out");
+                }
+            }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        }
+
         private void RecordRefreshOutcome(long refreshId, bool succeeded)
         {
             lock (_backoffLock)
