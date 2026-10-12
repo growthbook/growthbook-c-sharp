@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Fixed `Context.EncryptedFeatures` never being decrypted. The property was declared, documented and cloned, but
+  nothing ever read it, so a caller who supplied an encrypted payload was left with an empty feature set and every
+  flag reading as false - with nothing to distinguish a wrong key from a working one. The payload is now decrypted in
+  the constructor and takes precedence over `Context.Features`. A payload supplied without `Context.DecryptionKey`
+  throws `ArgumentException`, and one that will not decrypt or will not parse throws `DecryptionException`, rather
+  than failing silently.
+- Fixed the async evaluation methods ignoring a locally supplied payload. `IsOnAsync`, `IsOffAsync`, `EvalFeatureAsync`
+  and `GetFeatureValueAsync` always loaded from the repository first, so a caller evaluating an offline payload hit an
+  API they never configured - with no client key that is a failing request to the default host, and a response that did
+  arrive replaced the payload they supplied. The load now happens only when there is somewhere to load from: a client
+  key, or a repository the caller provided.
 - Stopped writing the decryption key to the log. It was logged verbatim at debug level on both feature fetch paths,
   so anyone with log access could decrypt the payloads it protects. Rotate the key if debug logging has been enabled
   where those logs are retained or shipped elsewhere.
