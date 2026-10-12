@@ -369,6 +369,9 @@ public class AsyncStickyBucketServiceTests : UnitTest
 
         private readonly List<string[]> _requested = new List<string[]>();
 
+        private readonly List<IDictionary<string, StickyAssignmentsDocument>> _answers =
+            new List<IDictionary<string, StickyAssignmentsDocument>>();
+
         public void Seed(StickyAssignmentsDocument document) => _documents[document.FormattedAttribute] = document;
 
         public int ReadCount
@@ -407,20 +410,15 @@ public class AsyncStickyBucketServiceTests : UnitTest
         /// <summary>
         /// Completes the read at <paramref name="index"/> with whatever was stored for the keys it asked for.
         /// </summary>
+        /// <summary>
+        /// Completes a read with the answer captured when it was made, not with whatever the store
+        /// holds now. A real read sees the store as it was at the time of the call.
+        /// </summary>
         public void Finish(int index)
         {
-            string[] keys;
-
             lock (_pending)
             {
-                keys = _requested[index];
-            }
-
-            var answer = keys.Where(_documents.ContainsKey).ToDictionary(key => key, key => _documents[key]);
-
-            lock (_pending)
-            {
-                _pending[index].SetResult(answer);
+                _pending[index].SetResult(_answers[index]);
             }
         }
 
@@ -428,9 +426,13 @@ public class AsyncStickyBucketServiceTests : UnitTest
         {
             var pending = new TaskCompletionSource<IDictionary<string, StickyAssignmentsDocument>>();
 
+            var keys = attributes.ToArray();
+            var answer = keys.Where(_documents.ContainsKey).ToDictionary(key => key, key => _documents[key]);
+
             lock (_pending)
             {
-                _requested.Add(attributes.ToArray());
+                _requested.Add(keys);
+                _answers.Add(answer);
                 _pending.Add(pending);
             }
 
@@ -521,4 +523,43 @@ public class AsyncStickyBucketServiceTests : UnitTest
         growthBook.EvalFeature(FeatureName).ExperimentResult.StickyBucketUsed.Should().BeTrue(
             "because dropping superseded loads must not stop an ordinary one from landing");
     }
+
+    /// <summary>
+    /// A refresh that read the store before a just-stored assignment was written there comes back
+    /// without it, and replacing the whole set loses it. The load sequence orders refreshes against
+    /// each other but says nothing about what was written locally while one was in flight.
+    /// </summary>
+    [Fact]
+    public async Task ARefreshInFlightDoesNotDiscardAnAssignmentStoredWhileItRan()
+    {
+        const string FeatureName = "sticky-feature";
+
+        var service = new GatedAsyncStickyBucketService();
+
+        using var growthBook = new GrowthBook(new Context
+        {
+            Attributes = JObject.FromObject(new { id = "user-1" }),
+            Features = new Dictionary<string, Feature> { [FeatureName] = CreateExperimentFeature() },
+            AsyncStickyBucketService = service
+        });
+
+        // A refresh starts and reads the store while it still holds nothing.
+        var refresh = growthBook.LoadStickyBucketAssignmentsAsync();
+        service.WaitForReadCount(1).Should().BeTrue("the refresh has to be in flight");
+
+        // Evaluating now assigns a variation and stores it locally.
+        var assigned = growthBook.EvalFeature(FeatureName).ExperimentResult;
+        assigned.Should().NotBeNull();
+
+        // The refresh finishes, carrying the empty view it read before that assignment existed.
+        service.Finish(0);
+        await refresh;
+
+        var afterRefresh = growthBook.EvalFeature(FeatureName).ExperimentResult;
+
+        afterRefresh.StickyBucketUsed.Should().BeTrue(
+            "the assignment was stored while the refresh was in flight, so the refresh never saw it and must not drop it");
+        afterRefresh.Key.Should().Be(assigned.Key, "and the user keeps the variation they were given");
+    }
+
 }
