@@ -155,4 +155,78 @@ public class EqualityContractTests
 
         different.Should().NotBe(Build());
     }
+
+    /// <summary>
+    /// `Condition` is compared with `DeepEquals`, which ignores property order, so two experiments
+    /// differing only in that order are equal and must hash alike. Hashing a serialized form of the
+    /// token would break that - and with it every dictionary and set lookup holding one.
+    /// </summary>
+    [Fact]
+    public void ExperimentsWhoseConditionsDifferOnlyInPropertyOrderHashAlike()
+    {
+        var first = new Experiment { Key = "exp", Condition = JObject.Parse("{\"country\":\"UA\",\"tier\":\"pro\"}") };
+        var second = new Experiment { Key = "exp", Condition = JObject.Parse("{\"tier\":\"pro\",\"country\":\"UA\"}") };
+
+        first.Should().Be(second, "DeepEquals ignores property ordering");
+        first.GetHashCode().Should().Be(second.GetHashCode(),
+            "equal objects must hash alike, so the condition cannot be hashed in a form that depends on order");
+    }
+
+    [Fact]
+    public void ExperimentsWhoseVariationsAreDeepEqualHashAlike()
+    {
+        var first = new Experiment { Key = "exp", Variations = new JArray(JObject.Parse("{\"a\":1,\"b\":2}")) };
+        var second = new Experiment { Key = "exp", Variations = new JArray(JObject.Parse("{\"b\":2,\"a\":1}")) };
+
+        first.Should().Be(second);
+        first.GetHashCode().Should().Be(second.GetHashCode());
+    }
+
+    /// <summary>
+    /// `CustomFields` is compared by name rather than by enumeration order, so two experiments whose
+    /// entries were added in a different order are equal.
+    /// </summary>
+    [Fact]
+    public void ExperimentsWhoseCustomFieldsDifferOnlyInEntryOrderHashAlike()
+    {
+        var first = new Experiment
+        {
+            Key = "exp",
+            CustomFields = new Dictionary<string, object> { ["team"] = "growth", ["owner"] = "ada" }
+        };
+
+        var second = new Experiment
+        {
+            Key = "exp",
+            CustomFields = new Dictionary<string, object> { ["owner"] = "ada", ["team"] = "growth" }
+        };
+
+        first.Should().Be(second, "the fields are compared by name, not by the order they were added");
+        first.GetHashCode().Should().Be(second.GetHashCode());
+    }
+
+    [Fact]
+    public void FeatureResultsWhoseValuesDifferOnlyInPropertyOrderHashAlike()
+    {
+        var first = new FeatureResult { Source = "experiment", Value = JObject.Parse("{\"a\":1,\"b\":2}") };
+        var second = new FeatureResult { Source = "experiment", Value = JObject.Parse("{\"b\":2,\"a\":1}") };
+
+        first.Should().Be(second, "DeepEquals ignores property ordering here too");
+        first.GetHashCode().Should().Be(second.GetHashCode());
+    }
+
+    /// <summary>
+    /// The other half of leaving these fields out: two objects differing only in them collide. A
+    /// collision is a performance detail, but merging them would be a correctness bug.
+    /// </summary>
+    [Fact]
+    public void ExperimentsDifferingOnlyInTheirConditionStayDistinct()
+    {
+        var pro = new Experiment { Key = "exp", Condition = JObject.Parse("{\"tier\":\"pro\"}") };
+        var free = new Experiment { Key = "exp", Condition = JObject.Parse("{\"tier\":\"free\"}") };
+
+        pro.Should().NotBe(free);
+        new[] { pro, free }.Distinct().Should().HaveCount(2, "a hash collision must not merge unequal experiments");
+    }
+
 }
