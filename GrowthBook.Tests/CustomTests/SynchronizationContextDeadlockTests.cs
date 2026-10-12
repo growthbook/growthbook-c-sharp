@@ -58,6 +58,41 @@ public class SynchronizationContextDeadlockTests
     /// Runs <paramref name="work"/> on a thread that has a single-threaded context installed, and
     /// reports whether it finished rather than hanging the test run.
     /// </summary>
+    /// <summary>
+    /// Runs asynchronous work on the context thread itself, so its awaits resume through the
+    /// installed context rather than on the thread pool.
+    /// </summary>
+    private static bool RunUnderSingleThreadedContext(Func<Task> work)
+    {
+        var finished = new ManualResetEventSlim(false);
+        var context = new SingleThreadedSynchronizationContext();
+
+        var thread = new Thread(() =>
+        {
+            SynchronizationContext.SetSynchronizationContext(context);
+
+            context.Post(async _ =>
+            {
+                try
+                {
+                    await work();
+                    finished.Set();
+                }
+                finally
+                {
+                    context.Stop();
+                }
+            }, null);
+
+            context.Pump();
+        });
+
+        thread.IsBackground = true;
+        thread.Start();
+
+        return finished.Wait(Patience);
+    }
+
     private static bool RunUnderSingleThreadedContext(Action work)
     {
         var finished = new ManualResetEventSlim(false);
@@ -165,21 +200,23 @@ public class SynchronizationContextDeadlockTests
     {
         using var growthBook = CreateGrowthBook();
         var count = 0;
+        SynchronizationContext resumedOn = null;
 
-        var finished = RunUnderSingleThreadedContext(() =>
+        // Awaited on the context thread itself. Going through Task.Run would take the context away
+        // before the load started, leaving the thread merely blocked on a worker - which is not the
+        // scenario this is here to cover.
+        var finished = RunUnderSingleThreadedContext(async () =>
         {
-            var load = Task.Run(async () =>
-            {
-                await growthBook.LoadFeatures();
+            await growthBook.LoadFeatures();
 
-                return growthBook.Features.Count;
-            });
-
-            count = load.GetAwaiter().GetResult();
+            resumedOn = SynchronizationContext.Current;
+            count = growthBook.Features.Count;
         });
 
-        finished.Should().BeTrue();
+        finished.Should().BeTrue("awaiting the async API on one of these contexts has to complete");
         count.Should().Be(1);
+        resumedOn.Should().BeOfType<SingleThreadedSynchronizationContext>(
+            "and the caller resumes on the context it called from, which is what an awaiting caller expects");
     }
 
     [Fact]
