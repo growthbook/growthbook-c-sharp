@@ -54,6 +54,8 @@ namespace GrowthBook
         private long _stickyBucketLoadSequence;
         private long _publishedStickyBucketLoad;
         private readonly Dictionary<string, long> _locallyStoredAt = new Dictionary<string, long>();
+        private readonly object _stickyBucketSaveLock = new object();
+        private readonly Dictionary<string, Task> _stickyBucketSaves = new Dictionary<string, Task>();
         private readonly ILogger<GrowthBook> _logger;
         private readonly JObject _savedGroups;
         private readonly ILoggerFactory _loggerFactory;
@@ -261,12 +263,44 @@ namespace GrowthBook
         }
 
         /// <summary>
-        /// Persists an assignment to the asynchronous store. Exceptions are caught and logged rather than
-        /// propagated, because this is dispatched without being awaited - an unhandled failure here would
-        /// otherwise surface as an unobserved task exception far from its cause.
+        /// Queues an assignment doc to be written to the asynchronous store behind whatever is already being
+        /// written for the same identifier.
         /// </summary>
-        private async Task SaveStickyBucketAssignmentAsync(StickyAssignmentsDocument document)
+        /// <remarks>
+        /// Each doc is a superset of the one before it, so dispatching them independently would let a slow
+        /// earlier write land last and drop the assignments made in between. Different identifiers stay
+        /// independent, since they can't overwrite each other.
+        /// </remarks>
+        private void QueueStickyBucketSave(StickyAssignmentsDocument document)
         {
+            lock (_stickyBucketSaveLock)
+            {
+                _stickyBucketSaves.TryGetValue(document.FormattedAttribute, out var previousSave);
+
+                var save = SaveStickyBucketAssignmentAsync(previousSave, document);
+
+                _stickyBucketSaves[document.FormattedAttribute] = save;
+
+                _ = save.ContinueWith(
+                    completed => ForgetStickyBucketSave(document.FormattedAttribute, completed),
+                    CancellationToken.None,
+                    TaskContinuationOptions.ExecuteSynchronously,
+                    TaskScheduler.Default);
+            }
+        }
+
+        /// <summary>
+        /// Persists an assignment to the asynchronous store once the previous write for the same identifier
+        /// has finished. Exceptions are caught and logged rather than propagated, because this is dispatched
+        /// without being awaited, and a fault here would also break the chain for every write behind it.
+        /// </summary>
+        private async Task SaveStickyBucketAssignmentAsync(Task previousSave, StickyAssignmentsDocument document)
+        {
+            if (previousSave != null)
+            {
+                await previousSave.ConfigureAwait(false);
+            }
+
             try
             {
                 await _asyncStickyBucketService.SaveAssignmentsAsync(document).ConfigureAwait(false);
@@ -274,6 +308,20 @@ namespace GrowthBook
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to save sticky bucket assignments for attribute '{FormattedAttribute}'", document.FormattedAttribute);
+            }
+        }
+
+        /// <summary>
+        /// Drops a finished write chain, so that the queue only holds identifiers still being written to.
+        /// </summary>
+        private void ForgetStickyBucketSave(string formattedAttribute, Task completed)
+        {
+            lock (_stickyBucketSaveLock)
+            {
+                if (_stickyBucketSaves.TryGetValue(formattedAttribute, out var save) && ReferenceEquals(save, completed))
+                {
+                    _stickyBucketSaves.Remove(formattedAttribute);
+                }
             }
         }
 
@@ -348,13 +396,50 @@ namespace GrowthBook
         {
             lock (_stickyBucketWriteLock)
             {
-                var updated = new Dictionary<string, StickyAssignmentsDocument>(_stickyBucketAssignmentDocs);
-
-                updated[document.FormattedAttribute] = document;
-
-                _stickyBucketAssignmentDocs = updated;
-               _locallyStoredAt[document.FormattedAttribute] = Interlocked.Read(ref _stickyBucketLoadSequence);
+                PublishStickyBucketAssignment(document);
             }
+        }
+
+        /// <summary>
+        /// Merges an experiment's assignment into the doc already held for the identifier and publishes the
+        /// result, doing the read, the merge and the publish together.
+        /// </summary>
+        /// <remarks>
+        /// Reading outside the lock let two experiments evaluated concurrently for the same user start from
+        /// the same doc, so whichever published second dropped the other's assignment.
+        /// </remarks>
+        /// <returns>The merged doc, and whether it differs from the one that was held.</returns>
+        private (StickyAssignmentsDocument Document, bool IsChanged) MergeStickyBucketAssignment(string attributeName, string attributeValue, IDictionary<string, string> assignments)
+        {
+            lock (_stickyBucketWriteLock)
+            {
+                var formattedAttribute = new StickyAssignmentsDocument(attributeName, attributeValue).FormattedAttribute;
+
+                _stickyBucketAssignmentDocs.TryGetValue(formattedAttribute, out var existingDocument);
+
+                var merged = ExperimentUtilities.GenerateStickyBucketAssignment(existingDocument, attributeName, attributeValue, assignments);
+
+                if (merged.IsChanged)
+                {
+                    PublishStickyBucketAssignment(merged.Document);
+                }
+
+                return merged;
+            }
+        }
+
+        /// <summary>
+        /// Publishes a replacement dictionary holding the given doc. Callers must hold
+        /// <see cref="_stickyBucketWriteLock"/>.
+        /// </summary>
+        private void PublishStickyBucketAssignment(StickyAssignmentsDocument document)
+        {
+            var updated = new Dictionary<string, StickyAssignmentsDocument>(_stickyBucketAssignmentDocs);
+
+            updated[document.FormattedAttribute] = document;
+
+            _stickyBucketAssignmentDocs = updated;
+            _locallyStoredAt[document.FormattedAttribute] = Interlocked.Read(ref _stickyBucketLoadSequence);
         }
 
         /// <summary>
@@ -940,14 +1025,64 @@ namespace GrowthBook
         }
 
         /// <summary>
-        /// Determines whether the remote evaluation identified by the provided generation is still the most
-        /// recent one, and may therefore publish its features.
+        /// Waits for an in-flight remote evaluation, giving up when the caller cancels.
         /// </summary>
-        /// <param name="generation">The generation of the remote evaluation to check.</param>
-        /// <returns>True if no newer remote evaluation has been started since.</returns>
-        private bool IsLatestRemoteEvaluation(long generation)
+        /// <remarks>
+        /// The request is shared and may have been started with no token at all, so cancelling stops this
+        /// caller waiting rather than stopping the request.
+        /// </remarks>
+        /// <param name="remoteEvaluation">The evaluation to wait for.</param>
+        /// <param name="cancellationToken">Used for monitoring the need to stop waiting.</param>
+        private static async Task WaitForRemoteEvaluation(Task remoteEvaluation, CancellationToken? cancellationToken)
         {
-            return Interlocked.Read(ref _remoteEvaluationGeneration) == generation;
+            var token = cancellationToken ?? CancellationToken.None;
+
+            if (!token.CanBeCanceled)
+            {
+                await remoteEvaluation.ConfigureAwait(false);
+
+                return;
+            }
+
+            var cancelled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+            using (token.Register(state => ((TaskCompletionSource<bool>)state).TrySetResult(true), cancelled))
+            {
+                var finished = await Task.WhenAny(remoteEvaluation, cancelled.Task).ConfigureAwait(false);
+
+                if (!ReferenceEquals(finished, remoteEvaluation))
+                {
+                    throw new OperationCanceledException(token);
+                }
+            }
+
+            await remoteEvaluation.ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Publishes the features a remote evaluation returned, unless a newer evaluation has been started
+        /// since it was.
+        /// </summary>
+        /// <remarks>
+        /// The check and the assignment happen under the lock that allocates generations. Split apart, a
+        /// response that was newest when it looked could be overtaken before it wrote.
+        /// </remarks>
+        /// <param name="features">The features the evaluation returned.</param>
+        /// <param name="generation">The generation of the remote evaluation that returned them.</param>
+        /// <returns>True if the features were published, false if the evaluation had been superseded.</returns>
+        private bool TryPublishRemoteEvaluation(IDictionary<string, Feature> features, long generation)
+        {
+            lock (_attributesLock)
+            {
+                if (Interlocked.Read(ref _remoteEvaluationGeneration) != generation)
+                {
+                    return false;
+                }
+
+                Features = features;
+
+                return true;
+            }
         }
 
         /// <summary>
@@ -1443,11 +1578,15 @@ namespace GrowthBook
                 // A remote evaluation started by an attribute change may still be in flight. Wait for it first so
                 // that its now older response can't land after this load and overwrite the features it retrieves.
                 // It handles its own errors, so it never faults.
-                var pendingRemoteEvaluation = Interlocked.Exchange(ref _pendingRemoteEvaluation, null);
+                var pendingRemoteEvaluation = Volatile.Read(ref _pendingRemoteEvaluation);
 
                 if (pendingRemoteEvaluation != null)
                 {
-                    await pendingRemoteEvaluation;
+                    await WaitForRemoteEvaluation(pendingRemoteEvaluation, cancellationToken).ConfigureAwait(false);
+
+                    // Cleared only if nothing newer was started while waiting, and left in place when the wait
+                    // was cancelled, so that the next load still knows to wait for it.
+                    _ = Interlocked.CompareExchange(ref _pendingRemoteEvaluation, null, pendingRemoteEvaluation);
                 }
 
                 // Use remote evaluation if enabled and configured
@@ -1474,14 +1613,18 @@ namespace GrowthBook
                 // An attribute change during this fetch started a newer remote evaluation, so these features
                 // were evaluated for state that has already been replaced. The newer evaluation owns what gets
                 // applied; this load reports what is currently applied rather than overwriting it.
-                if (isRemoteEvaluation && !IsLatestRemoteEvaluation(generation))
+                if (isRemoteEvaluation && !TryPublishRemoteEvaluation(features, generation))
                 {
                     _logger.LogDebug("Discarding a superseded remote evaluation response received while loading features");
 
                     return FeatureLoadResult.CreateSuccess(Features?.Count ?? 0);
                 }
 
-                Features = features;
+                if (!isRemoteEvaluation)
+                {
+                    Features = features;
+                }
+
                 var featureCount = Features.Count;
 
                 _logger.LogInformation($"Loading features has completed, retrieved '{featureCount}' features");
@@ -1774,32 +1917,19 @@ namespace GrowthBook
                     [experimentKey] = result.Key
                 };
 
-                StickyAssignmentsDocument document;
-                bool isChanged;
-
-                if (_stickyBucketService != null)
-                {
-                    (document, isChanged) = ExperimentUtilities.GenerateStickyBucketAssignment(_stickyBucketService, hashAttribute, hashValue, assignments);
-                }
-                else
-                {
-                    var formattedAttribute = new StickyAssignmentsDocument(hashAttribute, hashValue).FormattedAttribute;
-                    _stickyBucketAssignmentDocs.TryGetValue(formattedAttribute, out var existingDocument);
-
-                    (document, isChanged) = ExperimentUtilities.GenerateStickyBucketAssignment(existingDocument, hashAttribute, hashValue, assignments);
-                }
+                // Merged against the docs held in memory for both store flavors, as the reference SDK does.
+                // The synchronous store used to be re-read here, which blocked the evaluation on store I/O.
+                var (document, isChanged) = MergeStickyBucketAssignment(hashAttribute, hashValue, assignments);
 
                 if (isChanged)
                 {
-                    StoreStickyBucketAssignment(document);
-
                     if (_stickyBucketService != null)
                     {
                         _stickyBucketService.SaveAssignments(document);
                     }
                     else
                     {
-                        _ = SaveStickyBucketAssignmentAsync(document);
+                        QueueStickyBucketSave(document);
                     }
                 }
             }
@@ -2067,13 +2197,12 @@ namespace GrowthBook
                 // and this response may well have overtaken a newer one. Publishing it would leave the caller on
                 // features evaluated for state they've already replaced, so a superseded response is dropped whole
                 // rather than applied.
-                if (!IsLatestRemoteEvaluation(generation))
+                if (!TryPublishRemoteEvaluation(features, generation))
                 {
                     _logger?.LogDebug("Discarding a superseded remote evaluation response with {Count} features", features.Count);
                     return;
                 }
 
-                Features = features;
                 _logger?.LogDebug("Remote evaluation completed, updated {Count} features", features.Count);
             }
             catch (Exception ex)

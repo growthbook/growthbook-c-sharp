@@ -562,4 +562,194 @@ public class AsyncStickyBucketServiceTests : UnitTest
         afterRefresh.Key.Should().Be(assigned.Key, "and the user keeps the variation they were given");
     }
 
+    /// <summary>
+    /// A store whose writes finish when the test says so, so the order they reach it in can be inspected.
+    /// </summary>
+    private sealed class GatedSaveAsyncStickyBucketService : IAsyncStickyBucketService
+    {
+        private readonly object _gate = new object();
+        private readonly List<TaskCompletionSource<bool>> _pendingSaves = new List<TaskCompletionSource<bool>>();
+        private readonly List<StickyAssignmentsDocument> _written = new List<StickyAssignmentsDocument>();
+
+        /// <summary>
+        /// How many writes have reached the store, whether or not they have been allowed to finish.
+        /// </summary>
+        public int SavesStarted
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _pendingSaves.Count;
+                }
+            }
+        }
+
+        public IList<StickyAssignmentsDocument> Written
+        {
+            get
+            {
+                lock (_gate)
+                {
+                    return _written.ToList();
+                }
+            }
+        }
+
+        public bool WaitForSavesStarted(int count) => SpinUntil(() => SavesStarted >= count);
+
+        public bool WaitForWritten(int count) => SpinUntil(() => Written.Count >= count);
+
+        public void FinishSave(int index)
+        {
+            lock (_gate)
+            {
+                _pendingSaves[index].TrySetResult(true);
+            }
+        }
+
+        private static bool SpinUntil(Func<bool> condition)
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+
+            while (DateTime.UtcNow < deadline)
+            {
+                if (condition())
+                {
+                    return true;
+                }
+
+                Thread.Sleep(10);
+            }
+
+            return false;
+        }
+
+        public Task SaveAssignmentsAsync(StickyAssignmentsDocument document, CancellationToken cancellationToken = default)
+        {
+            var released = new TaskCompletionSource<bool>();
+
+            lock (_gate)
+            {
+                _pendingSaves.Add(released);
+            }
+
+            return WriteWhenReleasedAsync(released.Task, document);
+        }
+
+        private async Task WriteWhenReleasedAsync(Task released, StickyAssignmentsDocument document)
+        {
+            await released.ConfigureAwait(false);
+
+            lock (_gate)
+            {
+                _written.Add(document);
+            }
+        }
+
+        public Task<StickyAssignmentsDocument> GetAssignmentsAsync(string attributeName, string attributeValue, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<IDictionary<string, StickyAssignmentsDocument>> GetAllAssignmentsAsync(IEnumerable<string> attributes, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IDictionary<string, StickyAssignmentsDocument>>(new Dictionary<string, StickyAssignmentsDocument>());
+    }
+
+    /// <summary>
+    /// Every doc written for an identifier holds all of its assignments so far, so a later one is a
+    /// superset of the one before it. Dispatching them independently lets a slow earlier write land last
+    /// and replace the fuller doc with its own, and the assignments made in between are gone from the
+    /// store - another instance, or this one after a restart, then buckets the user again for them.
+    /// </summary>
+    [Fact]
+    public void WritesForTheSameIdentifierAreQueuedRatherThanDispatchedTogether()
+    {
+        var service = new GatedSaveAsyncStickyBucketService();
+
+        using var growthBook = new GrowthBook(new Context
+        {
+            Attributes = JObject.FromObject(new { id = "user-1" }),
+            Features = new Dictionary<string, Feature>
+            {
+                ["first-feature"] = CreateExperimentFeature(),
+                ["second-feature"] = CreateExperimentFeature()
+            },
+            AsyncStickyBucketService = service
+        });
+
+        // Two experiments for the one user, so the first doc holds one assignment and the second holds both.
+        growthBook.EvalFeature("first-feature");
+        growthBook.EvalFeature("second-feature");
+
+        service.WaitForSavesStarted(1).Should().BeTrue("the first write should be dispatched straight away");
+
+        Thread.Sleep(200);
+
+        service.SavesStarted.Should().Be(1, "the second write has to wait behind the first, not race it");
+
+        service.FinishSave(0);
+
+        service.WaitForSavesStarted(2).Should().BeTrue("and it should be dispatched once the first has finished");
+
+        service.FinishSave(1);
+
+        service.WaitForWritten(2).Should().BeTrue();
+
+        var written = service.Written;
+
+        written[0].Assignments.Should().ContainKey("first-feature__0").And.HaveCount(1);
+        written[1].Assignments.Should().ContainKeys("first-feature__0", "second-feature__0");
+    }
+
+    /// <summary>
+    /// Nothing stops two experiments being evaluated for the same user at once. Reading the doc outside
+    /// the lock let both start from the same one and each build a replacement holding only its own
+    /// assignment, so whichever published second dropped the other's.
+    /// </summary>
+    [Fact]
+    public void ConcurrentEvaluationsForTheSameUserKeepBothAssignments()
+    {
+        const int Rounds = 500;
+
+        for (var round = 0; round < Rounds; round++)
+        {
+            using var growthBook = new GrowthBook(new Context
+            {
+                Attributes = JObject.FromObject(new { id = "user-1" }),
+                Features = new Dictionary<string, Feature>
+                {
+                    ["first-feature"] = CreateExperimentFeature(),
+                    ["second-feature"] = CreateExperimentFeature()
+                },
+                AsyncStickyBucketService = new FakeAsyncStickyBucketService()
+            });
+
+            using var start = new Barrier(2);
+
+            var threads = new[] { "first-feature", "second-feature" }
+                .Select(name => new Thread(() =>
+                {
+                    start.SignalAndWait();
+                    growthBook.EvalFeature(name);
+                }))
+                .ToArray();
+
+            foreach (var thread in threads)
+            {
+                thread.Start();
+            }
+
+            foreach (var thread in threads)
+            {
+                thread.Join();
+            }
+
+            // Re-evaluating has to find both assignments. A dropped one is bucketed afresh instead, which
+            // is what StickyBucketUsed reports - the variation itself is the same either way.
+            growthBook.EvalFeature("first-feature").ExperimentResult.StickyBucketUsed
+                .Should().BeTrue($"round {round} stored an assignment for the first experiment");
+
+            growthBook.EvalFeature("second-feature").ExperimentResult.StickyBucketUsed
+                .Should().BeTrue($"round {round} stored an assignment for the second experiment");
+        }
+    }
 }

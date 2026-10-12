@@ -190,6 +190,51 @@ namespace GrowthBook.Tests
         }
 
         [Fact]
+        public async Task LoadFeaturesWithResult_WhenCancelledWhileWaitingForAPendingRemoteEvaluation_ShouldStopWaiting()
+        {
+            // Arrange - a request that never answers, so the only way out of the wait is the token
+            var pendingRemoteEvaluation = new TaskCompletionSource<IDictionary<string, Feature>>();
+            var mockRepository = Substitute.For<IGrowthBookFeatureRepository>();
+
+            mockRepository.GetFeaturesWithContext(Arg.Any<Context>(), Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken?>())
+                .Returns(pendingRemoteEvaluation.Task);
+
+            var context = new Context(new { userId = "123" })
+            {
+                RemoteEval = true,
+                ClientKey = "test-key",
+                ApiHost = "https://api.example.com",
+                FeatureRepository = mockRepository
+            };
+
+            using var growthBook = new GrowthBook(context);
+
+            // The synchronous overload starts the request with no token of its own, so cancelling the load
+            // below can only mean this caller stops waiting - the request itself keeps running.
+            growthBook.MergeAttributes(new { plan = "premium" });
+
+            using var cancellation = new CancellationTokenSource();
+
+            // Act
+            var load = growthBook.LoadFeaturesWithResult(cancellationToken: cancellation.Token);
+
+            load.IsCompleted.Should().BeFalse("it is waiting on the evaluation the merge started");
+
+            cancellation.Cancel();
+
+            var finished = await Task.WhenAny(load, Task.Delay(TimeSpan.FromSeconds(5)));
+
+            // Assert
+            finished.Should().BeSameAs(load, "cancelling has to release the caller instead of leaving it waiting out the request");
+
+            var result = await load;
+
+            result.Success.Should().BeFalse("the load was cancelled before it fetched anything");
+
+            pendingRemoteEvaluation.SetResult(new Dictionary<string, Feature>());
+        }
+
+        [Fact]
         public async Task RemoteEvaluation_WhenAnOlderResponseLandsLast_ShouldNotOverwriteTheNewerOne()
         {
             // Arrange
