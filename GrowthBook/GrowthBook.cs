@@ -42,6 +42,8 @@ namespace GrowthBook
         private readonly IDisposable _refreshSubscription;
         private readonly object _featuresLock = new object();
         private long _installedRefreshVersion;
+        private long _remoteEvaluationSequence;
+        private long _publishedRemoteEvaluation;
         private readonly Context _context;
         private JObject _previousAttributes;
         private IDictionary<string, int> _previousForcedVariations;
@@ -147,6 +149,13 @@ namespace GrowthBook
 
             lock (_featuresLock)
             {
+                if (_context.RemoteEval && _publishedRemoteEvaluation > 0)
+                {
+                    _logger.LogDebug("Ignored a shared refresh: this instance is evaluated remotely and has its own result");
+
+                    return;
+                }
+
                 // Refreshes are fanned out without a lock, so one can overtake another on its way here.
                 // The later arrival of the two is only worth installing if it is also the newer one.
                 if (refresh.Version <= _installedRefreshVersion)
@@ -180,6 +189,23 @@ namespace GrowthBook
                 {
                     return false;
                 }
+
+                Features = features;
+
+                return true;
+            }
+        }
+
+        private bool TryInstallRemoteEvaluation(IDictionary<string, Feature> features, long sequence)
+        {
+            lock (_featuresLock)
+            {
+                if (sequence <= _publishedRemoteEvaluation)
+                {
+                    return false;
+                }
+
+                _publishedRemoteEvaluation = sequence;
 
                 Features = features;
 
@@ -1252,11 +1278,11 @@ namespace GrowthBook
             {
                 _logger?.LogDebug("Triggering remote evaluation due to attribute changes");
 
-                var startedAtVersion = CurrentRefreshVersion();
+                var sequence = Interlocked.Increment(ref _remoteEvaluationSequence);
                 var currentContext = CreateCurrentContext();
                 var features = await _featureRepository.GetFeaturesWithContext(currentContext);
 
-                if (features != null && TryInstallLoadedFeatures(features, startedAtVersion))
+                if (features != null && TryInstallRemoteEvaluation(features, sequence))
                 {
                     _logger?.LogDebug("Remote evaluation completed, updated {Count} features", features.Count);
                 }

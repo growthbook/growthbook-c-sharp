@@ -473,4 +473,125 @@ public class PushRefreshedFeaturesTests
         result.Success.Should().BeTrue();
         growthBook.IsOn("flag").Should().BeTrue("because nothing newer landed, so the load's result is the current one");
     }
+
+    /// <summary>
+    /// A repository that answers remote evaluations when the test says so, and can push a cache
+    /// refresh in the meantime.
+    /// </summary>
+    private sealed class GatedRemoteRepository : IGrowthBookFeatureRepository, IFeatureRefreshSource
+    {
+        private readonly List<Action<FeatureRefresh>> _handlers = new List<Action<FeatureRefresh>>();
+        private readonly ManualResetEventSlim _release = new ManualResetEventSlim(false);
+        private readonly SemaphoreSlim _entered = new SemaphoreSlim(0);
+
+        public IDictionary<string, Feature> SharedFeatures { get; set; } = FeatureSet(false);
+        public IDictionary<string, Feature> RemoteFeatures { get; set; } = FeatureSet(true);
+
+        public bool WaitUntilEvaluating() => _entered.Wait(TimeSpan.FromSeconds(5));
+        public void FinishEvaluation() => _release.Set();
+
+        public void Push(long version, IDictionary<string, Feature> features)
+        {
+            Action<FeatureRefresh>[] handlers;
+
+            lock (_handlers)
+            {
+                handlers = _handlers.ToArray();
+            }
+
+            foreach (var handler in handlers)
+            {
+                handler(new FeatureRefresh(version, features));
+            }
+        }
+
+        public IDisposable SubscribeToRefresh(Action<FeatureRefresh> handler)
+        {
+            lock (_handlers)
+            {
+                _handlers.Add(handler);
+            }
+
+            return new Unsubscriber(this, handler);
+        }
+
+        public Task<IDictionary<string, Feature>> GetFeatures(GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null) =>
+            Task.FromResult(SharedFeatures);
+
+        public Task<IDictionary<string, Feature>> GetFeaturesWithContext(Context context, GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null)
+        {
+            _entered.Release();
+            _release.Wait(TimeSpan.FromSeconds(5));
+
+            return Task.FromResult(RemoteFeatures);
+        }
+
+        public void Cancel() { }
+        public bool HasIdenticalAssignment(string experimentKey, ExperimentAssignment assignment) => false;
+        public void RecordAssignment(string experimentKey, ExperimentAssignment assignment) { }
+        public bool IsAlreadyTracked(string trackingKey) => false;
+        public void MarkAsTracked(string trackingKey) { }
+        public bool TryMarkAsTracked(string trackingKey) => true;
+
+        private sealed class Unsubscriber : IDisposable
+        {
+            private readonly GatedRemoteRepository _owner;
+            private readonly Action<FeatureRefresh> _handler;
+
+            public Unsubscriber(GatedRemoteRepository owner, Action<FeatureRefresh> handler)
+            {
+                _owner = owner;
+                _handler = handler;
+            }
+
+            public void Dispose()
+            {
+                lock (_owner._handlers)
+                {
+                    _owner._handlers.Remove(_handler);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// A remote evaluation answers a question about this instance's attributes. A refresh from the
+    /// shared cache is a different, less specific answer, so it must not cause the remote result to
+    /// be thrown away - the instance would be left evaluating the shared map for a user it has
+    /// already evaluated specifically.
+    /// </summary>
+    [Fact]
+    public void ACacheRefreshDoesNotDiscardACompletedRemoteEvaluation()
+    {
+        var repository = new GatedRemoteRepository();
+
+        using var growthBook = new GrowthBook(new Context
+        {
+            Attributes = JObject.FromObject(new { id = "user-1" }),
+            RemoteEval = true,
+            ClientKey = "sdk-key",
+            ApiHost = "https://api.example.test",
+            FeatureRepository = repository
+        });
+
+        // An attribute change starts a remote evaluation for this user. Through UpdateAttributes
+        // rather than the property, which is where the trigger lives.
+        growthBook.UpdateAttributes(new { id = "user-2" });
+        repository.WaitUntilEvaluating().Should().BeTrue("the remote evaluation has to be in flight");
+
+        // A shared cache refresh lands while it is still running.
+        repository.Push(1, FeatureSet(false));
+
+        repository.FinishEvaluation();
+
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+
+        while (DateTime.UtcNow < deadline && !growthBook.IsOn("flag"))
+        {
+            Thread.Sleep(10);
+        }
+
+        growthBook.IsOn("flag").Should().BeTrue(
+            "the remote result is this user's own answer - a shared refresh is not a newer one, so it must not discard it");
+    }
 }
