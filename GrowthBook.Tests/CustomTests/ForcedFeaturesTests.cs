@@ -138,4 +138,45 @@ public class ForcedFeaturesTests : UnitTest
         context.ForcedFeatures["shared-feature"].Value<bool>().Should().BeTrue("because mutating the clone must not affect the original context");
         context.ForcedFeatures.Should().NotContainKey("clone-only-feature");
     }
+
+    /// <summary>
+    /// Copying the dictionary is not enough: the values are `JToken`s the caller still holds. Editing
+    /// one afterwards changed the active override, and the comparison snapshot shared the same token,
+    /// so nothing noticed the change either.
+    /// </summary>
+    [Fact]
+    public void EditingAForcedValueAfterSettingItDoesNotChangeTheOverride()
+    {
+        var forced = new JObject { ["enabled"] = true };
+
+        using var growthBook = new GrowthBook(new Context
+        {
+            Attributes = JObject.FromObject(new { id = "user-1" }),
+            Features = new Dictionary<string, Feature> { ["flag"] = new Feature { DefaultValue = false } }
+        });
+
+        growthBook.SetForcedFeatures(new Dictionary<string, JToken> { ["flag"] = forced });
+
+        growthBook.EvalFeature("flag").Value["enabled"].Value<bool>().Should().BeTrue();
+
+        forced["enabled"] = false;
+
+        growthBook.EvalFeature("flag").Value["enabled"].Value<bool>().Should().BeTrue(
+            "the override is the SDK's own copy, so the caller editing their token afterwards cannot change it");
+    }
+
+    [Fact]
+    public void AForcedValueIsStillAppliedWhenItIsSet()
+    {
+        using var growthBook = new GrowthBook(new Context
+        {
+            Attributes = JObject.FromObject(new { id = "user-1" }),
+            Features = new Dictionary<string, Feature> { ["flag"] = new Feature { DefaultValue = false } }
+        });
+
+        growthBook.SetForcedFeatures(new Dictionary<string, JToken> { ["flag"] = true });
+
+        growthBook.EvalFeature("flag").On.Should().BeTrue("cloning the value must not stop it being applied");
+    }
+
 }

@@ -53,6 +53,7 @@ namespace GrowthBook
         private readonly object _stickyBucketWriteLock = new object();
         private long _stickyBucketLoadSequence;
         private long _publishedStickyBucketLoad;
+        private readonly Dictionary<string, long> _locallyStoredAt = new Dictionary<string, long>();
         private readonly ILogger<GrowthBook> _logger;
         private readonly JObject _savedGroups;
         private readonly ILoggerFactory _loggerFactory;
@@ -312,7 +313,21 @@ namespace GrowthBook
                 _publishedStickyBucketLoad = sequence;
 
                 // Copied rather than stored directly: the store owns the dictionary it returned and may reuse it.
-                _stickyBucketAssignmentDocs = new Dictionary<string, StickyAssignmentsDocument>(refreshedDocuments);
+                var published = new Dictionary<string, StickyAssignmentsDocument>(refreshedDocuments);
+                foreach (var local in _locallyStoredAt)
+                {
+                    if (local.Value < sequence)
+                    {
+                        continue;
+                    }
+
+                    if (_stickyBucketAssignmentDocs != null && _stickyBucketAssignmentDocs.TryGetValue(local.Key, out var document))
+                    {
+                        published[local.Key] = document;
+                    }
+                }
+
+                _stickyBucketAssignmentDocs = published;
             }
         }
 
@@ -329,6 +344,7 @@ namespace GrowthBook
                 updated[document.FormattedAttribute] = document;
 
                 _stickyBucketAssignmentDocs = updated;
+               _locallyStoredAt[document.FormattedAttribute] = Interlocked.Read(ref _stickyBucketLoadSequence);
             }
         }
 
@@ -642,7 +658,7 @@ namespace GrowthBook
                 // change what evaluations and in-flight requests are running against. Published before the
                 // comparison, the same way the attributes and forced variations paths work.
                 _forcedFeatures = forcedFeatures != null
-                    ? new Dictionary<string, JToken>(forcedFeatures)
+                    ? forcedFeatures.ToDictionary(pair => pair.Key, pair => pair.Value?.DeepClone())
                     : new Dictionary<string, JToken>();
 
                 var shouldTriggerRemoteEvaluation = ShouldTriggerRemoteEvaluation(_attributes);
@@ -973,7 +989,7 @@ namespace GrowthBook
 
             _previousAttributes = attributes?.DeepClone() as JObject;
             _previousForcedVariations = _forcedVariations?.ToDictionary(k => k.Key, v => v.Value);
-            _previousForcedFeatures = _forcedFeatures?.ToDictionary(k => k.Key, v => v.Value);
+            _previousForcedFeatures = _forcedFeatures?.ToDictionary(k => k.Key, v => v.Value?.DeepClone());
         }
 
         /// <summary>
