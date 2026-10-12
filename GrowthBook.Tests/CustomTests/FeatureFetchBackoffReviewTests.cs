@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using GrowthBook.Api;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -31,6 +32,49 @@ public class FeatureFetchBackoffReviewTests : UnitTest
         cache = new InMemoryFeatureCache(0);
 
         return new FeatureRepository(NullLogger<FeatureRepository>.Instance, cache, worker, null, clock.UtcNow);
+    }
+
+    /// <summary>
+    /// Keeps the errors written, so a test can assert that a failure nobody waited for was still
+    /// reported rather than lost.
+    /// </summary>
+    private sealed class RecordingLogger : ILogger<FeatureRepository>
+    {
+        private readonly List<string> _errors = new List<string>();
+
+        public IReadOnlyList<string> Errors
+        {
+            get
+            {
+                lock (_errors)
+                {
+                    return _errors.ToArray();
+                }
+            }
+        }
+
+        public IDisposable BeginScope<TState>(TState state) => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception exception, Func<TState, Exception, string> formatter)
+        {
+            if (logLevel < LogLevel.Error)
+            {
+                return;
+            }
+
+            lock (_errors)
+            {
+                _errors.Add(formatter(state, exception) + (exception == null ? string.Empty : " || " + exception.Message));
+            }
+        }
+    }
+
+    private static FeatureRepository CreateRepository(IGrowthBookFeatureRefreshWorker worker, ManualClock clock, RecordingLogger logger, out InMemoryFeatureCache cache)
+    {
+        cache = new InMemoryFeatureCache(0);
+
+        return new FeatureRepository(logger, cache, worker, null, clock.UtcNow);
     }
 
     private static GrowthBookRetrievalOptions Background => new GrowthBookRetrievalOptions();
@@ -414,4 +458,66 @@ public class FeatureFetchBackoffReviewTests : UnitTest
         worker.Attempts.Should().Be(1,
             "the finished fetch is accounted for before the gate decides, so no second request starts");
     }
+
+    /// <summary>
+    /// A fetch that fails after the only caller waiting on it has cancelled still needs its failure
+    /// seen: the backoff counter has to advance, and the exception is the only thing that says why the
+    /// API is unreachable. Nothing was watching it, so both were lost.
+    /// </summary>
+    private sealed class FailingBlockingWorker : IGrowthBookFeatureRefreshWorker
+    {
+        private readonly ManualResetEventSlim _release = new ManualResetEventSlim(false);
+        private readonly SemaphoreSlim _entered = new SemaphoreSlim(0);
+        private int _attempts;
+
+        public int Attempts => Volatile.Read(ref _attempts);
+        public void Cancel() { }
+        public bool WaitUntilEntered() => _entered.Wait(TimeSpan.FromSeconds(5));
+        public void Release() => _release.Set();
+
+        public Task<IDictionary<string, Feature>> RefreshCacheFromApi(CancellationToken? cancellationToken = null)
+        {
+            Interlocked.Increment(ref _attempts);
+            _entered.Release();
+            _release.Wait(TimeSpan.FromSeconds(5));
+
+            throw new InvalidOperationException("the API is unreachable");
+        }
+    }
+
+    [Fact]
+    public async Task AFetchThatFailsAfterItsOnlyCallerCancelledIsStillAccountedFor()
+    {
+        var worker = new FailingBlockingWorker();
+        var clock = new ManualClock();
+        var logger = new RecordingLogger();
+        var repository = CreateRepository(worker, clock, logger, out var cache);
+        await cache.RefreshWith(FeatureSet());
+
+        using var cancellation = new CancellationTokenSource();
+
+        var cancelling = Task.Run(() => repository.GetFeatures(Blocking, cancellation.Token));
+        worker.WaitUntilEntered().Should().BeTrue("the fetch has to be under way");
+
+        cancellation.Cancel();
+
+        Func<Task> awaitCancelled = () => cancelling;
+        await awaitCancelled.Should().ThrowAsync<OperationCanceledException>();
+
+        // The fetch the caller abandoned now fails.
+        worker.Release();
+
+        // Nothing is waiting on it any more, so unless the repository watches the fetch itself the
+        // reason the API is unreachable is never written down anywhere.
+        var deadline = DateTime.UtcNow.AddSeconds(5);
+
+        while (DateTime.UtcNow < deadline && logger.Errors.Count == 0)
+        {
+            await Task.Delay(25);
+        }
+
+        logger.Errors.Should().ContainSingle(error => error.Contains("the API is unreachable"),
+            "the failure is the only thing that says why the API is unreachable, and a caller giving up does not make it unimportant");
+    }
+
 }
