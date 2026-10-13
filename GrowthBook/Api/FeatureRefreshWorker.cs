@@ -27,7 +27,7 @@ namespace GrowthBook.Api
         private readonly string _featuresApiEndpoint;
         private readonly string _serverSentEventsApiEndpoint;
         private bool _isServerSentEventsEnabled;
-        private IDictionary<string, ContextualBanditDefinition> _contextualBandits;
+        private FeaturePayload _payload;
         private SSEClient _sseClient;
         private CancellationTokenSource _refreshWorkerCancellation = new CancellationTokenSource();
 
@@ -51,11 +51,11 @@ namespace GrowthBook.Api
 
         /// <inheritdoc/>
         /// <remarks>
-        /// Read on the evaluation path while a refresh may be replacing it, so the reference is swapped rather than
-        /// mutated and read through <see cref="Volatile"/> - an evaluation sees either the previous payload's
-        /// definitions or the new ones, never a half-populated dictionary.
+        /// Read on the evaluation path while a refresh may be replacing it, so the whole payload is swapped as one
+        /// reference and read through <see cref="Volatile"/> - a reader sees either the previous payload or the new
+        /// one, never this payload's features beside the previous payload's weights.
         /// </remarks>
-        public IDictionary<string, ContextualBanditDefinition> ContextualBandits => Volatile.Read(ref _contextualBandits);
+        public FeaturePayload Payload => Volatile.Read(ref _payload);
 
         public void Cancel()
         {
@@ -86,9 +86,10 @@ namespace GrowthBook.Api
                 return null;
             }
 
-            // Published before the features so that an evaluation seeing the new features can't be bucketed against
-            // the previous payload's weights.
-            Volatile.Write(ref _contextualBandits, response.ContextualBandits);
+            // Published as one reference so that an evaluation cannot pick up these features beside the previous
+            // payload's weights, and before the cache so that whatever the cache then serves has its own weights
+            // already available rather than arriving after them.
+            Volatile.Write(ref _payload, new FeaturePayload(response.Features, response.ContextualBandits));
 
             await _cache.RefreshWith(response.Features, cancellationToken);
 
@@ -148,7 +149,7 @@ namespace GrowthBook.Api
                         // payload had while its features kept updating.
                         var payload = Extensions.HttpClientExtensions.ParsePayloadFrom(sseEvent.Data, _logger, _config);
 
-                        Volatile.Write(ref _contextualBandits, payload.ContextualBandits);
+                        Volatile.Write(ref _payload, new FeaturePayload(payload.Features, payload.ContextualBandits));
 
                         await _cache.RefreshWith(payload.Features, _refreshWorkerCancellation.Token);
                         

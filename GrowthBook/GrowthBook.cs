@@ -36,7 +36,8 @@ namespace GrowthBook
         private readonly IDictionary<string, StickyAssignmentsDocument> _stickyBucketAssignmentDocs;
         private readonly ILogger<GrowthBook> _logger;
         private readonly JObject _savedGroups;
-        private IDictionary<string, ContextualBanditDefinition> _contextualBandits;
+        private readonly IDictionary<string, ContextualBanditDefinition> _contextContextualBandits;
+        private IDictionary<string, ContextualBanditDefinition> _payloadContextualBandits;
         private readonly ILoggerFactory _loggerFactory;
         private readonly bool _ownsLoggerFactory;
         private readonly Context _context;
@@ -76,7 +77,7 @@ namespace GrowthBook
             _stickyBucketService = context.StickyBucketService;
             _stickyBucketAssignmentDocs = context.StickyBucketAssignmentDocs ?? new Dictionary<string, StickyAssignmentsDocument>();
             _savedGroups = context.SavedGroups;
-            _contextualBandits = context.ContextualBandits;
+            _contextContextualBandits = context.ContextualBandits;
             _previousAttributes = context.Attributes?.DeepClone() as JObject;
             _previousForcedVariations = context.ForcedVariations?.ToDictionary(k => k.Key, v => v.Value);
 
@@ -645,19 +646,11 @@ namespace GrowthBook
 
                     // The bandit is attached before evaluation, so it has to be withdrawn from anything that wasn't a
                     // real exposure - a forced variation, QA mode, or being filtered out. Those assignments owe
-                    // nothing to the bandit's weights and must not be attributed to them.
-                    if (experiment.ContextualBandit != null)
+                    // nothing to the bandit's weights and must not be attributed to them. A real exposure was
+                    // already attributed inside RunExperiment, before the tracking callback saw it.
+                    if (experiment.ContextualBandit != null && !(result.HashUsed && result.InExperiment))
                     {
-                        if (result.HashUsed && result.InExperiment)
-                        {
-                            result.LeafId = experiment.ContextualBandit.LeafId;
-                            result.VariationWeights = experiment.ContextualBandit.VariationWeights;
-                            result.BanditVersion = experiment.ContextualBandit.BanditVersion;
-                        }
-                        else
-                        {
-                            experiment.ContextualBandit = null;
-                        }
+                        experiment.ContextualBandit = null;
                     }
 
                     TryAssignExperimentResult(experiment, result);
@@ -746,18 +739,7 @@ namespace GrowthBook
                     return FeatureLoadResult.CreateFailure(errorMessage);
                 }
 
-                Features = features;
-
-                // Bandit definitions travel in the same payload as the features they belong to, so they're adopted
-                // together: applying new features while still bucketing against the previous weights would attribute
-                // exposures to a weight generation that no longer exists. Definitions supplied through the context
-                // stand until a payload actually carries some.
-                var payloadContextualBandits = (_featureRepository as IGrowthBookContextualBanditSource)?.ContextualBandits;
-
-                if (payloadContextualBandits != null)
-                {
-                    _contextualBandits = payloadContextualBandits;
-                }
+                AdoptPayload(features);
 
                 var featureCount = Features.Count;
 
@@ -784,6 +766,68 @@ namespace GrowthBook
         }
 
         /// <summary>
+        /// Takes on the features and the bandit definitions the repository last published, together.
+        /// </summary>
+        /// <remarks>
+        /// Both halves come from one reference read once. Taking the features from the repository and the
+        /// definitions from a second read leaves a window where a refresh lands between them, which pairs this
+        /// payload's rules with the previous payload's weights - and a rule supplies its own variation list, so
+        /// the weights can belong to a list that no longer exists.
+        /// <para>
+        /// The definitions are replaced on every adoption, including when the payload carries none. Keeping the
+        /// previous payload's in that case would let a withdrawn bandit go on bucketing new rules under a version
+        /// the backend no longer publishes. Definitions supplied on the context are held separately and are not
+        /// affected, since they are the caller's configuration rather than anything a payload delivered.
+        /// </para>
+        /// </remarks>
+        /// <param name="features">The features the repository returned, used when it publishes no payload.</param>
+        private void AdoptPayload(IDictionary<string, Feature> features)
+        {
+            var payload = (_featureRepository as IGrowthBookContextualBanditSource)?.Payload;
+
+            Features = payload?.Features ?? features;
+
+            Volatile.Write(ref _payloadContextualBandits, payload?.ContextualBandits);
+        }
+
+        /// <summary>
+        /// Resolves a rule's bandit reference, preferring what the payload delivered over what the caller supplied.
+        /// </summary>
+        private bool TryGetContextualBanditDefinition(string contextualBanditRef, out ContextualBanditDefinition definition)
+        {
+            var payloadContextualBandits = Volatile.Read(ref _payloadContextualBandits);
+
+            if (payloadContextualBandits != null && payloadContextualBandits.TryGetValue(contextualBanditRef, out definition))
+            {
+                return true;
+            }
+
+            if (_contextContextualBandits != null && _contextContextualBandits.TryGetValue(contextualBanditRef, out definition))
+            {
+                return true;
+            }
+
+            definition = null;
+
+            return false;
+        }
+
+        /// <summary>
+        /// Records which bandit leaf an exposure was bucketed on, so that tracking carries it.
+        /// </summary>
+        private static void AttributeContextualBandit(Experiment experiment, ExperimentResult result)
+        {
+            if (experiment.ContextualBandit is null || !result.HashUsed || !result.InExperiment)
+            {
+                return;
+            }
+
+            result.LeafId = experiment.ContextualBandit.LeafId;
+            result.VariationWeights = experiment.ContextualBandit.VariationWeights;
+            result.BanditVersion = experiment.ContextualBandit.BanditVersion;
+        }
+
+        /// <summary>
         /// Replaces an experiment's weights with those of the contextual bandit leaf that matches the current user.
         /// </summary>
         /// <remarks>
@@ -795,8 +839,7 @@ namespace GrowthBook
         /// <param name="featureId">The feature being evaluated, for logging.</param>
         private void ApplyContextualBandit(Experiment experiment, string contextualBanditRef, string featureId)
         {
-            if (_contextualBandits == null
-                || !_contextualBandits.TryGetValue(contextualBanditRef, out var definition)
+            if (!TryGetContextualBanditDefinition(contextualBanditRef, out var definition)
                 || definition is null)
             {
                 // Nothing to apply, so the rule runs on its own marginal weights and reports no bandit metadata.
@@ -1109,6 +1152,11 @@ namespace GrowthBook
             _logger.LogInformation("Participation in experiment with key \'{ExperimentKey}\' is allowed, running the experiment", experiment.Key);
             var result = GetExperimentResult(experiment, assignedBucket, true, featureId, hash, foundStickyBucket);
 
+            // Attributed here rather than by the caller, because the tracking callback fires below and would
+            // otherwise be handed an exposure whose bandit fields are all null. This is the only path that
+            // tracks, and reaching it means the user was really bucketed on the bandit's weights.
+            AttributeContextualBandit(experiment, result);
+
             // 13.5 Store the value for later if sticky bucketing is enabled.
 
             if (_stickyBucketService != null && !experiment.DisableStickyBucketing)
@@ -1357,8 +1405,12 @@ namespace GrowthBook
 
                 if (features != null)
                 {
-                    Features = features;
-                    _logger?.LogDebug("Remote evaluation completed, updated {Count} features", features.Count);
+                    // The payload that answered this refresh carries its own bandits. Adopting the features
+                    // without them would bucket the new rules against whatever the last load happened to leave
+                    // behind, or against nothing at all when no load has run.
+                    AdoptPayload(features);
+
+                    _logger?.LogDebug("Remote evaluation completed, updated {Count} features", Features.Count);
                 }
             }
             catch (Exception ex)
