@@ -22,6 +22,7 @@ namespace GrowthBook.Api.SSE
         private readonly SSEEventParser _parser;
         
         private const int MaxRetryDelayMs = 5 * 60 * 1000;
+        private const int MinRetryTimeMs = 1000;
         private static readonly Random JitterSource = new Random();
 
         private SSEConnectionStatus _connectionStatus;
@@ -237,10 +238,12 @@ namespace GrowthBook.Api.SSE
                 _lastEventId = sseEvent.Id;
             }
 
-            // Update retry time
+            // Update retry time. A floor is applied because the jitter is a multiplier here rather than the
+            // flat offset it used to be, so a server asking for zero would make every delay zero and turn
+            // each disconnect into an immediate reconnect, for as long as the server kept answering.
             if (sseEvent.RetryTime.HasValue)
             {
-                _retryTimeMs = sseEvent.RetryTime.Value;
+                _retryTimeMs = Math.Max(sseEvent.RetryTime.Value, MinRetryTimeMs);
             }
 
             // Skip retry-only events

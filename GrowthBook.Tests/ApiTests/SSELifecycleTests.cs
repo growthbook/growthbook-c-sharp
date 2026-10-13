@@ -58,6 +58,40 @@ public class SSELifecycleTests
         }
     }
 
+    /// <summary>
+    /// Serves the same body for a fixed number of attempts and then blocks until cancelled, so that a
+    /// client failing to back off is counted rather than allowed to spin.
+    /// </summary>
+    private sealed class StopAnsweringAfterSseHandler : HttpMessageHandler
+    {
+        private readonly string _body;
+        private readonly int _stopAfter;
+        private int _attempts;
+
+        public StopAnsweringAfterSseHandler(string body, int stopAfter)
+        {
+            _body = body;
+            _stopAfter = stopAfter;
+        }
+
+        public int AttemptCount => Volatile.Read(ref _attempts);
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var attempt = Interlocked.Increment(ref _attempts);
+
+            if (attempt > _stopAfter)
+            {
+                await Task.Delay(Timeout.Infinite, cancellationToken);
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StreamContent(new MemoryStream(Encoding.UTF8.GetBytes(_body)))
+            };
+        }
+    }
+
     private sealed class SingleHandlerHttpClientFactory : HttpClientFactory
     {
         private readonly HttpMessageHandler _handler;
@@ -80,6 +114,20 @@ public class SSELifecycleTests
         => (int)typeof(SSEClient)
             .GetField("_currentRetryAttempt", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
             .GetValue(client);
+
+    private static int GetRetryTimeMs(SSEClient client)
+        => (int)typeof(SSEClient)
+            .GetField("_retryTimeMs", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
+            .GetValue(client);
+
+    /// <summary>
+    /// Shrinks the backoff so that several reconnect cycles fit inside a test. Set directly rather than
+    /// through a <c>retry:</c> directive, which the client floors on the way in.
+    /// </summary>
+    private static void SetRetryTimeMs(SSEClient client, int retryTimeMs)
+        => typeof(SSEClient)
+            .GetField("_retryTimeMs", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
+            .SetValue(client, retryTimeMs);
 
     /// <summary>
     /// Delivers a payload on the first read and then throws, standing in for the ordinary case of a
@@ -145,11 +193,11 @@ public class SSELifecycleTests
         // ProcessStreamAsync *returned*, so a connection that streamed successfully and then threw never
         // reset it. Ordinary network drops would then accumulate - even days apart - and each reconnect
         // would wait longer than the one before it despite every connection having worked.
-        //
-        // `retry: 1` shrinks the backoff so several cycles fit inside the test.
-        var handler = new DataThenErrorHandler("retry: 1\ndata: {\"features\":{}}\n\n");
+        var handler = new DataThenErrorHandler("data: {\"features\":{}}\n\n");
         using var client = CreateClient(handler);
         using var cancellation = new CancellationTokenSource();
+
+        SetRetryTimeMs(client, 1);
 
         var connectTask = client.ConnectAsync(cancellation.Token);
 
@@ -172,7 +220,9 @@ public class SSELifecycleTests
         }
 
         handler.AttemptCount.Should().BeGreaterThanOrEqualTo(4, "because each productive-then-dropped connection should be retried");
-        retryAttemptAfterSeveralDrops.Should().Be(1,
+        // Read between the reset and the increment the counter is legitimately 0, and read after both it
+        // is 1. What must never happen is it climbing with the number of drops.
+        retryAttemptAfterSeveralDrops.Should().BeLessThanOrEqualTo(1,
             "because every connection delivered data, so the counter must be reset each time instead of climbing and stretching the delay");
         client.ConnectionStatus.Should().NotBe(SSEConnectionStatus.Failed, "because the client must not give up on connections that are actually working");
     }
@@ -304,6 +354,63 @@ public class SSELifecycleTests
         received[0].Should().Contain("features");
     }
 
+    [Fact]
+    public async Task AZeroRetryDirectiveStillThrottlesReconnects()
+    {
+        // A server is allowed to ask for retry: 0, and this one asks on every connection and then closes
+        // the stream. Taking it literally multiplied every backoff by zero, so each disconnect reconnected
+        // immediately and the loop ran as fast as the transport could answer. The old additive jitter hid
+        // this by adding up to a second of its own; the jitter is a multiplier now and cannot.
+        // The handler stops answering after a handful of attempts. A client that is not backing off never
+        // yields here - Task.Delay(0) completes synchronously, so the reconnect loop holds its thread and
+        // starves the pool the test itself needs. Bounding the transport makes the regression fail in
+        // milliseconds instead of hanging the run.
+        var handler = new StopAnsweringAfterSseHandler("retry: 0\ndata: {\"features\":{}}\n\n", stopAfter: 5);
+        using var client = CreateClient(handler);
+        using var cancellation = new CancellationTokenSource();
+
+        var connectTask = client.ConnectAsync(cancellation.Token);
+
+        await Task.Delay(1500);
+        cancellation.Cancel();
+
+        try
+        {
+            await connectTask;
+        }
+        catch (OperationCanceledException)
+        {
+        }
+
+        GetRetryTimeMs(client).Should().BeGreaterThanOrEqualTo(1000,
+            "because a reconnection time of zero is not one the client can honour without hammering the API");
+
+        handler.AttemptCount.Should().BeLessThanOrEqualTo(3,
+            $"because every disconnect still has to wait out a backoff, but the transport was hit {handler.AttemptCount} times in 1.5s");
+    }
+
+    [Theory]
+    [InlineData("retry: -5000\ndata: {}\n\n")]
+    [InlineData("retry: +5000\ndata: {}\n\n")]
+    [InlineData("retry: 5000.5\ndata: {}\n\n")]
+    public void ARetryDirectiveThatIsNotPlainDigitsIsIgnored(string eventString)
+    {
+        // Only ASCII digits are a reconnection time per the specification. A signed value used to parse,
+        // and a negative one reaches Task.Delay through a code path with no catch around it, which throws
+        // ArgumentOutOfRangeException and ends the reconnect loop for the lifetime of the process.
+        var sseEvent = SSEEventParser.ParseEvent(eventString);
+
+        sseEvent.RetryTime.Should().BeNull();
+    }
+
+    [Fact]
+    public void APlainRetryDirectiveIsStillHonoured()
+    {
+        var sseEvent = SSEEventParser.ParseEvent("retry: 5000\ndata: {}\n\n");
+
+        sseEvent.RetryTime.Should().Be(5000);
+    }
+
     private static int InvokeCalculateRetryDelay(SSEClient client, int currentRetryAttempt, int retryTimeMs)
     {
         var type = typeof(SSEClient);
@@ -363,9 +470,7 @@ public class SSELifecycleTests
         using var cancellation = new CancellationTokenSource();
 
         // A 1ms base keeps the exponential curve small enough to fit many attempts into the test.
-        typeof(SSEClient)
-            .GetField("_retryTimeMs", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
-            .SetValue(client, 1);
+        SetRetryTimeMs(client, 1);
 
         var connectTask = client.ConnectAsync(cancellation.Token);
 
