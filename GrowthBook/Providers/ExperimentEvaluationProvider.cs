@@ -240,6 +240,11 @@ namespace GrowthBook.Providers
             _logger.LogInformation("Participation in experiment with key \'{ExperimentKey}\' is allowed, running the experiment", experiment.Key);
             var result = GetExperimentResult(experiment, context, assignedBucket, true, featureId, hash, foundStickyBucket);
 
+            // Attributed here rather than by the caller, because the tracking callback fires below and would
+            // otherwise be handed an exposure whose bandit fields are all null. This is the only path that
+            // tracks, and reaching it means the user was really bucketed on the bandit's weights.
+            AttributeContextualBandit(experiment, result);
+
             // 13.5 Store the value for later if sticky bucketing is enabled.
 
             if (context.Global.StickyBucketService != null && !experiment.DisableStickyBucketing)
@@ -309,6 +314,21 @@ namespace GrowthBook.Providers
         /// assignment is already decided and may already be saved, so neither a throwing callback nor another
         /// callback having thrown may change what the user is shown.
         /// </summary>
+        /// <summary>
+        /// Records which bandit leaf an exposure was bucketed on, so that tracking carries it.
+        /// </summary>
+        private static void AttributeContextualBandit(Experiment experiment, ExperimentResult result)
+        {
+            if (experiment.ContextualBandit is null || !result.HashUsed || !result.InExperiment)
+            {
+                return;
+            }
+
+            result.LeafId = experiment.ContextualBandit.LeafId;
+            result.VariationWeights = experiment.ContextualBandit.VariationWeights;
+            result.BanditVersion = experiment.ContextualBandit.BanditVersion;
+        }
+
         internal void TrackExposure(Experiment experiment, ExperimentResult result, EvaluationContext context)
         {
             var trackedExperiments = context.User.TrackedExperiments;

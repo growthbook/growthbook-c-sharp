@@ -39,7 +39,8 @@ namespace GrowthBook
         private readonly IDictionary<string, StickyAssignmentsDocument> _stickyBucketAssignmentDocs;
         private readonly ILogger<GrowthBook> _logger;
         private readonly JObject _savedGroups;
-        private IDictionary<string, ContextualBanditDefinition> _contextualBandits;
+        private readonly IDictionary<string, ContextualBanditDefinition> _contextContextualBandits;
+        private IDictionary<string, ContextualBanditDefinition> _payloadContextualBandits;
         private readonly ILoggerFactory _loggerFactory;
         private readonly bool _ownsLoggerFactory;
         private readonly Context _context;
@@ -81,7 +82,7 @@ namespace GrowthBook
                 ? new ConcurrentDictionary<string, StickyAssignmentsDocument>()
                 : new ConcurrentDictionary<string, StickyAssignmentsDocument>(context.StickyBucketAssignmentDocs);
             _savedGroups = context.SavedGroups;
-            _contextualBandits = context.ContextualBandits;
+            _contextContextualBandits = context.ContextualBandits;
             _previousAttributes = context.Attributes?.DeepClone() as JObject;
             _previousForcedVariations = context.ForcedVariations?.ToDictionary(k => k.Key, v => v.Value);
 
@@ -628,18 +629,7 @@ namespace GrowthBook
                     return FeatureLoadResult.CreateFailure(errorMessage);
                 }
 
-                Features = features;
-
-                // Bandit definitions travel in the same payload as the features they belong to, so they're adopted
-                // together: applying new features while still bucketing against the previous weights would attribute
-                // exposures to a weight generation that no longer exists. Definitions supplied through the context
-                // stand until a payload actually carries some.
-                var payloadContextualBandits = (_featureRepository as IGrowthBookContextualBanditSource)?.ContextualBandits;
-
-                if (payloadContextualBandits != null)
-                {
-                    _contextualBandits = payloadContextualBandits;
-                }
+                AdoptPayload(features);
 
                 var featureCount = Features.Count;
 
@@ -709,13 +699,39 @@ namespace GrowthBook
         /// rather than moved, so deduplication stays where it was - in <see cref="TryToTrack"/>, keyed
         /// the same way and shared through the feature repository exactly as before.
         /// </remarks>
+        /// <summary>
+        /// Takes on the features and the bandit definitions the repository last published, together.
+        /// </summary>
+        /// <remarks>
+        /// Both halves come from one reference read once. Taking the features from the repository and the
+        /// definitions from a second read leaves a window where a refresh lands between them, which pairs this
+        /// payload's rules with the previous payload's weights - and a rule supplies its own variation list, so
+        /// the weights can belong to a list that no longer exists.
+        /// <para>
+        /// The definitions are replaced on every adoption, including when the payload carries none. Keeping the
+        /// previous payload's in that case would let a withdrawn bandit go on bucketing new rules under a version
+        /// the backend no longer publishes. Definitions supplied on the context are held separately and are not
+        /// affected, since they are the caller's configuration rather than anything a payload delivered.
+        /// </para>
+        /// </remarks>
+        /// <param name="features">The features the repository returned, used when it publishes no payload.</param>
+        private void AdoptPayload(IDictionary<string, Feature> features)
+        {
+            var payload = (_featureRepository as IGrowthBookContextualBanditSource)?.Payload;
+
+            Features = payload?.Features ?? features;
+
+            Volatile.Write(ref _payloadContextualBandits, payload?.ContextualBandits);
+        }
+
         private EvaluationContext BuildEvaluationContext()
         {
             var global = new GlobalContext
             {
                 Features = Features,
                 SavedGroups = _savedGroups,
-                ContextualBandits = _contextualBandits,
+                ContextualBandits = _contextContextualBandits,
+                PayloadContextualBandits = Volatile.Read(ref _payloadContextualBandits),
                 Experiments = Experiments,
                 Enabled = Enabled,
                 QaMode = _qaMode,
@@ -834,8 +850,12 @@ namespace GrowthBook
 
                 if (features != null)
                 {
-                    Features = features;
-                    _logger?.LogDebug("Remote evaluation completed, updated {Count} features", features.Count);
+                    // The payload that answered this refresh carries its own bandits. Adopting the features
+                    // without them would bucket the new rules against whatever the last load happened to leave
+                    // behind, or against nothing at all when no load has run.
+                    AdoptPayload(features);
+
+                    _logger?.LogDebug("Remote evaluation completed, updated {Count} features", Features.Count);
                 }
             }
             catch (Exception ex)

@@ -188,19 +188,11 @@ namespace GrowthBook.Providers
 
                     // The bandit is attached before evaluation, so it has to be withdrawn from anything that wasn't a
                     // real exposure - a forced variation, QA mode, or being filtered out. Those assignments owe
-                    // nothing to the bandit's weights and must not be attributed to them.
-                    if (experiment.ContextualBandit != null)
+                    // nothing to the bandit's weights and must not be attributed to them. A real exposure was
+                    // already attributed inside RunExperiment, before the tracking callback saw it.
+                    if (experiment.ContextualBandit != null && !(result.HashUsed && result.InExperiment))
                     {
-                        if (result.HashUsed && result.InExperiment)
-                        {
-                            result.LeafId = experiment.ContextualBandit.LeafId;
-                            result.VariationWeights = experiment.ContextualBandit.VariationWeights;
-                            result.BanditVersion = experiment.ContextualBandit.BanditVersion;
-                        }
-                        else
-                        {
-                            experiment.ContextualBandit = null;
-                        }
+                        experiment.ContextualBandit = null;
                     }
 
                     context.Global.OnExperimentAssigned?.Invoke(experiment, result);
@@ -244,10 +236,7 @@ namespace GrowthBook.Providers
         /// <param name="context">The evaluation the rule belongs to.</param>
         private void ApplyContextualBandit(Experiment experiment, string contextualBanditRef, string featureId, EvaluationContext context)
         {
-            var contextualBandits = context.Global.ContextualBandits;
-
-            if (contextualBandits == null
-                || !contextualBandits.TryGetValue(contextualBanditRef, out var definition)
+            if (!context.Global.TryGetContextualBandit(contextualBanditRef, out var definition)
                 || definition is null)
             {
                 // Nothing to apply, so the rule runs on its own marginal weights and reports no bandit metadata.

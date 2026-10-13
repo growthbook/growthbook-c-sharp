@@ -1,9 +1,7 @@
-using System.Collections.Generic;
-
 namespace GrowthBook
 {
     /// <summary>
-    /// Supplies the contextual bandit definitions that arrived with the most recent feature payload.
+    /// Supplies the most recent feature payload together with the contextual bandit definitions it carried.
     /// </summary>
     /// <remarks>
     /// Kept separate from <see cref="IGrowthBookFeatureRepository"/> on purpose. This library targets
@@ -15,9 +13,9 @@ namespace GrowthBook
     public interface IGrowthBookContextualBanditSource
     {
         /// <summary>
-        /// Definitions from the last payload, keyed by the reference a feature rule points at, or null when the
-        /// payload carried none.
+        /// The last payload published, or null when none has been. Exposed as one object rather than as separate
+        /// features and definitions so that a reader cannot pick up one from a newer payload than the other.
         /// </summary>
-        IDictionary<string, ContextualBanditDefinition> ContextualBandits { get; }
+        FeaturePayload Payload { get; }
     }
 }
