@@ -52,7 +52,8 @@ namespace GrowthBook
             = new List<Action<Experiment, ExperimentResult>>();
         private readonly List<Func<Experiment, ExperimentResult, Task>> _asyncSubscribers
             = new List<Func<Experiment, ExperimentResult, Task>>();
-        private volatile bool _lastHttpRefreshWasModified;
+        private readonly object _featuresLock = new object();
+        private long _installedRefreshVersion;
 
         /// <summary>
         /// Creates a new GrowthBook instance from the passed context.
@@ -706,16 +707,40 @@ namespace GrowthBook
                 _logger.LogInformation("Loading features from the repository");
                 IDictionary<string, Feature> features;
 
-                _lastHttpRefreshWasModified = false;
-                // Use remote evaluation if enabled and configured
-                if (_context.RemoteEval && RemoteEvaluationUtilities.IsValidForRemoteEvaluation(_context))
+                var wasModified = false;
+                var observedResponse = false;
+
+                void RecordResponse(object sender, FeaturesRefreshedEventArgs e)
                 {
-                    var currentContext = CreateCurrentContext();
-                    features = await _featureRepository.GetFeaturesWithContext(currentContext, options, cancellationToken);
+                    if (e.Source != FeatureRefreshSource.Http || observedResponse)
+                    {
+                        return;
+                    }
+
+                    observedResponse = true;
+                    wasModified = e.WasModified;
                 }
-                else
+
+                var startedAtVersion = CurrentRefreshVersion();
+
+                _featureRepository.FeaturesRefreshed += RecordResponse;
+
+                try
                 {
-                    features = await _featureRepository.GetFeatures(options, cancellationToken);
+                    // Use remote evaluation if enabled and configured
+                    if (_context.RemoteEval && RemoteEvaluationUtilities.IsValidForRemoteEvaluation(_context))
+                    {
+                        var currentContext = CreateCurrentContext();
+                        features = await _featureRepository.GetFeaturesWithContext(currentContext, options, cancellationToken);
+                    }
+                    else
+                    {
+                        features = await _featureRepository.GetFeatures(options, cancellationToken);
+                    }
+                }
+                finally
+                {
+                    _featureRepository.FeaturesRefreshed -= RecordResponse;
                 }
 
                 if (features == null)
@@ -725,12 +750,18 @@ namespace GrowthBook
                     return FeatureLoadResult.CreateFailure(errorMessage);
                 }
 
-                Features = features;
+                if (!TryInstallLoadedFeatures(features, startedAtVersion))
+                {
+                    _logger.LogInformation("Loading features has completed, but a refresh arrived while it was in flight and was kept");
+
+                    return FeatureLoadResult.CreateSuccess(Features?.Count ?? 0, wasModified);
+                }
+
                 var featureCount = Features.Count;
 
                 _logger.LogInformation($"Loading features has completed, retrieved '{featureCount}' features");
 
-                return FeatureLoadResult.CreateSuccess(featureCount, _lastHttpRefreshWasModified);
+                return FeatureLoadResult.CreateSuccess(featureCount, wasModified);
             }
             catch (FeatureLoadException ex)
             {
@@ -1305,14 +1336,51 @@ namespace GrowthBook
         {
             if (e.WasModified)
             {
-                Features = e.Features.ToDictionary(k => k.Key, v => v.Value);
+                AdoptRefreshedFeatures(e.Features);
             }
 
-            if (e.Source == FeatureRefreshSource.Http)
+            // One consumer's handler must not stop the next one hearing about the refresh.
+            FeaturesRefreshedNotifier.Raise(FeaturesRefreshed, this, e,
+                ex => _logger.LogError(ex, "A FeaturesRefreshed subscriber threw an exception"));
+        }
+
+        private long CurrentRefreshVersion()
+        {
+            lock (_featuresLock)
             {
-                _lastHttpRefreshWasModified = e.WasModified;
+                return _installedRefreshVersion;
             }
-            FeaturesRefreshed?.Invoke(this, e);
+        }
+
+        private bool TryInstallLoadedFeatures(IDictionary<string, Feature> features, long startedAtVersion)
+        {
+            lock (_featuresLock)
+            {
+                if (_installedRefreshVersion != startedAtVersion)
+                {
+                    return false;
+                }
+
+                Features = features;
+
+                return true;
+            }
+        }
+
+        private void AdoptRefreshedFeatures(IReadOnlyDictionary<string, Feature> features)
+        {
+            if (_context.RemoteEval && RemoteEvaluationUtilities.IsValidForRemoteEvaluation(_context))
+            {
+                _logger.LogDebug("Ignored a shared refresh: this instance is evaluated remotely and has its own result");
+
+                return;
+            }
+
+            lock (_featuresLock)
+            {
+                Features = features.ToDictionary(k => k.Key, v => v.Value);
+                _installedRefreshVersion++;
+            }
         }
     }
 }

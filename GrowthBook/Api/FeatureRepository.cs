@@ -195,8 +195,10 @@ namespace GrowthBook.Api
             // from context or configuration
             return new Dictionary<string, string>();
         }
-
         private void OnWorkerFeaturesRefreshed(object sender, FeaturesRefreshedEventArgs e)
-            => FeaturesRefreshed?.Invoke(sender, e);
+        {
+            FeaturesRefreshedNotifier.Raise(FeaturesRefreshed, sender, e,
+                ex => _logger.LogError(ex, "A FeaturesRefreshed subscriber threw an exception"));
+        }
     }
 }
