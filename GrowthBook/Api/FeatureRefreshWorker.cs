@@ -212,28 +212,20 @@ namespace GrowthBook.Api
             IDictionary<string, Feature> features)
         {
             var handler = FeaturesRefreshed;
+
             if (handler is null)
             {
                 return;
             }
+
             var args = new FeaturesRefreshedEventArgs(
                 wasModified,
                 source,
                 new Dictionary<string, Feature>(features ?? new Dictionary<string, Feature>()),
-                DateTimeOffset.UtcNow
-                );
+                DateTimeOffset.UtcNow);
 
-            foreach (var subscriber in handler.GetInvocationList())
-            {
-                try
-                {
-                    ((EventHandler<FeaturesRefreshedEventArgs>)subscriber)(this, args);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "A FeatureRefresher subscriber threw an exception: {Message}", ex.Message);
-                }
-            }
+            FeaturesRefreshedNotifier.Raise(handler, this, args,
+                ex => _logger.LogError(ex, "A FeaturesRefreshed subscriber threw an exception"));
         }
     }
 }
