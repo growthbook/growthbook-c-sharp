@@ -157,4 +157,38 @@ public class InMemoryFeatureCacheTests : UnitTest
 
         cache.IsCacheExpired.Should().BeTrue("because a zero second window expires the instant it is set");
     }
+
+    /// <summary>
+    /// The path an HTTP 304 takes: the server confirms the cached features are still current, so the
+    /// lifetime restarts without anything being written. None of the other clock tests reach
+    /// <c>RefreshExpiration</c> - they all go through <c>RefreshWith</c> - and the repository's 304 test
+    /// uses a substituted cache, so a mistake in this separate reset would go unnoticed.
+    /// </summary>
+    [Fact]
+    public async Task ConfirmingAnExpiredCacheRestartsItsTimeToLiveWithoutChangingTheFeatures()
+    {
+        var clock = new ManualClock();
+        var cache = new InMemoryFeatureCache(60, clock.UtcNow);
+
+        await cache.RefreshWith(_availableFeatures);
+
+        clock.Advance(TimeSpan.FromSeconds(90));
+        cache.IsCacheExpired.Should().BeTrue();
+
+        await cache.RefreshExpiration();
+
+        cache.IsCacheExpired.Should().BeFalse("because the server confirmed what is cached is still current");
+
+        var features = await cache.GetFeatures();
+
+        features.Should().BeEquivalentTo(_availableFeatures,
+            "because a 304 confirms the features rather than replacing them");
+        cache.FeatureCount.Should().Be(_availableFeatures.Count);
+
+        clock.Advance(TimeSpan.FromSeconds(59));
+        cache.IsCacheExpired.Should().BeFalse("because the window restarts from the confirmation");
+
+        clock.Advance(TimeSpan.FromSeconds(1));
+        cache.IsCacheExpired.Should().BeTrue();
+    }
 }

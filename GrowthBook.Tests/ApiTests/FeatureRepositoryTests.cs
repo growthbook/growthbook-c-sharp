@@ -58,7 +58,7 @@ public class FeatureRepositoryTests : ApiUnitTest<FeatureRepository>
     [InlineData(true, null)]
     [InlineData(true, false)]
     [InlineData(true, true)]
-    public async Task GettingFeaturesWhenApiCallIsRequiredWithoutWaitingForRetrievalWillGetFromCache(bool isCacheExpired, bool? isForcedRefresh)
+    public async Task GettingFeaturesWhenApiCallIsRequiredAndWaitingIsAskedForWillGetFromTheApiCall(bool isCacheExpired, bool? isForcedRefresh)
     {
         _cache.IsCacheExpired.Returns(isCacheExpired);
         _cache.FeatureCount.Returns(_availableFeatures.Count);
@@ -136,5 +136,56 @@ public class FeatureRepositoryTests : ApiUnitTest<FeatureRepository>
         await _backgroundWorker.DidNotReceive().RefreshCacheFromApi(Arg.Any<CancellationToken?>());
 
         features.Should().BeEquivalentTo(_availableFeatures);
+    }
+
+    /// <summary>
+    /// The case the renamed test above never covered: a populated but expired cache with
+    /// <c>WaitForCompletion</c> left off. The refresh is started and not waited on, so the caller is
+    /// served what is already cached rather than being blocked on the API, and the fetched values only
+    /// appear on a later call. The cached and fetched sets differ here so that the two cannot be confused.
+    /// </summary>
+    [Fact]
+    public async Task GettingFeaturesWithoutWaitingServesTheCachedOnesWhileTheRefreshIsStillRunning()
+    {
+        var cached = new Dictionary<string, Feature> { ["cached-flag"] = new Feature { DefaultValue = true } };
+        var fetched = new Dictionary<string, Feature> { ["fetched-flag"] = new Feature { DefaultValue = true } };
+
+        var releaseRefresh = new TaskCompletionSource<IDictionary<string, Feature>>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var refreshStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        _cache.IsCacheExpired.Returns(true);
+        _cache.FeatureCount.Returns(cached.Count);
+        _cache.GetFeatures(Arg.Any<CancellationToken?>()).Returns(cached);
+
+        _backgroundWorker
+            .RefreshCacheFromApi(Arg.Any<CancellationToken?>())
+            .Returns(_ =>
+            {
+                refreshStarted.TrySetResult(true);
+
+                return releaseRefresh.Task;
+            });
+
+        // Bounded on purpose. A regression here does not return the wrong features, it never returns at
+        // all, because the refresh is deliberately left pending - unbounded, that hangs the run instead of
+        // failing it.
+        var load = _featureRepository.GetFeatures(new GrowthBookRetrievalOptions { WaitForCompletion = false });
+
+        var finished = await Task.WhenAny(load, Task.Delay(TimeSpan.FromSeconds(5)));
+
+        finished.Should().Be(load, "a caller that did not ask to wait must not be blocked on the API");
+
+        var features = await load;
+
+        features.Should().BeEquivalentTo(cached,
+            "a caller that did not ask to wait is served the cache rather than blocked on the API");
+
+        await _cache.Received(1).GetFeatures(Arg.Any<CancellationToken?>());
+        await _backgroundWorker.Received(1).RefreshCacheFromApi(Arg.Any<CancellationToken?>());
+
+        (await Task.WhenAny(refreshStarted.Task, Task.Delay(TimeSpan.FromSeconds(5))))
+            .Should().Be(refreshStarted.Task, "the refresh still has to have been started, just not awaited");
+
+        releaseRefresh.TrySetResult(fetched);
     }
 }
