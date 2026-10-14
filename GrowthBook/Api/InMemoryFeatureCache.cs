@@ -11,7 +11,7 @@ namespace GrowthBook.Api
     /// <summary>
     /// Represents a simple in-memory cache for GrowthBook features.
     /// </summary>
-    public class InMemoryFeatureCache : IGrowthBookFeatureCache
+    public class InMemoryFeatureCache : IGrowthBookFeatureCache, IFeatureRefreshSource
     {
         // We're providing a lock and locking around every operation within this cache
         // because this is an in-memory cache and may be accessed by multiple threads
@@ -22,9 +22,11 @@ namespace GrowthBook.Api
         // and would like to avoid confusion by mixing paradigms unnecessarily.
 
         private readonly object _cacheLock = new object();
+        private readonly FeatureRefreshSubscriptions _refreshSubscriptions = new FeatureRefreshSubscriptions();
         private IDictionary<string, Feature> _cachedFeatures = new Dictionary<string, Feature>();
         private readonly int _cacheExpirationInSeconds;
         private DateTime _nextCacheExpiration;
+        private long _refreshVersion;
 
         public InMemoryFeatureCache(int cacheExpirationInSeconds)
         {
@@ -65,15 +67,26 @@ namespace GrowthBook.Api
             }
         }
 
+        /// <inheritdoc/>
+        public IDisposable SubscribeToRefresh(Action<FeatureRefresh> handler) => _refreshSubscriptions.Add(handler);
+
         public Task RefreshWith(IDictionary<string, Feature> features, CancellationToken? cancellationToken = null)
         {
+            FeatureRefresh refresh;
+
             lock(_cacheLock)
             {
                 _cachedFeatures = new Dictionary<string, Feature>(features);
                 _nextCacheExpiration = DateTime.UtcNow.AddSeconds(_cacheExpirationInSeconds);
 
-                return Task.CompletedTask;
+                // Stamped under the same lock as the write, so the version orders the refreshes the
+                // way the cache saw them even though the fan-out below runs unlocked.
+                refresh = new FeatureRefresh(++_refreshVersion, new Dictionary<string, Feature>(_cachedFeatures));
             }
+
+            _refreshSubscriptions.Notify(refresh, null);
+
+            return Task.CompletedTask;
         }
 
         internal Task RefreshExpiration(CancellationToken? cancellationToken = null)
