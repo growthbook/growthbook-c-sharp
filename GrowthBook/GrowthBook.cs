@@ -410,11 +410,15 @@ namespace GrowthBook
         /// <returns>The merged doc, and whether it differs from the one that was held.</returns>
         private (StickyAssignmentsDocument Document, bool IsChanged) MergeStickyBucketAssignment(string attributeName, string attributeValue, IDictionary<string, string> assignments)
         {
+            var storedDocument = ReadStoredStickyBucketAssignment(attributeName, attributeValue);
+
             lock (_stickyBucketWriteLock)
             {
                 var formattedAttribute = new StickyAssignmentsDocument(attributeName, attributeValue).FormattedAttribute;
 
                 _stickyBucketAssignmentDocs.TryGetValue(formattedAttribute, out var existingDocument);
+
+                existingDocument = Combine(storedDocument, existingDocument, attributeName, attributeValue);
 
                 var merged = ExperimentUtilities.GenerateStickyBucketAssignment(existingDocument, attributeName, attributeValue, assignments);
 
@@ -425,6 +429,44 @@ namespace GrowthBook
 
                 return merged;
             }
+        }
+
+        private StickyAssignmentsDocument ReadStoredStickyBucketAssignment(string attributeName, string attributeValue)
+        {
+            if (_stickyBucketService is null)
+            {
+                return null;
+            }
+
+            try
+            {
+                return _stickyBucketService.GetAssignments(attributeName, attributeValue);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to read the stored sticky bucket assignments for '{AttributeName}', merging against the assignments held in memory", attributeName);
+
+                return null;
+            }
+        }
+    
+        private static StickyAssignmentsDocument Combine(StickyAssignmentsDocument storedDocument, StickyAssignmentsDocument inMemoryDocument, string attributeName, string attributeValue)
+        {
+            if (storedDocument?.Assignments is null || storedDocument.Assignments.Count == 0)
+            {
+                return inMemoryDocument;
+            }
+
+            if (inMemoryDocument?.Assignments is null || inMemoryDocument.Assignments.Count == 0)
+            {
+                return storedDocument;
+            }
+
+            var combined = new Dictionary<string, string>(storedDocument.Assignments);
+
+            combined.MergeWith(inMemoryDocument.Assignments);
+
+            return new StickyAssignmentsDocument(attributeName, attributeValue, combined);
         }
 
         /// <summary>
@@ -1889,8 +1931,8 @@ namespace GrowthBook
                     [experimentKey] = result.Key
                 };
 
-                // Merged against the docs held in memory for both store flavors, as the reference SDK does.
-                // The synchronous store used to be re-read here, which blocked the evaluation on store I/O.
+                // Merged against what a synchronous store holds as well as the docs in memory, since such a
+                // store can be shared with instances whose assignments this one has never seen.
                 var (document, isChanged) = MergeStickyBucketAssignment(hashAttribute, hashValue, assignments);
 
                 if (isChanged)
