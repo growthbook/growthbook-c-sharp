@@ -440,4 +440,44 @@ public class StickyBucketAutoRefreshTests : UnitTest
         result.StickyBucketUsed.Should().BeFalse("because nothing was stored for it yet");
         result.InExperiment.Should().BeTrue("and an empty store must not stop the experiment running");
     }
+
+    /// <summary>
+    /// A synchronous store exists so that instances can share assignments, which means it holds writes this
+    /// instance never made. Merging only against the doc held in memory replaces the stored one with a copy
+    /// that is missing them, and the users behind them get bucketed again later.
+    /// </summary>
+    [Fact]
+    public void ASaveDoesNotEraseWhatAnotherInstanceAlreadyStored()
+    {
+        const string FirstFeature = "first-feature";
+        const string SecondFeature = "second-feature";
+
+        var service = new DeletableStickyBucketService();
+
+        // Both are constructed before either evaluates, so each starts from the same empty document - two
+        // processes pointed at one store, which is the case a synchronous store exists for.
+        using var first = new GrowthBook(new Context
+        {
+            Attributes = JObject.FromObject(new { id = "user-1" }),
+            Features = new Dictionary<string, Feature> { [FirstFeature] = CreateExperimentFeature() },
+            StickyBucketService = service
+        });
+
+        using var second = new GrowthBook(new Context
+        {
+            Attributes = JObject.FromObject(new { id = "user-1" }),
+            Features = new Dictionary<string, Feature> { [SecondFeature] = CreateExperimentFeature() },
+            StickyBucketService = service
+        });
+
+        first.EvalFeature(FirstFeature);
+        second.EvalFeature(SecondFeature);
+
+        var stored = service.GetAssignments("id", "user-1");
+
+        stored.Should().NotBeNull("both evaluations stored an assignment for this user");
+        stored.Assignments.Keys.Should().Contain($"{FirstFeature}__0",
+            "the second instance merged against a document loaded before the first instance saved, so its own save must not drop what the first one wrote");
+        stored.Assignments.Keys.Should().Contain($"{SecondFeature}__0");
+    }
 }
