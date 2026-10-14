@@ -70,9 +70,10 @@ namespace GrowthBook.Api.SSE
                 Data = eventData.TryGetValue("data", out var data) ? data : null
             };
 
-            // Parse retry time
-            if (eventData.TryGetValue("retry", out var retryString) && 
-                int.TryParse(retryString.Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var retryTime))
+            // Parse retry time. Only ASCII digits are a reconnection time per the SSE specification, so a
+            // signed value is ignored rather than accepted - a negative one would otherwise reach Task.Delay.
+            if (eventData.TryGetValue("retry", out var retryString) &&
+                int.TryParse(retryString.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out var retryTime))
             {
                 sseEvent.RetryTime = retryTime;
             }
