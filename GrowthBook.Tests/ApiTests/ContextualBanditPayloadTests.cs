@@ -10,6 +10,7 @@ using FluentAssertions;
 using GrowthBook.Api;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 using NSubstitute;
 using Xunit;
 
@@ -38,7 +39,7 @@ public class ContextualBanditPayloadTests
 
         await worker.RefreshCacheFromApi();
 
-        var bandits = ((IGrowthBookContextualBanditSource)worker).Payload.ContextualBandits;
+        var bandits = ((IFeaturePayloadSource)worker).Payload.ContextualBandits;
 
         bandits.Should().ContainKey("cb-bandit");
         bandits["cb-bandit"].BanditVersion.Should().Be(7);
@@ -59,7 +60,7 @@ public class ContextualBanditPayloadTests
         // Losing the bandits must not cost the caller their features: every rule referencing one just falls back to
         // its own marginal weights.
         features.Should().ContainKey("a");
-        ((IGrowthBookContextualBanditSource)worker).Payload.ContextualBandits.Should().BeNull();
+        ((IFeaturePayloadSource)worker).Payload.ContextualBandits.Should().BeNull();
     }
 
     [Fact]
@@ -70,8 +71,9 @@ public class ContextualBanditPayloadTests
 
         repository.GetFeatures(Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken?>())
             .Returns(Task.FromResult(payload.Features));
-        ((IGrowthBookContextualBanditSource)repository).Payload
-            .Returns(new FeaturePayload(payload.Features, payload.ContextualBandits));
+        ((IGrowthBookContextualBanditSource)repository)
+            .GetPayload(Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken?>())
+            .Returns(Task.FromResult(new FeaturePayload(payload.Features, payload.ContextualBandits)));
 
         using var growthBook = new GrowthBook(new Context(new { id = "1" }) { FeatureRepository = repository });
 
@@ -94,8 +96,9 @@ public class ContextualBanditPayloadTests
 
         repository.GetFeatures(Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken?>())
             .Returns(Task.FromResult(payload.Features));
-        ((IGrowthBookContextualBanditSource)repository).Payload
-            .Returns(new FeaturePayload(payload.Features, null));
+        ((IGrowthBookContextualBanditSource)repository)
+            .GetPayload(Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken?>())
+            .Returns(Task.FromResult(new FeaturePayload(payload.Features, null)));
 
         var context = new Context(new { id = "1" })
         {
@@ -119,8 +122,9 @@ public class ContextualBanditPayloadTests
 
         repository.GetFeatures(Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken?>())
             .Returns(Task.FromResult(payload.Features));
-        ((IGrowthBookContextualBanditSource)repository).Payload
-            .Returns(new FeaturePayload(payload.Features, payload.ContextualBandits));
+        ((IGrowthBookContextualBanditSource)repository)
+            .GetPayload(Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken?>())
+            .Returns(Task.FromResult(new FeaturePayload(payload.Features, payload.ContextualBandits)));
 
         using var growthBook = new GrowthBook(new Context(new { id = "1" }) { FeatureRepository = repository });
 
@@ -130,8 +134,9 @@ public class ContextualBanditPayloadTests
             "the first payload supplied the bandit");
 
         // The backend has withdrawn the bandit; the rules referencing it are still being served.
-        ((IGrowthBookContextualBanditSource)repository).Payload
-            .Returns(new FeaturePayload(payload.Features, null));
+        ((IGrowthBookContextualBanditSource)repository)
+            .GetPayload(Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken?>())
+            .Returns(Task.FromResult(new FeaturePayload(payload.Features, null)));
 
         await growthBook.LoadFeatures();
 
@@ -151,10 +156,9 @@ public class ContextualBanditPayloadTests
 
         // A remote refresh is the only thing that ever runs here: no load precedes it, so nothing else could
         // have supplied the definitions the new rules reference.
-        repository.GetFeaturesWithContext(Arg.Any<Context>(), Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken?>())
-            .Returns(Task.FromResult(payload.Features));
-        ((IGrowthBookContextualBanditSource)repository).Payload
-            .Returns(new FeaturePayload(payload.Features, payload.ContextualBandits));
+        ((IGrowthBookContextualBanditSource)repository)
+            .GetPayloadWithContext(Arg.Any<Context>(), Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken?>())
+            .Returns(Task.FromResult(new FeaturePayload(payload.Features, payload.ContextualBandits)));
 
         using var growthBook = new GrowthBook(new Context(new { id = "1" })
         {
@@ -181,8 +185,9 @@ public class ContextualBanditPayloadTests
 
         repository.GetFeatures(Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken?>())
             .Returns(Task.FromResult(payload.Features));
-        ((IGrowthBookContextualBanditSource)repository).Payload
-            .Returns(new FeaturePayload(payload.Features, payload.ContextualBandits));
+        ((IGrowthBookContextualBanditSource)repository)
+            .GetPayload(Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken?>())
+            .Returns(Task.FromResult(new FeaturePayload(payload.Features, payload.ContextualBandits)));
 
         // The repository owns the de-duplication of tracked exposures; a substitute reports every key as
         // already seen, which would silence the callback for reasons unrelated to this test.
@@ -246,7 +251,7 @@ public class ContextualBanditPayloadTests
 
         cacheWriteStarted.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue();
 
-        var observed = ((IGrowthBookContextualBanditSource)worker).Payload;
+        var observed = ((IFeaturePayloadSource)worker).Payload;
 
         releaseCacheWrite.Set();
         await refresh;
@@ -299,5 +304,133 @@ public class ContextualBanditPayloadTests
                     Content = new StringContent(_payloadJson, Encoding.UTF8, "application/json")
                 });
         }
+    }
+
+    /// <summary>
+    /// With a cache shared between processes, another one can refresh it with a payload this worker never
+    /// saw. Replacing those features with the worker's older local copy means the SDK serves values the
+    /// cache has already moved past.
+    /// </summary>
+    [Fact]
+    public async Task NewerCachedFeaturesAreNotReplacedByTheWorkersOlderCopy()
+    {
+        var payload = JsonConvert.DeserializeObject<PayloadShape>(PayloadWithBandits);
+        var newerFromAnotherProcess = new Dictionary<string, Feature> { ["cache-flag"] = new Feature { DefaultValue = true } };
+
+        var worker = Substitute.For<IGrowthBookFeatureRefreshWorker, IFeaturePayloadSource>();
+        ((IFeaturePayloadSource)worker).Payload.Returns(new FeaturePayload(payload.Features, payload.ContextualBandits));
+
+        var cache = Substitute.For<IGrowthBookFeatureCache>();
+        cache.IsCacheExpired.Returns(false);
+        cache.FeatureCount.Returns(newerFromAnotherProcess.Count);
+        cache.GetFeatures(Arg.Any<CancellationToken?>()).Returns(newerFromAnotherProcess);
+
+        var repository = new FeatureRepository(Substitute.For<ILogger<FeatureRepository>>(), cache, worker);
+
+        var result = await ((IGrowthBookContextualBanditSource)repository).GetPayload();
+
+        result.Features.Should().ContainKey("cache-flag", "the cache is what is being served, so it decides");
+        result.Features.Should().NotContainKey("bandit-feature");
+        result.ContextualBandits.Should().BeNull(
+            "the definitions this worker holds belong to a payload the cache has moved past, so there is no matching pair to hand over");
+    }
+
+    /// <summary>
+    /// A repository is shared, but a remote evaluation answers for one user. Reading the definitions off
+    /// the repository after the call lets a second user's response arrive in between, so the first caller
+    /// adopts features evaluated for somebody else.
+    /// </summary>
+    [Fact]
+    public async Task ConcurrentRemoteLoadsEachKeepTheirOwnAnswer()
+    {
+        var firstUser = new Dictionary<string, Feature> { ["first-user-flag"] = new Feature { DefaultValue = true } };
+        var secondUser = new Dictionary<string, Feature> { ["second-user-flag"] = new Feature { DefaultValue = true } };
+
+        var repository = Substitute.For<IGrowthBookFeatureRepository, IGrowthBookContextualBanditSource>();
+
+        var firstEntered = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondFinished = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var calls = 0;
+
+        ((IGrowthBookContextualBanditSource)repository)
+            .GetPayloadWithContext(Arg.Any<Context>(), Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken?>())
+            .Returns(_ =>
+            {
+                if (Interlocked.Increment(ref calls) == 1)
+                {
+                    firstEntered.TrySetResult(true);
+
+                    return Task.Run(async () =>
+                    {
+                        await secondFinished.Task;
+                        return new FeaturePayload(firstUser, null);
+                    });
+                }
+
+                return Task.FromResult(new FeaturePayload(secondUser, null));
+            });
+
+        using var first = new GrowthBook(new Context
+        {
+            Attributes = JObject.FromObject(new { id = "user-1" }),
+            FeatureRepository = repository,
+            RemoteEval = true,
+            ClientKey = "sdk-key",
+            ApiHost = "https://api.example.test"
+        });
+
+        using var second = new GrowthBook(new Context
+        {
+            Attributes = JObject.FromObject(new { id = "user-2" }),
+            FeatureRepository = repository,
+            RemoteEval = true,
+            ClientKey = "sdk-key",
+            ApiHost = "https://api.example.test"
+        });
+
+        var firstLoad = first.LoadFeaturesWithResult();
+
+        await firstEntered.Task;
+
+        await second.LoadFeaturesWithResult();
+        secondFinished.TrySetResult(true);
+
+        await firstLoad;
+
+        first.Features.Should().ContainKey("first-user-flag", "each caller keeps the answer evaluated for its own user");
+        first.Features.Should().NotContainKey("second-user-flag");
+        second.Features.Should().ContainKey("second-user-flag");
+    }
+
+    /// <summary>
+    /// The published dictionary belongs to every instance built on the repository. Adopting it by
+    /// reference means disposing one instance clears it for all of them.
+    /// </summary>
+    [Fact]
+    public async Task DisposingOneInstanceDoesNotEmptyThePublishedPayload()
+    {
+        var payload = JsonConvert.DeserializeObject<PayloadShape>(PayloadWithBandits);
+        var published = new FeaturePayload(payload.Features, payload.ContextualBandits);
+
+        var repository = Substitute.For<IGrowthBookFeatureRepository, IGrowthBookContextualBanditSource>();
+
+        ((IGrowthBookContextualBanditSource)repository)
+            .GetPayload(Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken?>())
+            .Returns(_ => Task.FromResult(published));
+
+        var first = new GrowthBook(new Context { Attributes = JObject.FromObject(new { id = "1" }), FeatureRepository = repository });
+        using var second = new GrowthBook(new Context { Attributes = JObject.FromObject(new { id = "2" }), FeatureRepository = repository });
+
+        await first.LoadFeatures();
+        await second.LoadFeatures();
+
+        first.Dispose();
+
+        published.Features.Should().ContainKey("bandit-feature", "the published payload is not one instance's to clear");
+        second.Features.Should().ContainKey("bandit-feature", "and another instance still holding it must keep its own");
+
+        await second.LoadFeatures();
+
+        second.Features.Should().ContainKey("bandit-feature", "a later load must not adopt an emptied map");
     }
 }
