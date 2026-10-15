@@ -33,6 +33,7 @@ namespace GrowthBook.Api
         private readonly string _featuresApiEndpoint;
         private readonly string _serverSentEventsApiEndpoint;
         private bool _isServerSentEventsEnabled;
+        private long _refreshSequence;
         private SSEClient _sseClient;
         private CancellationTokenSource _refreshWorkerCancellation = new CancellationTokenSource();
         public event EventHandler<FeaturesRefreshedEventArgs> FeaturesRefreshed;
@@ -222,7 +223,8 @@ namespace GrowthBook.Api
                 wasModified,
                 source,
                 new Dictionary<string, Feature>(features ?? new Dictionary<string, Feature>()),
-                DateTimeOffset.UtcNow);
+                DateTimeOffset.UtcNow,
+                Interlocked.Increment(ref _refreshSequence));
 
             FeaturesRefreshedNotifier.Raise(handler, this, args,
                 ex => _logger.LogError(ex, "A FeaturesRefreshed subscriber threw an exception"));

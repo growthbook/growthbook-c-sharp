@@ -36,19 +36,34 @@ namespace GrowthBook
         public DateTimeOffset RefreshedAt { get; }
 
         /// <summary>
+        /// Where this refresh falls in the order they were fetched, counting up from one.
+        /// </summary>
+        /// <remarks>
+        /// Delivery is not ordered: each subscriber is invoked on its own so that one cannot stop the
+        /// others, which lets a later refresh overtake an earlier one midway through its round and leave
+        /// two instances on different payloads. Comparing this rather than arrival order means an older
+        /// refresh is recognised as older whenever it turns up. <see cref="RefreshedAt"/> cannot serve:
+        /// two refreshes can share a timestamp.
+        /// </remarks>
+        public long Sequence { get; }
+
+        /// <summary>
         /// Creates a new <see cref="FeaturesRefreshedEventArgs"/>.
         /// </summary>
         /// <param name="wasModified">Whether the server returned changed features.</param>
         /// <param name="source">How the refresh was delivered.</param>
         /// <param name="features">The features in effect after the refresh.</param>
         /// <param name="refreshedAt">The UTC time the refresh was observed.</param>
+        /// <param name="sequence">Where this refresh falls in the order they were fetched.</param>
         public FeaturesRefreshedEventArgs(
             bool wasModified,
             FeatureRefreshSource source,
             IReadOnlyDictionary<string, Feature> features,
-            DateTimeOffset refreshedAt
+            DateTimeOffset refreshedAt,
+            long sequence = 0
         )
         {
+            Sequence = sequence;
             WasModified = wasModified;
             Source = source;
             Features = features ?? new Dictionary<string, Feature>();
