@@ -181,10 +181,14 @@ public class FeatureRepositoryTests : ApiUnitTest<FeatureRepository>
             "a caller that did not ask to wait is served the cache rather than blocked on the API");
 
         await _cache.Received(1).GetFeatures(Arg.Any<CancellationToken?>());
-        await _backgroundWorker.Received(1).RefreshCacheFromApi(Arg.Any<CancellationToken?>());
 
-        (await Task.WhenAny(refreshStarted.Task, Task.Delay(TimeSpan.FromSeconds(5))))
+        // The refresh is dispatched to the thread pool and the call returns without waiting for it, so
+        // there is nothing to assert about the worker until it has actually been entered. Asserting
+        // first only passed because the dispatch usually wins the race on an idle machine.
+        (await Task.WhenAny(refreshStarted.Task, Task.Delay(TimeSpan.FromSeconds(10))))
             .Should().Be(refreshStarted.Task, "the refresh still has to have been started, just not awaited");
+
+        await _backgroundWorker.Received(1).RefreshCacheFromApi(Arg.Any<CancellationToken?>());
 
         releaseRefresh.TrySetResult(fetched);
     }
