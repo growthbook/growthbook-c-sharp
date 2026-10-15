@@ -17,7 +17,7 @@ using GrowthBook.Api.SSE;
 
 namespace GrowthBook.Api
 {
-    public class FeatureRefreshWorker : IGrowthBookFeatureRefreshWorker, IGrowthBookContextualBanditSource, IDisposable
+    public class FeatureRefreshWorker : IGrowthBookFeatureRefreshWorker, IFeaturePayloadSource, IDisposable
     {
         private readonly ILogger<FeatureRefreshWorker> _logger;
         private readonly IHttpClientFactory _httpClientFactory;

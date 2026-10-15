@@ -15,8 +15,6 @@ namespace GrowthBook.Api
 {
     public class FeatureRepository : IGrowthBookFeatureRepository, IGrowthBookContextualBanditSource
     {
-        private FeaturePayload _remotelyEvaluatedPayload;
-
         private readonly ILogger<FeatureRepository> _logger;
         private readonly IGrowthBookFeatureCache _cache;
         private readonly IGrowthBookFeatureRefreshWorker _backgroundRefreshWorker;
@@ -35,14 +33,59 @@ namespace GrowthBook.Api
         }
 
         /// <inheritdoc/>
+        public async Task<FeaturePayload> GetPayload(GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null)
+        {
+            var features = await GetFeatures(options, cancellationToken);
+
+            return Pair(features);
+        }
+
+        /// <inheritdoc/>
+        public async Task<FeaturePayload> GetPayloadWithContext(Context context, GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null)
+        {
+            return await EvaluateRemotely(context, options, cancellationToken);
+        }
+
+        /// <summary>
+        /// Pairs features with the worker's definitions, and only when the worker is the one that
+        /// published those features.
+        /// </summary>
         /// <remarks>
-        /// Remote evaluation returns its own definitions and never populates the cache, so its results take
-        /// precedence when it is the mode in use; otherwise the definitions come from whatever the refresh worker
-        /// last fetched. A worker that doesn't implement the interface simply supplies none.
+        /// A cache supplied by the caller can be shared with other processes, which refresh it with
+        /// payloads this worker never saw and whose definitions it therefore does not have. Handing back
+        /// the worker's own definitions beside somebody else's features would bucket users on weights
+        /// belonging to a variation list that is not the one being served, so the pair is dropped and the
+        /// rules fall back to their own marginal weights.
         /// </remarks>
-        public FeaturePayload Payload =>
-            Volatile.Read(ref _remotelyEvaluatedPayload)
-            ?? (_backgroundRefreshWorker as IGrowthBookContextualBanditSource)?.Payload;
+        private FeaturePayload Pair(IDictionary<string, Feature> features)
+        {
+            var workerPayload = (_backgroundRefreshWorker as IFeaturePayloadSource)?.Payload;
+
+            if (workerPayload?.ContextualBandits is null || !DescribeTheSameFeatures(workerPayload.Features, features))
+            {
+                return new FeaturePayload(features, null);
+            }
+
+            return new FeaturePayload(features, workerPayload.ContextualBandits);
+        }
+
+        private static bool DescribeTheSameFeatures(IDictionary<string, Feature> published, IDictionary<string, Feature> served)
+        {
+            if (published is null || served is null || published.Count != served.Count)
+            {
+                return false;
+            }
+
+            foreach (var key in served.Keys)
+            {
+                if (!published.ContainsKey(key))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
 
         /// <inheritdoc/>
         public void Cancel() => _backgroundRefreshWorker.Cancel();
@@ -132,6 +175,17 @@ namespace GrowthBook.Api
  /// <inheritdoc/>
         public async Task<IDictionary<string, Feature>> GetFeaturesWithContext(Context context, GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null)
         {
+            var payload = await EvaluateRemotely(context, options, cancellationToken);
+
+            return payload.Features;
+        }
+
+        /// <summary>
+        /// Performs the remote evaluation and returns its features together with the definitions the same
+        /// response carried.
+        /// </summary>
+        private async Task<FeaturePayload> EvaluateRemotely(Context context, GrowthBookRetrievalOptions options, CancellationToken? cancellationToken)
+        {
             if (context == null)
                 throw new ArgumentNullException(nameof(context));
 
@@ -139,14 +193,14 @@ namespace GrowthBook.Api
             if (!context.RemoteEval)
             {
                 _logger.LogDebug("Remote evaluation is disabled, using regular feature retrieval");
-                return await GetFeatures(options, cancellationToken);
+                return Pair(await GetFeatures(options, cancellationToken));
             }
 
             // Validate remote evaluation configuration
             if (_remoteEvaluationService == null)
             {
                 _logger.LogWarning("Remote evaluation is enabled but IRemoteEvaluationService is not available, falling back to regular feature retrieval");
-                return await GetFeatures(options, cancellationToken);
+                return Pair(await GetFeatures(options, cancellationToken));
             }
 
             try
@@ -178,9 +232,7 @@ namespace GrowthBook.Api
                 {
                     _logger.LogInformation("Remote evaluation successful, received {Count} features", response.Features.Count);
 
-                    Volatile.Write(ref _remotelyEvaluatedPayload, new FeaturePayload(response.Features, response.ContextualBandits));
-
-                    return response.Features;
+                    return new FeaturePayload(response.Features, response.ContextualBandits);
                 }
                 else
                 {

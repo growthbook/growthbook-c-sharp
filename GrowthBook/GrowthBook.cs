@@ -719,27 +719,32 @@ namespace GrowthBook
             try
             {
                 _logger.LogInformation("Loading features from the repository");
-                IDictionary<string, Feature> features;
+
+                FeaturePayload payload;
 
                 // Use remote evaluation if enabled and configured
                 if (_context.RemoteEval && RemoteEvaluationUtilities.IsValidForRemoteEvaluation(_context))
                 {
                     var currentContext = CreateCurrentContext();
-                    features = await _featureRepository.GetFeaturesWithContext(currentContext, options, cancellationToken);
+                    payload = await RetrievePayload(
+                        source => source.GetPayloadWithContext(currentContext, options, cancellationToken),
+                        () => _featureRepository.GetFeaturesWithContext(currentContext, options, cancellationToken));
                 }
                 else
                 {
-                    features = await _featureRepository.GetFeatures(options, cancellationToken);
+                    payload = await RetrievePayload(
+                        source => source.GetPayload(options, cancellationToken),
+                        () => _featureRepository.GetFeatures(options, cancellationToken));
                 }
 
-                if (features == null)
+                if (payload?.Features == null)
                 {
                     var errorMessage = "Feature repository returned null - no features were loaded";
                     _logger.LogWarning(errorMessage);
                     return FeatureLoadResult.CreateFailure(errorMessage);
                 }
 
-                AdoptPayload(features);
+                AdoptPayload(payload);
 
                 var featureCount = Features.Count;
 
@@ -781,13 +786,34 @@ namespace GrowthBook
         /// </para>
         /// </remarks>
         /// <param name="features">The features the repository returned, used when it publishes no payload.</param>
-        private void AdoptPayload(IDictionary<string, Feature> features)
+        private void AdoptPayload(FeaturePayload payload)
         {
-            var payload = (_featureRepository as IGrowthBookContextualBanditSource)?.Payload;
+            Features = new Dictionary<string, Feature>(payload.Features);
 
-            Features = payload?.Features ?? features;
+            Volatile.Write(ref _payloadContextualBandits, payload.ContextualBandits);
+        }
 
-            Volatile.Write(ref _payloadContextualBandits, payload?.ContextualBandits);
+        /// <summary>
+        /// Retrieves the features and the definitions they were published with in one call, falling back
+        /// to features alone for a repository that does not supply the pair.
+        /// </summary>
+        private async Task<FeaturePayload> RetrievePayload(
+            Func<IGrowthBookContextualBanditSource, Task<FeaturePayload>> fromSource,
+            Func<Task<IDictionary<string, Feature>>> fromRepository)
+        {
+            if (_featureRepository is IGrowthBookContextualBanditSource source)
+            {
+                return await fromSource(source);
+            }
+
+            var features = await fromRepository();
+
+            if (features is null)
+            {
+                return null;
+            }
+
+            return new FeaturePayload(features, null);
         }
 
         /// <summary>
@@ -1401,14 +1427,17 @@ namespace GrowthBook
                 _logger?.LogDebug("Triggering remote evaluation due to attribute changes");
 
                 var currentContext = CreateCurrentContext();
-                var features = await _featureRepository.GetFeaturesWithContext(currentContext);
 
-                if (features != null)
+                var payload = await RetrievePayload(
+                    source => source.GetPayloadWithContext(currentContext),
+                    () => _featureRepository.GetFeaturesWithContext(currentContext));
+
+                if (payload?.Features != null)
                 {
                     // The payload that answered this refresh carries its own bandits. Adopting the features
                     // without them would bucket the new rules against whatever the last load happened to leave
                     // behind, or against nothing at all when no load has run.
-                    AdoptPayload(features);
+                    AdoptPayload(payload);
 
                     _logger?.LogDebug("Remote evaluation completed, updated {Count} features", Features.Count);
                 }

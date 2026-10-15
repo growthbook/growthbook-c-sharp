@@ -25,14 +25,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   groups, which are typically lists of user identifiers, so it is personal data. Character counts are logged instead.
 - Added consumption of the contextual bandit payload, so a feature rule referencing a contextual bandit is bucketed
   with the backend-computed weights of whichever segment the user falls into, instead of being skipped.
-  `contextualBandits` and `encryptedContextualBandits` are read from the feature payload on all three delivery paths
-  (polling, server-sent events, remote evaluation), and can also be supplied directly through
+  `contextualBandits` is read from the feature payload on all three delivery paths (polling, server-sent events and
+  remote evaluation), and `encryptedContextualBandits` on the two that decrypt - polling and server-sent events.
+  A remote evaluation response carries its definitions in plain text, and remote mode rejects a `DecryptionKey`
+  outright, so there is no encrypted variant to read there. They can also be supplied directly through
   `Context.ContextualBandits`. `ExperimentResult` reports `LeafId`, `VariationWeights` and `BanditVersion` for a real
   exposure, and nothing for a forced, QA-mode or filtered-out assignment.
-- Added `IGrowthBookContextualBanditSource`, implemented by the built-in repository and refresh worker. It is a
-  separate interface rather than new members on `IGrowthBookFeatureRepository` because this library targets
-  netstandard2.0, which has no default interface members, so extending the existing one would break every consumer
-  that implements it. A custom repository keeps working and supplies no bandits until it opts in.
+- Added `IGrowthBookContextualBanditSource`, implemented by the built-in repository, and `IFeaturePayloadSource`,
+  implemented by the refresh worker. They are separate interfaces rather than new members on
+  `IGrowthBookFeatureRepository` because this library targets netstandard2.0, which has no default interface
+  members, so extending the existing one would break every consumer that implements it. A custom repository keeps
+  working and supplies no bandits until it opts in. The features and the definitions are returned from one call
+  rather than read from a property afterwards, so that a repository shared between users cannot hand one caller
+  the response evaluated for another.
 - Updated the vendored spec suite to 0.8.0 and wired its new `contextualBandit` section (35 cases). The nine
   condition cases this fork had added to that file moved to `custom-cases.json`, where a future spec bump can't
   delete them.
