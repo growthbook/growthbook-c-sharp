@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   where those logs are retained or shipped elsewhere.
 - Stopped logging feature payload bodies, both the raw API response and the decrypted one. A payload carries saved
   groups, which are typically lists of user identifiers, so it is personal data. Character counts are logged instead.
+- Fixed forced features never reaching the remote evaluation request, so the server evaluated as though nothing was
+  forced. **Breaking:** `Context.ForcedFeatures` is now `IDictionary<string, object>` and holds the values to force
+  features to, matching the TypeScript SDK's `forcedFeatureValues`. It was typed as `IDictionary<string, Feature>`,
+  which would have serialized feature definitions into a payload that expects values.
 
 ## [1.2.0]
 
