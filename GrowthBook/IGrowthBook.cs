@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Newtonsoft.Json.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -80,6 +81,23 @@ namespace GrowthBook
         /// <param name="cancellationToken">The cancellation token for this operation.</param>
         /// <returns>Value of a feature cast to the specified type.</returns>
         Task<T> GetFeatureValueAsync<T>(string key, T fallback, CancellationToken? cancellationToken = null);
+
+        /// <summary>
+        /// Returns the payload as this instance holds it: <c>features</c> (or <c>encryptedFeatures</c> when
+        /// the payload arrived encrypted, left as received), <c>experiments</c>, and <c>savedGroups</c> when
+        /// one was supplied. Never null; the feature map is empty before the first load. A fresh object
+        /// every call, so mutating it does not affect the instance.
+        /// </summary>
+        JObject GetPayload();
+
+        /// <summary>
+        /// Returns the same payload as <see cref="GetPayload"/> with <c>encryptedFeatures</c> replaced by the
+        /// decrypted <c>features</c>. Identical to <see cref="GetPayload"/> when nothing was encrypted.
+        /// </summary>
+        /// <exception cref="Exceptions.DecryptionException">
+        /// The payload could not be decrypted with the configured key. The message never contains the key.
+        /// </exception>
+        JObject GetDecryptedPayload();
 
         /// <summary>
         /// Returns a map of the latest results indexed by experiment key.

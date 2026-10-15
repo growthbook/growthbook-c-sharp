@@ -412,4 +412,28 @@ public class ContextEncryptedFeaturesTests
             }
         }
     }
+
+    /// <summary>
+    /// The outer message is sanitised, but the parser's own error names what it was reading - which
+    /// is the decrypted payload. Carried as InnerException it reaches ToString(), so an application
+    /// logging the failure logs the content the encryption was there to protect.
+    /// </summary>
+    [Fact]
+    public void AFailureToParseTheDecryptedPayloadDoesNotCarryItsContent()
+    {
+        const string Secret = "super-secret-flag-name";
+
+        Action construct = () => new GrowthBook(new Context
+        {
+            Attributes = JObject.FromObject(new { id = "user-1" }),
+            EncryptedFeatures = Encrypt($"{{\"{Secret}\": this is not valid json }}"),
+            DecryptionKey = DecryptionKey
+        });
+
+        var thrown = construct.Should().Throw<DecryptionException>().Which;
+
+        thrown.ToString().Should().NotContain(Secret,
+            "the whole exception is what gets logged, so no part of it may carry decrypted content");
+        thrown.ToString().Should().NotContain(DecryptionKey, "and the key is not in it either");
+    }
 }
