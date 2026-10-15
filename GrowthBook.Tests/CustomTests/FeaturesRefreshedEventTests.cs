@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
+using Newtonsoft.Json.Linq;
 using NSubstitute;
 using Xunit;
 
@@ -241,6 +242,141 @@ namespace GrowthBook.Tests.CustomTests
             firstHeardAfterTheThrow.Should().BeTrue("a subscriber after the faulty one still has to be called");
             secondHeard.Should().BeTrue("and so does an instance that merely shares the repository");
             second.Features.Should().ContainKey("flag", "its features must still be updated");
+        }
+
+
+        /// <summary>
+        /// Subscribers are invoked one at a time so that one cannot silence the others, which lets a
+        /// later refresh overtake an earlier one partway through its round. Two instances sharing a
+        /// repository must still end on the same payload, so an older refresh is recognised by where it
+        /// falls in the fetch order rather than by when it happens to arrive.
+        /// </summary>
+        [Fact]
+        public void ARefreshThatArrivesAfterANewerOneIsNotInstalled()
+        {
+            var repository = Substitute.For<IGrowthBookFeatureRepository>();
+            var older = new Dictionary<string, Feature> { { "older-flag", new Feature { DefaultValue = true } } };
+            var newer = new Dictionary<string, Feature> { { "newer-flag", new Feature { DefaultValue = true } } };
+
+            using var gb = new GrowthBook(new Context { FeatureRepository = repository });
+
+            repository.FeaturesRefreshed += Raise.EventWith(
+                new FeaturesRefreshedEventArgs(wasModified: true, FeatureRefreshSource.Http,
+                    new Dictionary<string, Feature>(newer), DateTimeOffset.UtcNow, sequence: 2));
+
+            gb.Features.Should().ContainKey("newer-flag");
+
+            // The earlier fetch finishes its round late and reaches this instance after the later one.
+            repository.FeaturesRefreshed += Raise.EventWith(
+                new FeaturesRefreshedEventArgs(wasModified: true, FeatureRefreshSource.Http,
+                    new Dictionary<string, Feature>(older), DateTimeOffset.UtcNow, sequence: 1));
+
+            gb.Features.Should().ContainKey("newer-flag",
+                "a refresh fetched earlier is older however late it arrives");
+            gb.Features.Should().NotContainKey("older-flag");
+        }
+
+        [Fact]
+        public void AnUnnumberedRefreshIsStillInstalled()
+        {
+            var repository = Substitute.For<IGrowthBookFeatureRepository>();
+            var features = new Dictionary<string, Feature> { { "flag", new Feature { DefaultValue = true } } };
+
+            using var gb = new GrowthBook(new Context { FeatureRepository = repository });
+
+            // A source that predates numbering leaves it at zero; what cannot be ordered is taken as it
+            // arrives, rather than silently dropped.
+            repository.FeaturesRefreshed += Raise.EventWith(
+                new FeaturesRefreshedEventArgs(wasModified: true, FeatureRefreshSource.Http,
+                    new Dictionary<string, Feature>(features), DateTimeOffset.UtcNow));
+
+            gb.Features.Should().ContainKey("flag");
+        }
+
+        /// <summary>
+        /// A rule's prerequisites are looked up one after another while the rule is being evaluated.
+        /// Reading the feature map afresh at each lookup let a refresh land between them, so one
+        /// evaluation answered from two payloads - this rule against the next payload's values.
+        /// </summary>
+        [Fact]
+        public void ARefreshDuringAnEvaluationDoesNotSplitItAcrossTwoPayloads()
+        {
+            var gated = new Feature
+            {
+                DefaultValue = "default",
+                Rules = new List<FeatureRule>
+                {
+                    new FeatureRule
+                    {
+                        Force = "forced",
+                        ParentConditions = new List<ParentCondition>
+                        {
+                            new ParentCondition { Id = "first-gate", Condition = JObject.Parse(@"{ ""value"": true }") },
+                            new ParentCondition { Id = "second-gate", Condition = JObject.Parse(@"{ ""value"": true }") }
+                        }
+                    }
+                }
+            };
+
+            // The first gate runs an experiment, which is what gives the test a hook that fires in the
+            // middle of the evaluation - between the two prerequisite lookups.
+            var firstGate = new Feature
+            {
+                DefaultValue = false,
+                Rules = new List<FeatureRule>
+                {
+                    new FeatureRule
+                    {
+                        Variations = new JArray(true, true),
+                        Coverage = 1d,
+                        Meta = new List<VariationMeta> { new VariationMeta { Key = "0" }, new VariationMeta { Key = "1" } }
+                    }
+                }
+            };
+
+            var before = new Dictionary<string, Feature>
+            {
+                ["gated"] = gated,
+                ["first-gate"] = firstGate,
+                ["second-gate"] = new Feature { DefaultValue = true }
+            };
+
+            var after = new Dictionary<string, Feature>
+            {
+                ["gated"] = gated,
+                ["first-gate"] = firstGate,
+                ["second-gate"] = new Feature { DefaultValue = false }
+            };
+
+            var swapped = false;
+            GrowthBook gb = null;
+
+            gb = new GrowthBook(new Context
+            {
+                Attributes = JObject.FromObject(new { id = "user-1" }),
+                Features = before,
+                TrackingCallback = (_, _) =>
+                {
+                    if (swapped)
+                    {
+                        return;
+                    }
+
+                    swapped = true;
+
+                    // Stands in for a background refresh landing mid-evaluation.
+                    gb.Features = after;
+                }
+            });
+
+            using var instance = gb;
+
+            var result = gb.EvalFeature("gated");
+
+            swapped.Should().BeTrue("the hook has to have fired, or this test proves nothing");
+
+            result.Value.ToString().Should().Be("forced",
+                "both prerequisites belong to the payload the evaluation started from, so a swap between them must not decide the outcome");
         }
 
         [Fact]
