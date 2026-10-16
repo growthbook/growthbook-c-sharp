@@ -45,10 +45,12 @@ namespace GrowthBook.Api
             // first initialized, it should be pre-expired so that this is automatically hit
             // in order to populate the initial cache values.
 
-            if (_cache.IsCacheExpired || options?.ForceRefresh == true)
+            var isCacheExpired = _cache.IsCacheExpired;
+
+            if (isCacheExpired || options?.ForceRefresh == true)
             {
                 _logger.LogInformation("Cache has expired or option to force refresh was set, refreshing the cache from the API");
-                _logger.LogDebug("Cache expired: \'{CacheIsCacheExpired}\' and option to force refresh: \'{OptionsForceRefresh}\'", _cache.IsCacheExpired, options?.ForceRefresh);
+                _logger.LogDebug("Cache expired: \'{CacheIsCacheExpired}\' and option to force refresh: \'{OptionsForceRefresh}\'", isCacheExpired, options?.ForceRefresh);
 
                 // Use TaskFactory.StartNew to decouple from the current SynchronizationContext
                 // This prevents threading issues in .NET Framework MVC when the original HttpContext
@@ -60,10 +62,12 @@ namespace GrowthBook.Api
                 // that has been officially refreshed to proceed (otherwise the caller gets nothing up front
                 // and has no way of determining when to check back). The other way to wait is if they explicitly
                 // have noted that this is something they'd like to do.
-                if (_cache.FeatureCount == 0 || options?.WaitForCompletion == true)
+                var featureCount = _cache.FeatureCount;
+
+                if (featureCount == 0 || options?.WaitForCompletion == true)
                 {
                     _logger.LogInformation("Either cache currently has no features or the option to wait for completion was set, waiting for cache to refresh");
-                    _logger.LogDebug("Feature count: '{CacheFeatureCount}' and option to wait for completion: '{OptionsWaitForCompletion}'", _cache.FeatureCount, options?.WaitForCompletion);
+                    _logger.LogDebug("Feature count: '{CacheFeatureCount}' and option to wait for completion: '{OptionsWaitForCompletion}'", featureCount, options?.WaitForCompletion);
                     return await refreshTask;
                 }
                 else
