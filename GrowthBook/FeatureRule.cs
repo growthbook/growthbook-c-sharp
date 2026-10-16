@@ -128,6 +128,21 @@ namespace GrowthBook
         public IList<TrackData> Tracks { get; set; }
 
         /// <summary>
+        /// Key of the <see cref="ContextualBanditDefinition"/> in the payload that supplies this rule's weights.
+        /// </summary>
+        public string ContextualBanditRef { get; set; }
+
+        /// <summary>
+        /// Variations of a contextual bandit rule.
+        /// </summary>
+        /// <remarks>
+        /// Bandit rules ship their variations here rather than in <see cref="Variations"/> so that an SDK without
+        /// bandit support skips the rule instead of running it with weights it doesn't understand. This one is read
+        /// first when present, whether or not <see cref="ContextualBanditRef"/> resolves to anything.
+        /// </remarks>
+        public JArray ContextualVariations { get; set; }
+
+        /// <summary>
         /// Returns the feature variations cast to the specified type.
         /// </summary>
         /// <typeparam name="T"></typeparam>

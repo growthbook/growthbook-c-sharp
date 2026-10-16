@@ -99,7 +99,7 @@ namespace GrowthBook.Api
                                 _logger.LogInformation("Remote evaluation successful, received {Count} features",
                                     featuresResponse?.Count ?? 0);
 
-                                return RemoteEvaluationResponse.CreateSuccess(featuresResponse);
+                                return RemoteEvaluationResponse.CreateSuccess(featuresResponse, apiResponse.DateUpdated, apiResponse.ContextualBandits);
                             }
                             else
                             {
