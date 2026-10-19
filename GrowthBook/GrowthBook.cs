@@ -419,11 +419,11 @@ namespace GrowthBook
 
                 _stickyBucketAssignmentDocs.TryGetValue(formattedAttribute, out var existingDocument);
 
-                existingDocument = Combine(storedDocument, existingDocument, attributeName, attributeValue);
+                var mergeBase = Combine(storedDocument, existingDocument, attributeName, attributeValue);
 
-                var merged = ExperimentUtilities.GenerateStickyBucketAssignment(existingDocument, attributeName, attributeValue, assignments);
+                var merged = ExperimentUtilities.GenerateStickyBucketAssignment(mergeBase, attributeName, attributeValue, assignments);
 
-                if (merged.IsChanged)
+                if (!HoldsTheSameAssignments(existingDocument, merged.Document))
                 {
                     PublishStickyBucketAssignment(merged.Document);
                 }
@@ -450,7 +450,35 @@ namespace GrowthBook
                 return null;
             }
         }
-    
+    /// <summary>
+        /// Whether a doc already carries exactly the assignments another one does.
+        /// </summary>
+        private static bool HoldsTheSameAssignments(StickyAssignmentsDocument held, StickyAssignmentsDocument merged)
+        {
+            var heldAssignments = held?.Assignments;
+            var mergedAssignments = merged?.Assignments;
+
+            if (heldAssignments is null || mergedAssignments is null)
+            {
+                return heldAssignments is null && mergedAssignments is null;
+            }
+
+            if (heldAssignments.Count != mergedAssignments.Count)
+            {
+                return false;
+            }
+
+            foreach (var assignment in mergedAssignments)
+            {
+                if (!heldAssignments.TryGetValue(assignment.Key, out var value) || value != assignment.Value)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
         private static StickyAssignmentsDocument Combine(StickyAssignmentsDocument storedDocument, StickyAssignmentsDocument inMemoryDocument, string attributeName, string attributeValue)
         {
             if (storedDocument?.Assignments is null || storedDocument.Assignments.Count == 0)
