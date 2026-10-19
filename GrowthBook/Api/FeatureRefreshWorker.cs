@@ -39,6 +39,12 @@ namespace GrowthBook.Api
 
         public FeatureRefreshWorker(ILogger<FeatureRefreshWorker> logger, IHttpClientFactory httpClientFactory, GrowthBookConfigurationOptions config, IGrowthBookFeatureCache cache)
         {
+            HeaderAndStreamingHostValidation.Validate(
+                config.ApiHostRequestHeaders,
+                config.StreamingHostRequestHeaders,
+                config.StreamingHost,
+                nameof(config));
+
             _logger = logger;
             _httpClientFactory = httpClientFactory;
             _config = config;

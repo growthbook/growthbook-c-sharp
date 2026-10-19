@@ -1140,13 +1140,6 @@ namespace GrowthBook
             }
         }
 
-        private static readonly HashSet<string> ReservedHeaderNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "User-Agent",
-            "If-None-Match",
-            "Cache-Control"
-        };
-
         /// <summary>
         /// Validates that ApiHostRequestHeaders/StreamingHostRequestHeaders don't contain header names
         /// the SDK manages itself, and that StreamingHost (if set) is a well-formed http/https URL.
@@ -1154,32 +1147,11 @@ namespace GrowthBook
         /// <param name="context">The context to validate</param>
         private static void ValidateHeaderAndStreamingConfiguration(Context context)
         {
-            if (HasReservedHeader(context.ApiHostRequestHeaders, out string reservedName))
-            {
-                throw new ArgumentException($"'{reservedName}' is a reserved header managed by the SDK and cannot be set via ApiHostRequestHeaders", nameof(context));
-            }
-
-            if (HasReservedHeader(context.StreamingHostRequestHeaders, out reservedName))
-            {
-                throw new ArgumentException($"'{reservedName}' is a reserved header managed by the SDK and cannot be set via StreamingHostRequestHeaders", nameof(context));
-            }
-
-            if (!string.IsNullOrWhiteSpace(context.StreamingHost) && !IsValidHttpUrl(context.StreamingHost))
-            {
-                throw new ArgumentException($"StreamingHost '{context.StreamingHost}' is not a valid absolute http or https URL", nameof(context));
-            }
-        }
-
-        private static bool HasReservedHeader(IDictionary<string, string> headers, out string reservedName)
-        {
-            reservedName = headers?.Keys.FirstOrDefault(ReservedHeaderNames.Contains);
-            return reservedName != null;
-        }
-
-        private static bool IsValidHttpUrl(string value)
-        {
-            return Uri.TryCreate(value, UriKind.Absolute, out Uri uri)
-                && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
+            HeaderAndStreamingHostValidation.Validate(
+                context.ApiHostRequestHeaders,
+                context.StreamingHostRequestHeaders,
+                context.StreamingHost,
+                nameof(context));
         }
 
         /// <summary>
