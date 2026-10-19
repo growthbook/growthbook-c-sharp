@@ -480,4 +480,41 @@ public class StickyBucketAutoRefreshTests : UnitTest
             "the second instance merged against a document loaded before the first instance saved, so its own save must not drop what the first one wrote");
         stored.Assignments.Keys.Should().Contain($"{SecondFeature}__0");
     }
+
+    /// <summary>
+    /// Two instances starting before either saves, both landing on the same variation. The second reads
+    /// the first's document from the store, so the merge finds nothing to write - but this instance's own
+    /// copy still has no assignment in it, and every later evaluation here re-derives the bucket instead
+    /// of honouring the one that was saved.
+    /// </summary>
+    [Fact]
+    public void AnAssignmentAlreadyInTheStoreIsStillTakenIntoMemory()
+    {
+        const string FeatureName = "shared-feature";
+
+        var service = new DeletableStickyBucketService();
+
+        using var first = new GrowthBook(new Context
+        {
+            Attributes = JObject.FromObject(new { id = "user-1" }),
+            Features = new Dictionary<string, Feature> { [FeatureName] = CreateExperimentFeature() },
+            StickyBucketService = service
+        });
+
+        using var second = new GrowthBook(new Context
+        {
+            Attributes = JObject.FromObject(new { id = "user-1" }),
+            Features = new Dictionary<string, Feature> { [FeatureName] = CreateExperimentFeature() },
+            StickyBucketService = service
+        });
+
+        first.EvalFeature(FeatureName);
+
+        // The second instance reaches the same variation, so the store needs no write - but it has to end
+        // up holding the assignment all the same.
+        second.EvalFeature(FeatureName);
+
+        second.EvalFeature(FeatureName).ExperimentResult.StickyBucketUsed.Should().BeTrue(
+            "the choice is saved, so this instance must evaluate from it rather than bucketing afresh");
+    }
 }
