@@ -460,7 +460,17 @@ namespace GrowthBook
             return value.IsNull() ? fallback : value.ToObject<T>();
         }
 
-        /// <inheritdoc />
+        /// <summary>
+        /// Returns the feature definitions currently loaded, keyed by feature key. Empty before the first
+        /// load, never null. The result is a read-only snapshot: it cannot be mutated and does not observe
+        /// a later refresh. Safe to call on a shared instance.
+        /// </summary>
+        /// <remarks>
+        /// Declared on the class rather than on <see cref="IGrowthBook"/>. This library targets
+        /// netstandard2.0, which has no default interface members, so a new member on that interface stops
+        /// every hand-written implementation compiling - a test double or a decorator in a consumer's own
+        /// code. A consumer that needs this reaches for the concrete type.
+        /// </remarks>
         public IReadOnlyDictionary<string, Feature> GetFeatures()
         {
             var features = Features;
@@ -481,7 +491,10 @@ namespace GrowthBook
             return new ReadOnlyDictionary<string, Feature>(snapshot);
         }
 
-        /// <inheritdoc />
+        /// <summary>
+        /// Returns the experiments currently loaded. Empty before the first load, never null. The result
+        /// is a read-only snapshot: it cannot be mutated and does not observe a later refresh.
+        /// </summary>
         public IReadOnlyList<Experiment> GetExperiments()
         {
             var experiments = Experiments;

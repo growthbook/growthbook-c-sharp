@@ -124,13 +124,21 @@ public class ReadOnlyStateAccessorTests : UnitTest
         growthBook.GetFeatures().Keys.Should().BeEquivalentTo(new[] { "only" });
     }
 
+    /// <summary>
+    /// netstandard2.0 has no default interface members, so a member added to <see cref="IGrowthBook"/>
+    /// stops every hand-written implementation compiling - a test double or a decorator in a consumer's
+    /// own code. These are declared on the class instead, and this pins that they stay there.
+    /// </summary>
     [Fact]
-    public void TheyAreReachableThroughTheInterface()
+    public void TheyAreNotDeclaredOnTheInterfaceConsumersImplement()
     {
-        using IGrowthBook growthBook = NewInstance();
+        typeof(IGrowthBook).GetMethod(nameof(GrowthBook.GetFeatures)).Should().BeNull(
+            "an existing implementation of IGrowthBook must keep compiling without being rewritten");
 
-        growthBook.GetFeatures().Should().HaveCount(2, "a DI-injected consumer only sees IGrowthBook");
-        growthBook.GetExperiments().Should().HaveCount(1);
+        typeof(IGrowthBook).GetMethod(nameof(GrowthBook.GetExperiments)).Should().BeNull();
+
+        typeof(GrowthBook).GetMethod(nameof(GrowthBook.GetFeatures)).Should().NotBeNull(
+            "but the concrete type still offers them");
     }
 
     /// <summary>

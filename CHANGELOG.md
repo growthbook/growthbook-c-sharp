@@ -23,14 +23,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   where those logs are retained or shipped elsewhere.
 - Stopped logging feature payload bodies, both the raw API response and the decrypted one. A payload carries saved
   groups, which are typically lists of user identifiers, so it is personal data. Character counts are logged instead.
-- Added `GetFeatures()` and `GetExperiments()` on `IGrowthBook`, returning read-only snapshots of the
-  loaded state for debug, health and export use. Empty rather than null before the first load. The
-  snapshots are deep copies, so editing what one holds cannot change what the instance evaluates, and
-  they keep the key comparer the caller chose. The mutable `Features` and `Experiments` properties are
-  unchanged.
-- **Breaking for implementors of `IGrowthBook`.** The target is `netstandard2.0`, which has no default
-  interface members, so a hand-written test double or wrapper has to implement the two new methods
-  before it will compile. Callers holding the interface are unaffected.
+- Added `GetFeatures()` and `GetExperiments()` on the `GrowthBook` class, returning read-only snapshots
+  of the loaded state for debug, health and export use. Empty rather than null before the first load.
+  The snapshots are deep copies, so editing what one holds cannot change what the instance evaluates,
+  and they keep the key comparer the caller chose. The mutable `Features` and `Experiments` properties
+  are unchanged.
+- They are deliberately not on `IGrowthBook`. The target is `netstandard2.0`, which has no default
+  interface members, so adding them there would stop every hand-written test double or wrapper
+  compiling until it implemented both. Nothing about this release is breaking; a consumer that needs
+  the snapshots reaches for the concrete type.
 
 ## [1.2.0]
 
