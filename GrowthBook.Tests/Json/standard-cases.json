@@ -7881,6 +7881,249 @@
             0,
             true,
             true
+        ],
+        [
+            "user at a range end - product rounded before the sum",
+            {
+                "attributes": {
+                    "id": "user-3436"
+                }
+            },
+            {
+                "key": "exp",
+                "seed": "bucket-range-rounding",
+                "hashVersion": 2,
+                "coverage": 0.1,
+                "variations": [
+                    "v0",
+                    "v1",
+                    "v2",
+                    "v3",
+                    "v4"
+                ],
+                "weights": [
+                    0.2,
+                    0.2,
+                    0.2,
+                    0.2,
+                    0.2
+                ]
+            },
+            "v1",
+            true,
+            true
+        ],
+        [
+            "range end excludes the user - 5 equal, coverage 0.72, hash v2",
+            {
+                "attributes": {
+                    "id": "user-1177"
+                }
+            },
+            {
+                "key": "exp",
+                "seed": "bucket-range-rounding",
+                "hashVersion": 2,
+                "coverage": 0.72,
+                "variations": [
+                    "v0",
+                    "v1",
+                    "v2",
+                    "v3",
+                    "v4"
+                ],
+                "weights": [
+                    0.2,
+                    0.2,
+                    0.2,
+                    0.2,
+                    0.2
+                ]
+            },
+            "v0",
+            false,
+            false
+        ],
+        [
+            "range end includes the user - 10/90, coverage 0.01, hash v2",
+            {
+                "attributes": {
+                    "id": "user-427"
+                }
+            },
+            {
+                "key": "exp",
+                "seed": "bucket-range-rounding",
+                "hashVersion": 2,
+                "coverage": 0.01,
+                "variations": [
+                    "v0",
+                    "v1"
+                ],
+                "weights": [
+                    0.1,
+                    0.9
+                ]
+            },
+            "v1",
+            true,
+            true
+        ],
+        [
+            "range end includes the user - 30/70, coverage 0.74, hash v2",
+            {
+                "attributes": {
+                    "id": "user-68525"
+                }
+            },
+            {
+                "key": "exp",
+                "seed": "bucket-range-rounding",
+                "hashVersion": 2,
+                "coverage": 0.74,
+                "variations": [
+                    "v0",
+                    "v1"
+                ],
+                "weights": [
+                    0.3,
+                    0.7
+                ]
+            },
+            "v1",
+            true,
+            true
+        ],
+        [
+            "range end excludes the user - 10/20/30/40, coverage 0.36, hash v2",
+            {
+                "attributes": {
+                    "id": "user-866"
+                }
+            },
+            {
+                "key": "exp",
+                "seed": "bucket-range-rounding",
+                "hashVersion": 2,
+                "coverage": 0.36,
+                "variations": [
+                    "v0",
+                    "v1",
+                    "v2",
+                    "v3"
+                ],
+                "weights": [
+                    0.1,
+                    0.2,
+                    0.3,
+                    0.4
+                ]
+            },
+            "v0",
+            false,
+            false
+        ],
+        [
+            "range end includes the user - 20/30/50, coverage 0.29, hash v1",
+            {
+                "attributes": {
+                    "id": "user-74"
+                }
+            },
+            {
+                "key": "exp",
+                "seed": "bucket-range-rounding",
+                "hashVersion": 1,
+                "coverage": 0.29,
+                "variations": [
+                    "v0",
+                    "v1",
+                    "v2"
+                ],
+                "weights": [
+                    0.2,
+                    0.3,
+                    0.5
+                ]
+            },
+            "v1",
+            true,
+            true
+        ],
+        [
+            "range end excludes the user - 20/30/50, coverage 0.48, hash v1",
+            {
+                "attributes": {
+                    "id": "user-549"
+                }
+            },
+            {
+                "key": "exp",
+                "seed": "bucket-range-rounding",
+                "hashVersion": 1,
+                "coverage": 0.48,
+                "variations": [
+                    "v0",
+                    "v1",
+                    "v2"
+                ],
+                "weights": [
+                    0.2,
+                    0.3,
+                    0.5
+                ]
+            },
+            "v0",
+            false,
+            false
+        ],
+        [
+            "PROBE equal weights hash 0.2",
+            {
+                "attributes": {
+                    "id": "user-77"
+                }
+            },
+            {
+                "key": "exp",
+                "seed": "eqw",
+                "hashVersion": 2,
+                "coverage": 1,
+                "variations": [
+                    "v0",
+                    "v1",
+                    "v2",
+                    "v3",
+                    "v4"
+                ]
+            },
+            "v1",
+            true,
+            true
+        ],
+        [
+            "PROBE equal weights cov 0.5 hash 0.1",
+            {
+                "attributes": {
+                    "id": "user-2062"
+                }
+            },
+            {
+                "key": "exp",
+                "seed": "eqw",
+                "hashVersion": 2,
+                "coverage": 0.5,
+                "variations": [
+                    "v0",
+                    "v1",
+                    "v2",
+                    "v3",
+                    "v4"
+                ]
+            },
+            "v0",
+            false,
+            false
         ]
     ],
     "chooseVariation": [
