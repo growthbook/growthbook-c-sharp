@@ -32,7 +32,14 @@ namespace GrowthBook
             new ReadOnlyCollection<Experiment>(new List<Experiment>());
 
         private readonly bool _qaMode;
-        private static readonly JsonSerializer StateSerializer = JsonSerializer.CreateDefault();
+        private static readonly JsonSerializer StateSerializer = JsonSerializer.Create(new JsonSerializerSettings
+        {
+            DefaultValueHandling = DefaultValueHandling.Include,
+            NullValueHandling = NullValueHandling.Include,
+            ObjectCreationHandling = ObjectCreationHandling.Replace,
+            ReferenceLoopHandling = ReferenceLoopHandling.Ignore,
+            TypeNameHandling = TypeNameHandling.None
+        });
         private readonly Dictionary<string, ExperimentAssignment> _assigned;
         private readonly ConcurrentDictionary<string, byte> _tracked;
         private Action<Experiment, ExperimentResult> _trackingCallback;
