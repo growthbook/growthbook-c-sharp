@@ -10,7 +10,7 @@ using Newtonsoft.Json;
 
 namespace GrowthBook.Api
 {
-    public class FileBasedFeatureCache : IGrowthBookFeatureCache
+    public class FileBasedFeatureCache : IGrowthBookFeatureCache, IFeatureCacheExpiration
     {
         private readonly object _cacheLock = new object();
         private IDictionary<string, Feature> _cachedFeatures = new Dictionary<string, Feature>();
@@ -21,12 +21,17 @@ namespace GrowthBook.Api
         private string _customCachePath;
         private const string DefaultFileName = "gb-features";
 
-        public FileBasedFeatureCache(int cacheExpirationInSeconds = 60, string cachePath = null, string cacheKey = null, ILogger<FileBasedFeatureCache> logger = null)
+        public FileBasedFeatureCache(string cacheKey, int cacheExpirationInSeconds = 60, string cachePath = null, ILogger<FileBasedFeatureCache> logger = null)
         {
+            if (string.IsNullOrWhiteSpace(cacheKey))
+            {
+                throw new ArgumentException("A cache key is required so that one client's cached features cannot be served to another. Pass the client key.", nameof(cacheKey));
+            }
+
             _cacheExpirationInSeconds = cacheExpirationInSeconds;
             _nextCacheExpiration = DateTime.UtcNow;
             _customCachePath = cachePath;
-            _cacheKey = string.IsNullOrEmpty(cacheKey) ? "" : ComputeShortHash(cacheKey);
+            _cacheKey = ComputeCacheKeyHash(cacheKey);
             _logger = logger;
             LoadFromFile();
         }
@@ -72,7 +77,8 @@ namespace GrowthBook.Api
             }
         }
 
-        internal Task RefreshExpiration(CancellationToken? cancellationToken = null)
+        /// <inheritdoc/>
+        public Task RefreshExpiration(CancellationToken? cancellationToken = null)
         {
             lock (_cacheLock)
             {
@@ -83,18 +89,53 @@ namespace GrowthBook.Api
 
         public void SetCacheKey(string key)
         {
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                throw new ArgumentException("A cache key is required so that one client's cached features cannot be served to another.", nameof(key));
+            }
+
             lock (_cacheLock)
             {
-                _cacheKey = ComputeShortHash(key ?? "");
+                var hashed = ComputeCacheKeyHash(key);
+
+                if (hashed == _cacheKey)
+                {
+                    return;
+                }
+
+                _cacheKey = hashed;
+
+                ReloadForCurrentLocation();
             }
         }
 
+        /// <summary>
+        /// Points the cache at a different directory, dropping what the previous one held.
+        /// </summary>
         public void SetCustomCachePath(string path)
         {
             lock (_cacheLock)
             {
+                if (path == _customCachePath)
+                {
+                    return;
+                }
+
                 _customCachePath = path;
+
+                ReloadForCurrentLocation();
             }
+        }
+
+        /// <summary>
+        /// Drops what is held and reads whatever the current location has, if anything.
+        /// </summary>
+        private void ReloadForCurrentLocation()
+        {
+            _cachedFeatures = new Dictionary<string, Feature>();
+            _nextCacheExpiration = DateTime.UtcNow;
+
+            LoadFromFile();
         }
 
         public void ClearCache()
@@ -159,7 +200,19 @@ namespace GrowthBook.Api
                 }
 
                 var content = JsonConvert.SerializeObject(_cachedFeatures, Formatting.None);
-                File.WriteAllText(filePath, content);
+
+                var temporaryPath = filePath + ".tmp";
+
+                File.WriteAllText(temporaryPath, content);
+
+                if (File.Exists(filePath))
+                {
+                    File.Replace(temporaryPath, filePath, destinationBackupFileName: null);
+                }
+                else
+                {
+                    File.Move(temporaryPath, filePath);
+                }
 
                 _logger?.LogDebug("Saved {Count} features to cache file", _cachedFeatures.Count);
             }
@@ -180,17 +233,14 @@ namespace GrowthBook.Api
             return Path.Combine(basePath, $"GrowthBook-Cache-{_cacheKey}");
         }
 
-        private static string ComputeShortHash(string input)
+        
+        private static string ComputeCacheKeyHash(string input)
         {
-            if (string.IsNullOrEmpty(input))
-            {
-                return "";
-            }
-
             using (var sha256 = SHA256.Create())
             {
                 var hash = sha256.ComputeHash(Encoding.UTF8.GetBytes(input));
-                return BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant().Substring(0, 8);
+
+                return BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant();
             }
         }
     }
