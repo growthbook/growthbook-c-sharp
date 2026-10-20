@@ -219,6 +219,60 @@ public class SynchronizationContextDeadlockTests
             "and the caller resumes on the context it called from, which is what an awaiting caller expects");
     }
 
+
+    /// <summary>
+    /// Blocking on the async API is the other half of the same problem. The synchronous entry points go
+    /// through Task.Run, which takes the context away before the load starts; the async ones do not, so
+    /// their innermost await is the one whose continuation is queued back to the blocked thread.
+    /// </summary>
+    [Theory]
+    [InlineData("EvalFeatureAsync")]
+    [InlineData("GetFeatureValueAsync")]
+    [InlineData("IsOnAsync")]
+    [InlineData("IsOffAsync")]
+    public void BlockingOnTheAsyncApiUnderAContextStillCompletes(string method)
+    {
+        using var growthBook = CreateGrowthBook();
+
+        var finished = RunUnderSingleThreadedContext(() =>
+        {
+            switch (method)
+            {
+                case "EvalFeatureAsync":
+                    growthBook.EvalFeatureAsync("flag").GetAwaiter().GetResult();
+                    break;
+                case "GetFeatureValueAsync":
+                    growthBook.GetFeatureValueAsync("flag", false).GetAwaiter().GetResult();
+                    break;
+                case "IsOnAsync":
+                    growthBook.IsOnAsync("flag").GetAwaiter().GetResult();
+                    break;
+                default:
+                    growthBook.IsOffAsync("flag").GetAwaiter().GetResult();
+                    break;
+            }
+        });
+
+        finished.Should().BeTrue(
+            $"blocking on {method} from a single-threaded context must not wait on a continuation queued to the thread doing the blocking");
+    }
+
+    [Fact]
+    public void TheAsyncApiStillReturnsTheRightAnswerUnderAContext()
+    {
+        using var growthBook = CreateGrowthBook();
+
+        var on = false;
+
+        var finished = RunUnderSingleThreadedContext(() =>
+        {
+            on = growthBook.IsOnAsync("flag").GetAwaiter().GetResult();
+        });
+
+        finished.Should().BeTrue();
+        on.Should().BeTrue("not deadlocking is only half of it - the load still has to have happened");
+    }
+
     [Fact]
     public void EvaluationStillWorksWithNoSynchronizationContextInstalled()
     {

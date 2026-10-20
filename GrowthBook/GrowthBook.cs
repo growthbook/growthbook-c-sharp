@@ -510,7 +510,17 @@ namespace GrowthBook
                 return;
             }
 
-            await LoadFeatures(cancellationToken: cancellationToken);
+            await LoadFeaturesWithoutCapturingContextAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        private Task LoadFeaturesWithoutCapturingContextAsync(CancellationToken? cancellationToken)
+        {
+            if (SynchronizationContext.Current is null)
+            {
+                return LoadFeatures(cancellationToken: cancellationToken);
+            }
+
+            return Task.Run(() => LoadFeatures(cancellationToken: cancellationToken));
         }
 
         private FeatureResult EvaluateFeature(string featureId, ISet<string> evaluatedFeatures = default)
