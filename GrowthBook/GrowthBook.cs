@@ -58,6 +58,7 @@ namespace GrowthBook
         public GrowthBook(Context context)
         {
             ValidateRemoteEvaluationConfiguration(context);
+            ValidateHeaderAndStreamingConfiguration(context);
 
             _context = context;
             _canFetchFeatures = context.FeatureRepository != null || !string.IsNullOrWhiteSpace(context.ClientKey);
@@ -85,7 +86,10 @@ namespace GrowthBook
                 CacheExpirationInSeconds = 60,
                 ClientKey = context.ClientKey,
                 DecryptionKey = context.DecryptionKey,
-                PreferServerSentEvents = true
+                PreferServerSentEvents = true,
+                ApiHostRequestHeaders = context.ApiHostRequestHeaders,
+                StreamingHost = context.StreamingHost,
+                StreamingHostRequestHeaders = context.StreamingHostRequestHeaders
             };
 
             // If they didn't want to include a logger factory, just create a basic one that will
@@ -1193,6 +1197,20 @@ namespace GrowthBook
         }
 
         /// <summary>
+        /// Validates that ApiHostRequestHeaders/StreamingHostRequestHeaders don't contain header names
+        /// the SDK manages itself, and that StreamingHost (if set) is a well-formed http/https URL.
+        /// </summary>
+        /// <param name="context">The context to validate</param>
+        private static void ValidateHeaderAndStreamingConfiguration(Context context)
+        {
+            HeaderAndStreamingHostValidation.Validate(
+                context.ApiHostRequestHeaders,
+                context.StreamingHostRequestHeaders,
+                context.StreamingHost,
+                nameof(context));
+        }
+
+        /// <summary>
         /// Determines if remote evaluation should be triggered based on attribute or forced variation changes.
         /// </summary>
         /// <param name="newAttributes">The new attributes to check</param>
@@ -1250,6 +1268,7 @@ namespace GrowthBook
             {
                 RemoteEval = _context.RemoteEval,
                 ApiHost = _context.ApiHost,
+                ApiHostRequestHeaders = _context.ApiHostRequestHeaders,
                 ClientKey = _context.ClientKey,
                 CacheKeyAttributes = _context.CacheKeyAttributes,
                 Attributes = Attributes,
