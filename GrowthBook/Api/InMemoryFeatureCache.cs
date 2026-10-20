@@ -11,7 +11,7 @@ namespace GrowthBook.Api
     /// <summary>
     /// Represents a simple in-memory cache for GrowthBook features.
     /// </summary>
-    public class InMemoryFeatureCache : IGrowthBookFeatureCache
+    public class InMemoryFeatureCache : IGrowthBookFeatureCache, IFeatureCacheExpiration
     {
         // We're providing a lock and locking around every operation within this cache
         // because this is an in-memory cache and may be accessed by multiple threads
@@ -76,7 +76,8 @@ namespace GrowthBook.Api
             }
         }
 
-        internal Task RefreshExpiration(CancellationToken? cancellationToken = null)
+        /// <inheritdoc/>
+        public Task RefreshExpiration(CancellationToken? cancellationToken = null)
         {
             lock(_cacheLock)
             {

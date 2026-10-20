@@ -266,6 +266,53 @@ public class FeatureRefreshWorkerTests : ApiUnitTest<FeatureRefreshWorker>
         handler.ReceivedIfNoneMatchHeader.Should().BeFalse("because the public overload has no ETag cache");
     }
 
+
+    /// <summary>
+    /// A 304 says the cached features are still current, so the window has to restart. The worker used
+    /// to ask for that by checking for one concrete cache type, which meant a caller's own cache - the
+    /// whole point of Context.FeatureCache - stayed expired and sent the next load straight back to the
+    /// API, every time, until the features actually changed.
+    /// </summary>
+    [Fact]
+    public async Task ANotModifiedResponseRestartsTheWindowOnAnyCacheThatSupportsIt()
+    {
+        var etag = "test-etag-304-injected";
+        var json = JsonConvert.SerializeObject(new FeaturesResponse { Features = _availableFeatures });
+        var handler = new ETagTestDelegatingHandler(etag, json, returnNotModifiedOnSecondCall: true);
+
+        var cachePath = Path.Combine(Path.GetTempPath(), $"gb-worker-{Guid.NewGuid():N}");
+
+        try
+        {
+            // A real injected cache rather than a substitute, because the defect was a type check that
+            // a substitute would have satisfied or missed for the wrong reason.
+            var cache = new FileBasedFeatureCache("worker-client", cacheExpirationInSeconds: 60, cachePath: cachePath);
+            var worker = new FeatureRefreshWorker(_logger, new ETagHttpClientFactory(handler), _config, cache);
+
+            await worker.RefreshCacheFromApi();
+
+            typeof(FileBasedFeatureCache).Should().BeAssignableTo<IFeatureCacheExpiration>(
+                "the worker finds the capability by interface, not by concrete type");
+
+            // Expire it, then let the server answer 304.
+            cache.SetCacheKey("worker-client-elsewhere");
+            cache.SetCacheKey("worker-client");
+            cache.IsCacheExpired.Should().BeTrue("nothing has been cached for this key since the reset");
+
+            await worker.RefreshCacheFromApi();
+
+            cache.IsCacheExpired.Should().BeFalse(
+                "the server confirmed what is cached is current, so the next load must not go back out");
+        }
+        finally
+        {
+            if (Directory.Exists(cachePath))
+            {
+                Directory.Delete(cachePath, recursive: true);
+            }
+        }
+    }
+
     [Fact]
     public async Task NotModifiedResponseReturnsCachedFeaturesWithoutReplacingCache()
     {
