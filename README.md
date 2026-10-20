@@ -208,15 +208,19 @@ By default, GrowthBook uses an in-memory cache (`InMemoryFeatureCache`). You can
 ### File-based cache (survives app restarts)
 
 ```csharp
+const string clientKey = "YOUR_CLIENT_KEY";
+
+// The key is required: without it every instance sharing a path reads and writes one file, and
+// one client's features would be served to another.
 var cache = new FileBasedFeatureCache(
+    cacheKey: clientKey,
     cacheExpirationInSeconds: 60,
-    cachePath: "/var/cache/myapp",
-    cacheKey: context.ClientKey
+    cachePath: "/var/cache/myapp"
 );
 
 var growthBook = new GrowthBook.GrowthBook(new Context
 {
-    ClientKey = "YOUR_CLIENT_KEY",
+    ClientKey = clientKey,
     FeatureCache = cache
 });
 ```
@@ -227,6 +231,11 @@ var growthBook = new GrowthBook.GrowthBook(new Context
 public class RedisFeatureCache : IGrowthBookFeatureCache
 {
     public bool IsCacheExpired => /* check Redis TTL */;
+
+    // The repository reads this to decide whether a first load has to wait for the API or can be
+    // served from what is already cached, so it is not optional.
+    public int FeatureCount => /* number of features currently cached */;
+
     public Task<IDictionary<string, Feature>> GetFeatures(CancellationToken? cancellationToken = null) => /* read from Redis */;
     public Task RefreshWith(IDictionary<string, Feature> features, CancellationToken? cancellationToken = null) => /* write to Redis */;
 }

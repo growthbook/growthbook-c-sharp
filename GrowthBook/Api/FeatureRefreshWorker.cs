@@ -71,9 +71,9 @@ namespace GrowthBook.Api
 
             if (response.IsNotModified)
             {
-                if (_cache is InMemoryFeatureCache inMemoryCache)
+                if (_cache is IFeatureCacheExpiration expiringCache)
                 {
-                    await inMemoryCache.RefreshExpiration(cancellationToken).ConfigureAwait(false);
+                    await expiringCache.RefreshExpiration(cancellationToken).ConfigureAwait(false);
                 }
 
                 return await _cache.GetFeatures(cancellationToken).ConfigureAwait(false);
