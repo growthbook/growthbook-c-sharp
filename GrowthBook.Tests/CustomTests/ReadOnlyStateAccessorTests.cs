@@ -12,6 +12,7 @@ namespace GrowthBook.Tests.CustomTests;
 /// an exporter - a way to read what the SDK loaded without being handed the collections it evaluates
 /// against.
 /// </summary>
+[Collection("SerializerSettings")]
 public class ReadOnlyStateAccessorTests : UnitTest
 {
     private static Feature Flag(bool value) => new Feature { DefaultValue = value };
@@ -230,5 +231,50 @@ public class ReadOnlyStateAccessorTests : UnitTest
 
         snapshot.ContainsKey("first").Should().BeTrue("the instance accepts this key, so the snapshot has to as well");
         snapshot["FIRST"].Should().NotBeNull();
+    }
+
+    /// <summary>
+    /// A host application can set <see cref="Newtonsoft.Json.JsonConvert.DefaultSettings"/>, and a
+    /// serializer built with <c>CreateDefault</c> inherits them. Under
+    /// <c>DefaultValueHandling.Ignore</c> a copy of an experiment with <c>Active = false</c> loses the
+    /// property, and the new object takes the initializer's <c>true</c> - a disabled experiment reported
+    /// as enabled, with nothing to hint that it happened.
+    /// </summary>
+    /// <remarks>
+    /// In its own collection, because DefaultSettings is global and the rest of the suite runs in
+    /// parallel. Restored in a finally so a failure here cannot leak into another run.
+    /// </remarks>
+    [Fact]
+    public void AHostsOwnSerializerSettingsDoNotChangeWhatASnapshotReports()
+    {
+        var previous = Newtonsoft.Json.JsonConvert.DefaultSettings;
+
+        try
+        {
+            Newtonsoft.Json.JsonConvert.DefaultSettings = () => new Newtonsoft.Json.JsonSerializerSettings
+            {
+                DefaultValueHandling = Newtonsoft.Json.DefaultValueHandling.Ignore
+            };
+
+            using var growthBook = new GrowthBook(new Context
+            {
+                Attributes = JObject.FromObject(new { id = "user-1" }),
+                Experiments = new List<Experiment>
+                {
+                    new Experiment { Key = "disabled-experiment", Active = false, Variations = new JArray(false, true) }
+                }
+            });
+
+            var snapshot = growthBook.GetExperiments();
+
+            snapshot.Should().ContainSingle();
+            snapshot[0].Active.Should().BeFalse(
+                "the snapshot reports what the instance holds, whatever the host configured for its own serialization");
+            snapshot[0].Key.Should().Be("disabled-experiment");
+        }
+        finally
+        {
+            Newtonsoft.Json.JsonConvert.DefaultSettings = previous;
+        }
     }
 }
