@@ -23,9 +23,9 @@ namespace GrowthBook.Converters
             {
                 var array = (JArray)token;
 
-                if (double.TryParse(array[0].ToString(), out var start) && double.TryParse(array[1].ToString(), out var end))
+                if (array.Count == 2 && array[0].Type != JTokenType.Null && array[1].Type != JTokenType.Null)
                 {
-                    return new BucketRange(start, end);
+                    return new BucketRange(array[0].Value<double>(), array[1].Value<double>());
                 }
             }
 
