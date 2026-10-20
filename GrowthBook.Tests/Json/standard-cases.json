@@ -3911,6 +3911,60 @@
             "def",
             99,
             null
+        ],
+        [
+            "bucket-range-rounding",
+            "user-3436",
+            2,
+            0.22
+        ],
+        [
+            "bucket-range-rounding",
+            "user-1177",
+            2,
+            0.344
+        ],
+        [
+            "bucket-range-rounding",
+            "user-427",
+            2,
+            0.109
+        ],
+        [
+            "bucket-range-rounding",
+            "user-68525",
+            2,
+            0.818
+        ],
+        [
+            "bucket-range-rounding",
+            "user-866",
+            2,
+            0.172
+        ],
+        [
+            "bucket-range-rounding",
+            "user-74",
+            1,
+            0.287
+        ],
+        [
+            "bucket-range-rounding",
+            "user-549",
+            1,
+            0.344
+        ],
+        [
+            "rollout-boundary",
+            "user-16298",
+            2,
+            0.5
+        ],
+        [
+            "rollout-boundary",
+            "user-1778",
+            1,
+            0.2
         ]
     ],
     "getBucketRange": [
@@ -6311,6 +6365,66 @@
                 },
                 "ruleId": ""
             }
+        ],
+        [
+            "rollout includes the user at exactly coverage - coverage 0.5, hash v2",
+            {
+                "attributes": {
+                    "id": "user-16298"
+                },
+                "features": {
+                    "rollout": {
+                        "defaultValue": "off",
+                        "rules": [
+                            {
+                                "force": "on",
+                                "coverage": 0.5,
+                                "hashVersion": 2,
+                                "seed": "rollout-boundary",
+                                "hashAttribute": "id"
+                            }
+                        ]
+                    }
+                }
+            },
+            "rollout",
+            {
+                "value": "on",
+                "on": true,
+                "off": false,
+                "source": "force",
+                "ruleId": ""
+            }
+        ],
+        [
+            "rollout includes the user at exactly coverage - coverage 0.2, hash v1",
+            {
+                "attributes": {
+                    "id": "user-1778"
+                },
+                "features": {
+                    "rollout": {
+                        "defaultValue": "off",
+                        "rules": [
+                            {
+                                "force": "on",
+                                "coverage": 0.2,
+                                "hashVersion": 1,
+                                "seed": "rollout-boundary",
+                                "hashAttribute": "id"
+                            }
+                        ]
+                    }
+                }
+            },
+            "rollout",
+            {
+                "value": "on",
+                "on": true,
+                "off": false,
+                "source": "force",
+                "ruleId": ""
+            }
         ]
     ],
     "run": [
@@ -7883,7 +7997,7 @@
             true
         ],
         [
-            "user at a range end - product rounded before the sum",
+            "range end includes the user - 5 equal, coverage 0.1, hash v2",
             {
                 "attributes": {
                     "id": "user-3436"
@@ -8078,7 +8192,7 @@
             false
         ],
         [
-            "PROBE equal weights hash 0.2",
+            "equal weights - user at exactly 0.2, 5 variations, hash v2",
             {
                 "attributes": {
                     "id": "user-77"
@@ -8102,7 +8216,7 @@
             true
         ],
         [
-            "PROBE equal weights cov 0.5 hash 0.1",
+            "equal weights - user at exactly 0.1 with coverage 0.5, 5 variations, hash v2",
             {
                 "attributes": {
                     "id": "user-2062"
