@@ -115,6 +115,101 @@ namespace GrowthBook
         ExperimentResult Run(Experiment experiment);
 
         /// <summary>
+        /// Replaces all user attributes with the ones provided.
+        /// </summary>
+        /// <remarks>
+        /// This is a full replace: any attribute that isn't present in <paramref name="attributes"/> is dropped.
+        /// Use <see cref="MergeAttributes(IDictionary{string, object})"/> to merge into the existing attributes instead.
+        /// </remarks>
+        /// <param name="attributes">New user attributes as IDictionary, or null to clear all attributes.</param>
+        void UpdateAttributes(IDictionary<string, object> attributes);
+
+        /// <summary>
+        /// Replaces all user attributes with the ones provided.
+        /// </summary>
+        /// <remarks>
+        /// This is a full replace: any attribute that isn't present in <paramref name="attributes"/> is dropped.
+        /// Use <see cref="MergeAttributes(object)"/> to merge into the existing attributes instead.
+        /// </remarks>
+        /// <param name="attributes">New user attributes as an anonymous object, or null to clear all attributes.</param>
+        void UpdateAttributes(object attributes);
+
+        /// <summary>
+        /// Merges additional attributes into the existing ones.
+        /// </summary>
+        /// <remarks>
+        /// This is a shallow merge: new keys are added, existing keys are overwritten, and keys that aren't present
+        /// in <paramref name="additionalAttributes"/> are preserved. Passing null is a no-op.
+        /// </remarks>
+        /// <param name="additionalAttributes">Additional attributes to merge.</param>
+        void MergeAttributes(IDictionary<string, object> additionalAttributes);
+
+        /// <summary>
+        /// Merges additional attributes into the existing ones.
+        /// </summary>
+        /// <remarks>
+        /// This is a shallow merge: new keys are added, existing keys are overwritten, and keys that aren't present
+        /// in <paramref name="additionalAttributes"/> are preserved. Passing null is a no-op.
+        /// </remarks>
+        /// <param name="additionalAttributes">Additional attributes to merge as an anonymous object.</param>
+        void MergeAttributes(object additionalAttributes);
+
+        /// <summary>
+        /// Replaces all user attributes with the ones provided and, in remote evaluation mode, waits for the
+        /// features to be evaluated again against them.
+        /// </summary>
+        /// <param name="attributes">New user attributes as IDictionary, or null to clear all attributes.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A <see cref="Task"/> that represents the update and any remote evaluation it triggered.</returns>
+        Task UpdateAttributesAsync(IDictionary<string, object> attributes, CancellationToken? cancellationToken = null);
+
+        /// <summary>
+        /// Replaces all user attributes with the ones provided and, in remote evaluation mode, waits for the
+        /// features to be evaluated again against them.
+        /// </summary>
+        /// <param name="attributes">New user attributes as an anonymous object, or null to clear all attributes.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A <see cref="Task"/> that represents the update and any remote evaluation it triggered.</returns>
+        Task UpdateAttributesAsync(object attributes, CancellationToken? cancellationToken = null);
+
+        /// <summary>
+        /// Merges additional attributes into the existing ones and, in remote evaluation mode, waits for the
+        /// features to be evaluated again against them.
+        /// </summary>
+        /// <param name="additionalAttributes">Additional attributes to merge.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A <see cref="Task"/> that represents the merge and any remote evaluation it triggered.</returns>
+        Task MergeAttributesAsync(IDictionary<string, object> additionalAttributes, CancellationToken? cancellationToken = null);
+
+        /// <summary>
+        /// Merges additional attributes into the existing ones and, in remote evaluation mode, waits for the
+        /// features to be evaluated again against them.
+        /// </summary>
+        /// <param name="additionalAttributes">Additional attributes to merge as an anonymous object.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A <see cref="Task"/> that represents the merge and any remote evaluation it triggered.</returns>
+        Task MergeAttributesAsync(object additionalAttributes, CancellationToken? cancellationToken = null);
+
+        /// <summary>
+        /// Replaces the forced variations with the ones provided.
+        /// </summary>
+        /// <remarks>
+        /// Forced variations are part of the remote evaluation payload, so this starts a remote evaluation in the
+        /// background when the change requires one.
+        /// </remarks>
+        /// <param name="forcedVariations">The experiment keys to force to a specific variation, or null to clear them.</param>
+        void SetForcedVariations(IDictionary<string, int> forcedVariations);
+
+        /// <summary>
+        /// Replaces the forced variations with the ones provided and, in remote evaluation mode, waits for the
+        /// features to be evaluated again against them.
+        /// </summary>
+        /// <param name="forcedVariations">The experiment keys to force to a specific variation, or null to clear them.</param>
+        /// <param name="cancellationToken">Optional cancellation token.</param>
+        /// <returns>A <see cref="Task"/> that represents the update and any remote evaluation it triggered.</returns>
+        Task SetForcedVariationsAsync(IDictionary<string, int> forcedVariations, CancellationToken? cancellationToken = null);
+
+        /// <summary>
         /// Loads all available features from the API and caches them for faster retrieval.
         /// </summary>
         /// <param name="options">An optional set of choices that affect how the features will be loaded.</param>

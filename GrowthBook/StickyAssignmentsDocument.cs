@@ -1,13 +1,16 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using Newtonsoft.Json;
 
 namespace GrowthBook
 {
     public class StickyAssignmentsDocument
     {
+        [JsonIgnore]
         public bool HasValue => AttributeValue != null;
 
+        [JsonIgnore]
         public string FormattedAttribute => $"{AttributeName}||{AttributeValue}";
 
         public string AttributeName { get; set; }
