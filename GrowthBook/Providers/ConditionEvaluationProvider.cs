@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using System.Text.RegularExpressions;
 using GrowthBook.Extensions;
+using GrowthBook.Utilities;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json.Linq;
 
@@ -151,7 +152,28 @@ namespace GrowthBook.Providers
                 }
             }
 
-            return JToken.DeepEquals(conditionValue ?? JValue.CreateNull(), attributeValue ?? JValue.CreateNull());
+            return EvalEquality(conditionValue, attributeValue);
+        }
+
+        /// <summary>
+        /// Compares a plain (non-operator) condition value with JavaScript's coercion rules, as the reference does.
+        /// </summary>
+        private static bool EvalEquality(JToken conditionValue, JToken attributeValue)
+        {
+            switch (conditionValue.Type)
+            {
+                case JTokenType.String:
+                    return JavaScriptValueUtilities.ToJsString(attributeValue) == conditionValue.Value<string>();
+                case JTokenType.Integer:
+                case JTokenType.Float:
+                    return JavaScriptValueUtilities.ToJsNumber(attributeValue) == conditionValue.Value<double>();
+                case JTokenType.Boolean:
+                    return !attributeValue.IsNull() && JavaScriptValueUtilities.IsJsTruthy(attributeValue) == conditionValue.Value<bool>();
+                case JTokenType.Null:
+                    return attributeValue.IsNull();
+                default:
+                    return JavaScriptValueUtilities.ToJsJson(attributeValue) == JavaScriptValueUtilities.ToJsJson(conditionValue);
+            }
         }
 
         /// <summary>
@@ -375,6 +397,11 @@ namespace GrowthBook.Providers
         private bool IsOperatorObject(JObject obj)
         {
             _logger.LogDebug("Checking whether the object is an operator object");
+
+            if (!obj.HasValues)
+            {
+                return false;
+            }
 
             foreach (JProperty property in obj.Properties())
             {
