@@ -367,7 +367,7 @@ namespace GrowthBook
         /// <returns><c>true</c> if the feature is on; otherwise, <c>false</c>.</returns>
         public async Task<bool> IsOnAsync(string key, CancellationToken? cancellationToken = null)
         {
-            await EnsureFeaturesLoaded(cancellationToken);
+            await EnsureFeaturesLoaded(cancellationToken).ConfigureAwait(false);
             var result = EvaluateFeature(key);
             var value = result.Value;
             return !value.IsNull() && value.ToObject<bool>();
@@ -381,7 +381,7 @@ namespace GrowthBook
         /// <returns><c>true</c> if the feature is off; otherwise, <c>false</c>.</returns>
         public async Task<bool> IsOffAsync(string key, CancellationToken? cancellationToken = null)
         {
-            var on = await IsOnAsync(key, cancellationToken);
+            var on = await IsOnAsync(key, cancellationToken).ConfigureAwait(false);
             return !on;
         }
 
@@ -430,12 +430,10 @@ namespace GrowthBook
         /// <inheritdoc />
         public T GetFeatureValue<T>(string key, T fallback, bool alwaysLoadFeatures = false)
         {
-            // Keep the sync API, but avoid deadlocks by doing a quick synchronous spin only if already completed.
             // Prefer callers to use the async APIs.
             if (alwaysLoadFeatures)
             {
-                // Fire-and-wait carefully to avoid deadlocks.
-                LoadFeatures().GetAwaiter().GetResult();
+                LoadFeaturesWithoutCapturingContext();
             }
 
             var result = EvaluateFeature(key);
@@ -447,7 +445,7 @@ namespace GrowthBook
         /// <inheritdoc />
         public async Task<T> GetFeatureValueAsync<T>(string key, T fallback, CancellationToken? cancellationToken = null)
         {
-            var result = await EvalFeatureAsync(key, cancellationToken);
+            var result = await EvalFeatureAsync(key, cancellationToken).ConfigureAwait(false);
             var value = result.Value;
 
             return value.IsNull() ? fallback : value.ToObject<T>();
@@ -464,15 +462,34 @@ namespace GrowthBook
         {
             if (alwaysLoadFeatures)
             {
-                LoadFeatures().GetAwaiter().GetResult();
+                LoadFeaturesWithoutCapturingContext();
             }
 
             return EvaluateFeature(featureId);
         }
 
+        /// <summary>
+        /// Blocks on a load without leaving it anything to post back to this thread. ConfigureAwait only
+        /// governs the SDK's own awaits; a feature repository supplied on the <see cref="Context"/> is the
+        /// application's code, and under a single-threaded synchronization context its continuation would
+        /// be queued to the thread this call is holding. Starting the load where there is no context to
+        /// capture settles it for every participant rather than only for the SDK.
+        /// </summary>
+        private void LoadFeaturesWithoutCapturingContext()
+        {
+            if (SynchronizationContext.Current is null)
+            {
+                LoadFeatures().GetAwaiter().GetResult();
+
+                return;
+            }
+
+            Task.Run(() => LoadFeatures()).GetAwaiter().GetResult();
+        }
+
         public async Task<FeatureResult> EvalFeatureAsync(string featureId, CancellationToken? cancellationToken = null)
         {
-            await EnsureFeaturesLoaded(cancellationToken);
+            await EnsureFeaturesLoaded(cancellationToken).ConfigureAwait(false);
 
             return EvaluateFeature(featureId);
         }
@@ -493,7 +510,17 @@ namespace GrowthBook
                 return;
             }
 
-            await LoadFeatures(cancellationToken: cancellationToken);
+            await LoadFeaturesWithoutCapturingContextAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        private Task LoadFeaturesWithoutCapturingContextAsync(CancellationToken? cancellationToken)
+        {
+            if (SynchronizationContext.Current is null)
+            {
+                return LoadFeatures(cancellationToken: cancellationToken);
+            }
+
+            return Task.Run(() => LoadFeatures(cancellationToken: cancellationToken));
         }
 
         private FeatureResult EvaluateFeature(string featureId, ISet<string> evaluatedFeatures = default)
@@ -682,7 +709,7 @@ namespace GrowthBook
         /// <inheritdoc />
         public async Task LoadFeatures(GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null)
         {
-            var result = await LoadFeaturesWithResult(options, cancellationToken);
+            var result = await LoadFeaturesWithResult(options, cancellationToken).ConfigureAwait(false);
 
             if (!result.Success)
             {
@@ -704,11 +731,11 @@ namespace GrowthBook
                 if (_context.RemoteEval && RemoteEvaluationUtilities.IsValidForRemoteEvaluation(_context))
                 {
                     var currentContext = CreateCurrentContext();
-                    features = await _featureRepository.GetFeaturesWithContext(currentContext, options, cancellationToken);
+                    features = await _featureRepository.GetFeaturesWithContext(currentContext, options, cancellationToken).ConfigureAwait(false);
                 }
                 else
                 {
-                    features = await _featureRepository.GetFeatures(options, cancellationToken);
+                    features = await _featureRepository.GetFeatures(options, cancellationToken).ConfigureAwait(false);
                 }
 
                 if (features == null)
@@ -1226,7 +1253,7 @@ namespace GrowthBook
                 _logger?.LogDebug("Triggering remote evaluation due to attribute changes");
 
                 var currentContext = CreateCurrentContext();
-                var features = await _featureRepository.GetFeaturesWithContext(currentContext);
+                var features = await _featureRepository.GetFeaturesWithContext(currentContext).ConfigureAwait(false);
 
                 if (features != null)
                 {

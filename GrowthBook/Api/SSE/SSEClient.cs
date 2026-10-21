@@ -85,7 +85,7 @@ namespace GrowthBook.Api.SSE
 
             _cancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             _connectionTask = ConnectInternalAsync(_cancellationTokenSource.Token);
-            await _connectionTask;
+            await _connectionTask.ConfigureAwait(false);
         }
 
         /// <summary>
@@ -127,7 +127,7 @@ namespace GrowthBook.Api.SSE
                     httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Accept", "text/event-stream");
                     httpClient.DefaultRequestHeaders.TryAddWithoutValidation("Cache-Control", "no-cache");
 
-                    using (var response = await httpClient.GetAsync(_endpoint, HttpCompletionOption.ResponseHeadersRead, cancellationToken))
+                    using (var response = await httpClient.GetAsync(_endpoint, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false))
                     {
                         if (!response.IsSuccessStatusCode)
                         {
@@ -137,10 +137,10 @@ namespace GrowthBook.Api.SSE
                         SetConnectionStatus(SSEConnectionStatus.Connected);
                         _currentRetryAttempt = 0; // Reset retry counter on successful connection
                         
-                        using (var stream = await response.Content.ReadAsStreamAsync())
+                        using (var stream = await response.Content.ReadAsStreamAsync().ConfigureAwait(false))
                         using (var reader = new StreamReader(stream))
                         {
-                            await ProcessStreamAsync(reader, cancellationToken);
+                            await ProcessStreamAsync(reader, cancellationToken).ConfigureAwait(false);
                         }
                     }
                 }
@@ -166,7 +166,7 @@ namespace GrowthBook.Api.SSE
                         
                         try
                         {
-                            await Task.Delay(delay, cancellationToken);
+                            await Task.Delay(delay, cancellationToken).ConfigureAwait(false);
                         }
                         catch (OperationCanceledException)
                         {
@@ -188,7 +188,7 @@ namespace GrowthBook.Api.SSE
             
             while (!cancellationToken.IsCancellationRequested)
             {
-                var bytesRead = await reader.ReadAsync(buffer, 0, buffer.Length);
+                var bytesRead = await reader.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false);
                 if (bytesRead == 0)
                 {
                     _logger.LogDebug("SSE stream ended");
@@ -200,7 +200,7 @@ namespace GrowthBook.Api.SSE
 
                 foreach (var sseEvent in events)
                 {
-                    await ProcessEventAsync(sseEvent);
+                    await ProcessEventAsync(sseEvent).ConfigureAwait(false);
                 }
             }
         }
@@ -232,7 +232,7 @@ namespace GrowthBook.Api.SSE
             {
                 try
                 {
-                    await specificHandler(sseEvent);
+                    await specificHandler(sseEvent).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
@@ -245,7 +245,7 @@ namespace GrowthBook.Api.SSE
             {
                 try
                 {
-                    await generalHandler(sseEvent);
+                    await generalHandler(sseEvent).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {

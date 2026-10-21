@@ -54,7 +54,7 @@ namespace GrowthBook.Api
                 // This prevents threading issues in .NET Framework MVC when the original HttpContext
                 // thread is no longer available after the HTTP request completes
                 var taskFactory = new TaskFactory(cancellationToken ?? CancellationToken.None);
-                var refreshTask = taskFactory.StartNew(async () => await _backgroundRefreshWorker.RefreshCacheFromApi(cancellationToken)).Unwrap();
+                var refreshTask = taskFactory.StartNew(async () => await _backgroundRefreshWorker.RefreshCacheFromApi(cancellationToken).ConfigureAwait(false)).Unwrap();
 
                 // When there aren't any features in the cache to begin with, we need to just wait until
                 // that has been officially refreshed to proceed (otherwise the caller gets nothing up front
@@ -64,7 +64,7 @@ namespace GrowthBook.Api
                 {
                     _logger.LogInformation("Either cache currently has no features or the option to wait for completion was set, waiting for cache to refresh");
                     _logger.LogDebug("Feature count: '{CacheFeatureCount}' and option to wait for completion: '{OptionsWaitForCompletion}'", _cache.FeatureCount, options?.WaitForCompletion);
-                    return await refreshTask;
+                    return await refreshTask.ConfigureAwait(false);
                 }
                 else
                 {
@@ -79,7 +79,7 @@ namespace GrowthBook.Api
 
             _logger.LogInformation("Cache is not expired and the option to force refresh was not set, retrieving features from cache");
 
-            return await _cache.GetFeatures(cancellationToken);
+            return await _cache.GetFeatures(cancellationToken).ConfigureAwait(false);
         }
 
         /// <inheritdoc/>
@@ -127,14 +127,14 @@ namespace GrowthBook.Api
             if (!context.RemoteEval)
             {
                 _logger.LogDebug("Remote evaluation is disabled, using regular feature retrieval");
-                return await GetFeatures(options, cancellationToken);
+                return await GetFeatures(options, cancellationToken).ConfigureAwait(false);
             }
 
             // Validate remote evaluation configuration
             if (_remoteEvaluationService == null)
             {
                 _logger.LogWarning("Remote evaluation is enabled but IRemoteEvaluationService is not available, falling back to regular feature retrieval");
-                return await GetFeatures(options, cancellationToken);
+                return await GetFeatures(options, cancellationToken).ConfigureAwait(false);
             }
 
             try
@@ -160,7 +160,7 @@ namespace GrowthBook.Api
                     context.ClientKey,
                     request,
                     GetApiRequestHeaders(context),
-                    cancellationToken ?? CancellationToken.None);
+                    cancellationToken ?? CancellationToken.None).ConfigureAwait(false);
 
                 if (response.IsSuccess)
                 {
