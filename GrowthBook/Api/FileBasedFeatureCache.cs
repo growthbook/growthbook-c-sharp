@@ -21,6 +21,14 @@ namespace GrowthBook.Api
         private string _customCachePath;
         private const string DefaultFileName = "gb-features";
 
+        /// <summary>
+        /// Creates a cache backed by a file on disk.
+        /// </summary>
+        /// <param name="cacheKey">
+        /// Identifies whose features these are, normally the client key. Required: without it every
+        /// instance sharing a path would read and write one file, and one client's features would be
+        /// served to another until its own refresh landed.
+        /// </param>
         public FileBasedFeatureCache(string cacheKey, int cacheExpirationInSeconds = 60, string cachePath = null, ILogger<FileBasedFeatureCache> logger = null)
         {
             if (string.IsNullOrWhiteSpace(cacheKey))
@@ -87,6 +95,15 @@ namespace GrowthBook.Api
             }
         }
 
+        /// <summary>
+        /// Points the cache at a different client's features.
+        /// </summary>
+        /// <remarks>
+        /// The features held in memory belong to the previous key, so they are dropped and the new
+        /// location is read instead. Keeping them would have <see cref="GetFeatures"/> answer with the
+        /// previous client's data, and <see cref="IsCacheExpired"/> call it current - so nothing would
+        /// have refreshed it either.
+        /// </remarks>
         public void SetCacheKey(string key)
         {
             if (string.IsNullOrWhiteSpace(key))
@@ -229,11 +246,50 @@ namespace GrowthBook.Api
 
         private string GetCacheDirectoryPath()
         {
-            var basePath = _customCachePath ?? Path.GetTempPath();
+            var basePath = _customCachePath ?? GetDefaultBasePath();
+
             return Path.Combine(basePath, $"GrowthBook-Cache-{_cacheKey}");
         }
 
-        
+        /// <summary>
+        /// Where the cache lives when the caller names no directory.
+        /// </summary>
+        /// <remarks>
+        /// The per-user application data directory, not the temporary one. A temporary directory is
+        /// shared on most Unix hosts, and the directory name here is derived from the client key, so
+        /// another local account could create it first and leave a <c>gb-features.json</c> of its own
+        /// for this process to load and evaluate. Application data is inside the user's own tree and
+        /// another account cannot write there.
+        /// <para>
+        /// A caller who passes <c>cachePath</c> owns that decision: this library targets netstandard2.0,
+        /// which exposes neither file ownership nor permissions, so a supplied directory cannot be
+        /// checked for either.
+        /// </para>
+        /// </remarks>
+        private string GetDefaultBasePath()
+        {
+            var applicationData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+
+            if (!string.IsNullOrEmpty(applicationData))
+            {
+                return Path.Combine(applicationData, "GrowthBook");
+            }
+
+            // Some hosts report no application data directory at all. Falling back keeps the cache
+            // working, but on a shared temporary directory it is worth saying so out loud.
+            _logger?.LogWarning("No per-user application data directory is available, so the feature cache falls back to the temporary directory. Pass a cachePath this process controls if that directory is shared.");
+
+            return Path.GetTempPath();
+        }
+
+        /// <summary>
+        /// Hashes a cache key into a directory name.
+        /// </summary>
+        /// <remarks>
+        /// The whole digest, not a prefix of it. Truncating to eight hex characters left 32 bits, which
+        /// is small enough for two client keys to land in the same directory and read each other's
+        /// features - and keeping them apart is the only thing the hash is for.
+        /// </remarks>
         private static string ComputeCacheKeyHash(string input)
         {
             using (var sha256 = SHA256.Create())
