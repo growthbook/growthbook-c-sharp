@@ -237,4 +237,49 @@ public class FileBasedFeatureCacheTests : IDisposable
 
         hash.Should().HaveLength(64, "a SHA256 digest in hex, not a prefix of one");
     }
+
+    /// <summary>
+    /// The directory name is derived from the client key, so it is predictable. On a shared temporary
+    /// directory another local account could create it first and leave a file for this process to load
+    /// and evaluate, so the default lives in the user's own tree instead.
+    /// </summary>
+    [Fact]
+    public async Task TheDefaultDirectoryIsNotTheSharedTemporaryOne()
+    {
+        // A key no previous run can have used, so a leftover directory cannot answer for the fix.
+        var key = $"default-path-{Guid.NewGuid():N}";
+        var directoryName = $"GrowthBook-Cache-{Sha256Hex(key)}";
+
+        var applicationData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+
+        applicationData.Should().NotBeNullOrEmpty("this host has one, so the fallback path is not what is covered here");
+
+        var expected = Path.Combine(applicationData, "GrowthBook", directoryName);
+        var underTemp = Path.Combine(Path.GetTempPath(), directoryName);
+
+        var cache = new FileBasedFeatureCache(key);
+
+        try
+        {
+            await cache.RefreshWith(_availableFeatures);
+
+            Directory.Exists(expected).Should().BeTrue(
+                "the cache defaults to the per-user application data directory, which another account cannot write to");
+            Directory.Exists(underTemp).Should().BeFalse(
+                "and nothing is written to the temporary directory, which is shared on most Unix hosts");
+        }
+        finally
+        {
+            cache.ClearCache();
+        }
+    }
+
+    private static string Sha256Hex(string input)
+    {
+        using var sha256 = System.Security.Cryptography.SHA256.Create();
+
+        var hash = sha256.ComputeHash(System.Text.Encoding.UTF8.GetBytes(input));
+
+        return BitConverter.ToString(hash).Replace("-", string.Empty).ToLowerInvariant();
+    }
 }

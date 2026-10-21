@@ -212,6 +212,10 @@ const string clientKey = "YOUR_CLIENT_KEY";
 
 // The key is required: without it every instance sharing a path reads and writes one file, and
 // one client's features would be served to another.
+//
+// cachePath is optional. Left out, the cache lives under the per-user application data directory.
+// If you do pass one, pick a directory this process controls: a shared location lets another local
+// account precreate the file and have it loaded as if the API had returned it.
 var cache = new FileBasedFeatureCache(
     cacheKey: clientKey,
     cacheExpirationInSeconds: 60,
