@@ -71,12 +71,23 @@ namespace GrowthBook.Api
 
             if (response.IsNotModified)
             {
-                if (_cache is IFeatureCacheExpiration expiringCache)
+                if (_cache.FeatureCount == 0)
                 {
-                    await expiringCache.RefreshExpiration(cancellationToken).ConfigureAwait(false);
-                }
+                    _logger.LogInformation("Server reported no change but the cache is empty, discarding the stored ETag and asking for the whole payload");
 
-                return await _cache.GetFeatures(cancellationToken);
+                    _etagCache.Remove(_featuresApiEndpoint);
+
+                    response = await httpClient.GetFeaturesFrom(_featuresApiEndpoint, _logger, _config, cancellationToken ?? _refreshWorkerCancellation.Token, _etagCache).ConfigureAwait(false);
+                }
+                else
+                {
+                    if (_cache is IFeatureCacheExpiration expiringCache)
+                    {
+                        await expiringCache.RefreshExpiration(cancellationToken).ConfigureAwait(false);
+                    }
+
+                    return await _cache.GetFeatures(cancellationToken);
+                }
             }
 
             if (response.Features is null)
