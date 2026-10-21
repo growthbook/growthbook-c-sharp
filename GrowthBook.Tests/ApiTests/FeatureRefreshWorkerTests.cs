@@ -273,6 +273,86 @@ public class FeatureRefreshWorkerTests : ApiUnitTest<FeatureRefreshWorker>
     /// whole point of Context.FeatureCache - stayed expired and sent the next load straight back to the
     /// API, every time, until the features actually changed.
     /// </summary>
+
+    /// <summary>
+    /// A 304 answers the stored ETag, not the cache. Once the cache has been emptied — ClearCache, or
+    /// a file that went away — "nothing changed" is true of the server and false of us, and treating
+    /// the empty cache as fresh would hide the features for good: every later request gets the same
+    /// 304 and nothing ever refills it.
+    /// </summary>
+    [Fact]
+    public async Task AClearedCacheIsRefilledEvenWhenTheServerReportsNoChange()
+    {
+        var json = JsonConvert.SerializeObject(new FeaturesResponse { Features = _availableFeatures });
+
+        // 304 whenever an If-None-Match arrives, 200 otherwise - which is what a real server does, and
+        // what makes dropping the stored ETag the thing that recovers.
+        var handler = new ConditionalETagHandler("cleared-cache-etag", json);
+        var cachePath = Path.Combine(Path.GetTempPath(), $"gb-cleared-{Guid.NewGuid():N}");
+
+        try
+        {
+            var cache = new FileBasedFeatureCache("cleared-client", cacheExpirationInSeconds: 60, cachePath: cachePath);
+            var worker = new FeatureRefreshWorker(_logger, new ETagHttpClientFactory(handler), _config, cache);
+
+            (await worker.RefreshCacheFromApi()).Should().NotBeNull();
+            cache.FeatureCount.Should().Be(_availableFeatures.Count);
+
+            cache.ClearCache();
+            cache.FeatureCount.Should().Be(0);
+
+            var refilled = await worker.RefreshCacheFromApi();
+
+            refilled.Should().NotBeNull("a 304 against an empty cache has to be answered by asking for the whole payload");
+            cache.FeatureCount.Should().Be(_availableFeatures.Count, "and the features have to be back");
+            cache.IsCacheExpired.Should().BeFalse();
+        }
+        finally
+        {
+            if (Directory.Exists(cachePath))
+            {
+                Directory.Delete(cachePath, recursive: true);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Answers 304 to a conditional request and 200 to an unconditional one, as a server does.
+    /// </summary>
+    private sealed class ConditionalETagHandler : DelegatingHandler
+    {
+        private readonly string _etag;
+        private readonly string _jsonContent;
+
+        public ConditionalETagHandler(string etag, string jsonContent)
+        {
+            _etag = etag;
+            _jsonContent = jsonContent;
+            InnerHandler = new HttpClientHandler();
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            HttpResponseMessage response;
+
+            if (request.Headers.IfNoneMatch.Any())
+            {
+                response = new HttpResponseMessage(HttpStatusCode.NotModified);
+            }
+            else
+            {
+                response = new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(_jsonContent, Encoding.UTF8, "application/json")
+                };
+            }
+
+            response.Headers.ETag = new System.Net.Http.Headers.EntityTagHeaderValue($"\"{_etag}\"");
+
+            return Task.FromResult(response);
+        }
+    }
+
     [Fact]
     public async Task ANotModifiedResponseRestartsTheWindowOnAnyCacheThatSupportsIt()
     {
@@ -327,6 +407,9 @@ public class FeatureRefreshWorkerTests : ApiUnitTest<FeatureRefreshWorker>
         _cache
             .GetFeatures(Arg.Any<CancellationToken?>())
             .Returns(Task.FromResult<IDictionary<string, Feature>>(_availableFeatures));
+        // A cache that answers with features reports holding them; the worker reads this to tell a
+        // genuine "nothing changed" from a 304 arriving at a cache that has since been emptied.
+        _cache.FeatureCount.Returns(_availableFeatures.Count);
 
         var first = await worker.RefreshCacheFromApi();
         var second = await worker.RefreshCacheFromApi();
