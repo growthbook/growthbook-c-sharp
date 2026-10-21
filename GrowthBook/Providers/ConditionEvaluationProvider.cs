@@ -568,12 +568,30 @@ namespace GrowthBook.Providers
 
         private static bool CompareVersions(JToken left, JToken right, Func<int, bool> meetsComparison)
         {
-            var leftValue = PaddedVersionString(left.ToString());
-            var rightValue = PaddedVersionString(right.ToString());
+            var leftValue = PaddedVersionString(ToVersionInput(left));
+            var rightValue = PaddedVersionString(ToVersionInput(right));
 
             var comparisonResult = string.CompareOrdinal(leftValue, rightValue);
 
             return meetsComparison(comparisonResult);
+        }
+
+        /// <summary>
+        /// Numbers are read as their string form, and anything else that isn't a non-empty string is version 0, as in the reference.
+        /// </summary>
+        private static string ToVersionInput(JToken value)
+        {
+            if (value?.Type == JTokenType.Integer || value?.Type == JTokenType.Float)
+            {
+                return JavaScriptValueUtilities.ToJsString(value);
+            }
+
+            if (value?.Type == JTokenType.String && value.Value<string>().Length > 0)
+            {
+                return value.Value<string>();
+            }
+
+            return "0";
         }
 
         private static JToken GetPath(JToken attributes, string key) => attributes.SelectToken(key);
