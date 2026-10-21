@@ -86,11 +86,17 @@ namespace GrowthBook
         }
 
         /// <summary>
-        /// Disposes of factory resources.
+        /// Disposes of factory resources, cancelling the shared feature repository.
         /// </summary>
         public void Dispose()
         {
+            if (_disposed)
+            {
+                return;
+            }
+
             _disposed = true;
+            _sharedRepository?.Cancel();
         }
     }
 }
