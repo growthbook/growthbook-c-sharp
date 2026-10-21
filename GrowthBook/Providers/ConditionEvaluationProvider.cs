@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Linq;
 using System.Text.RegularExpressions;
 using GrowthBook.Extensions;
+using GrowthBook.Utilities;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json.Linq;
 
@@ -151,7 +152,28 @@ namespace GrowthBook.Providers
                 }
             }
 
-            return JToken.DeepEquals(conditionValue ?? JValue.CreateNull(), attributeValue ?? JValue.CreateNull());
+            return EvalEquality(conditionValue, attributeValue);
+        }
+
+        /// <summary>
+        /// Compares a plain (non-operator) condition value with JavaScript's coercion rules, as the reference does.
+        /// </summary>
+        private static bool EvalEquality(JToken conditionValue, JToken attributeValue)
+        {
+            switch (conditionValue.Type)
+            {
+                case JTokenType.String:
+                    return JavaScriptValueUtilities.ToJsString(attributeValue) == conditionValue.Value<string>();
+                case JTokenType.Integer:
+                case JTokenType.Float:
+                    return JavaScriptValueUtilities.ToJsNumber(attributeValue) == conditionValue.Value<double>();
+                case JTokenType.Boolean:
+                    return !attributeValue.IsNull() && JavaScriptValueUtilities.IsJsTruthy(attributeValue) == conditionValue.Value<bool>();
+                case JTokenType.Null:
+                    return attributeValue.IsNull();
+                default:
+                    return JavaScriptValueUtilities.ToJsJson(attributeValue) == JavaScriptValueUtilities.ToJsJson(conditionValue);
+            }
         }
 
         /// <summary>
@@ -376,6 +398,11 @@ namespace GrowthBook.Providers
         {
             _logger.LogDebug("Checking whether the object is an operator object");
 
+            if (!obj.HasValues)
+            {
+                return false;
+            }
+
             foreach (JProperty property in obj.Properties())
             {
                 if (!property.Name.StartsWith("$"))
@@ -541,12 +568,30 @@ namespace GrowthBook.Providers
 
         private static bool CompareVersions(JToken left, JToken right, Func<int, bool> meetsComparison)
         {
-            var leftValue = PaddedVersionString(left.ToString());
-            var rightValue = PaddedVersionString(right.ToString());
+            var leftValue = PaddedVersionString(ToVersionInput(left));
+            var rightValue = PaddedVersionString(ToVersionInput(right));
 
             var comparisonResult = string.CompareOrdinal(leftValue, rightValue);
 
             return meetsComparison(comparisonResult);
+        }
+
+        /// <summary>
+        /// Numbers are read as their string form, and anything else that isn't a non-empty string is version 0, as in the reference.
+        /// </summary>
+        private static string ToVersionInput(JToken value)
+        {
+            if (value?.Type == JTokenType.Integer || value?.Type == JTokenType.Float)
+            {
+                return JavaScriptValueUtilities.ToJsString(value);
+            }
+
+            if (value?.Type == JTokenType.String && value.Value<string>().Length > 0)
+            {
+                return value.Value<string>();
+            }
+
+            return "0";
         }
 
         private static JToken GetPath(JToken attributes, string key) => attributes.SelectToken(key);
