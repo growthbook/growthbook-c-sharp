@@ -317,12 +317,52 @@ public class FeatureRefreshWorkerTests : ApiUnitTest<FeatureRefreshWorker>
     }
 
     /// <summary>
+    /// A payload with no features in it is a correct answer, and an empty cache holding it is correct
+    /// too. Treating empty as lost made every later 304 throw the ETag away and ask again for the same
+    /// empty answer, with the caller waiting for both requests.
+    /// </summary>
+    [Fact]
+    public async Task AnUnchangedEmptyPayloadDoesNotProvokeASecondRequest()
+    {
+        var json = JsonConvert.SerializeObject(new FeaturesResponse { Features = new Dictionary<string, Feature>() });
+
+        var handler = new ConditionalETagHandler("empty-payload-etag", json);
+        var cachePath = Path.Combine(Path.GetTempPath(), $"gb-empty-{Guid.NewGuid():N}");
+
+        try
+        {
+            var cache = new FileBasedFeatureCache("empty-client", cacheExpirationInSeconds: 60, cachePath: cachePath);
+            var worker = new FeatureRefreshWorker(_logger, new ETagHttpClientFactory(handler), _config, cache);
+
+            (await worker.RefreshCacheFromApi()).Should().NotBeNull();
+
+            cache.FeatureCount.Should().Be(0, "the payload really has no features in it");
+            handler.Requests.Should().Be(1);
+
+            var afterNotModified = await worker.RefreshCacheFromApi();
+
+            handler.Requests.Should().Be(2,
+                "one conditional request answered 304 - and no second request for the same empty answer");
+            afterNotModified.Should().NotBeNull().And.BeEmpty();
+            cache.IsCacheExpired.Should().BeFalse("the 304 restarted the window instead");
+        }
+        finally
+        {
+            if (Directory.Exists(cachePath))
+            {
+                Directory.Delete(cachePath, recursive: true);
+            }
+        }
+    }
+
+    /// <summary>
     /// Answers 304 to a conditional request and 200 to an unconditional one, as a server does.
     /// </summary>
     private sealed class ConditionalETagHandler : DelegatingHandler
     {
         private readonly string _etag;
         private readonly string _jsonContent;
+        private int _requests;
 
         public ConditionalETagHandler(string etag, string jsonContent)
         {
@@ -331,8 +371,12 @@ public class FeatureRefreshWorkerTests : ApiUnitTest<FeatureRefreshWorker>
             InnerHandler = new HttpClientHandler();
         }
 
+        public int Requests => Volatile.Read(ref _requests);
+
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
+            Interlocked.Increment(ref _requests);
+
             HttpResponseMessage response;
 
             if (request.Headers.IfNoneMatch.Any())
