@@ -244,18 +244,48 @@ public class FileBasedFeatureCacheTests : IDisposable
     /// and evaluate, so the default lives in the user's own tree instead.
     /// </summary>
     [Fact]
-    public async Task TheDefaultDirectoryIsNotTheSharedTemporaryOne()
+    public void TheDefaultBasePathIsInsideTheUsersOwnApplicationData()
+    {
+        var resolved = FileBasedFeatureCache.ResolveDefaultBasePath("/home/someone/.local/share", logger: null);
+
+        resolved.Should().Be(Path.Combine("/home/someone/.local/share", "GrowthBook"));
+        resolved.Should().NotStartWith(Path.GetTempPath(),
+            "the temporary directory is shared on most Unix hosts, and another account could create " +
+            "the predictable directory first and leave a payload for this process to evaluate");
+    }
+
+    /// <summary>
+    /// Some hosts report no application data directory at all. The cache still has to work, but the
+    /// directory it falls back to may be shared, so the fallback is not silent.
+    /// </summary>
+    [Fact]
+    public void WithNoApplicationDataTheBasePathFallsBackToTemporaryAndSaysSo()
+    {
+        var logger = new CapturingLogger();
+
+        var resolved = FileBasedFeatureCache.ResolveDefaultBasePath(string.Empty, logger);
+
+        resolved.Should().Be(Path.GetTempPath());
+        logger.Messages.Should().Contain(m => m.Contains("falls back to the temporary directory"),
+            "a caller whose cache landed somewhere shared has to be able to find that out");
+    }
+
+    /// <summary>
+    /// And the cache really uses that decision rather than defaulting somewhere of its own. Checked
+    /// against whatever this host reports, so the suite does not depend on the host having, or not
+    /// having, an application data directory.
+    /// </summary>
+    [Fact]
+    public async Task TheCacheWritesUnderTheResolvedDefaultBasePath()
     {
         // A key no previous run can have used, so a leftover directory cannot answer for the fix.
         var key = $"default-path-{Guid.NewGuid():N}";
         var directoryName = $"GrowthBook-Cache-{Sha256Hex(key)}";
 
-        var applicationData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        var expectedBase = FileBasedFeatureCache.ResolveDefaultBasePath(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), logger: null);
 
-        applicationData.Should().NotBeNullOrEmpty("this host has one, so the fallback path is not what is covered here");
-
-        var expected = Path.Combine(applicationData, "GrowthBook", directoryName);
-        var underTemp = Path.Combine(Path.GetTempPath(), directoryName);
+        var expected = Path.Combine(expectedBase, directoryName);
 
         var cache = new FileBasedFeatureCache(key);
 
@@ -264,13 +294,33 @@ public class FileBasedFeatureCacheTests : IDisposable
             await cache.RefreshWith(_availableFeatures);
 
             Directory.Exists(expected).Should().BeTrue(
-                "the cache defaults to the per-user application data directory, which another account cannot write to");
-            Directory.Exists(underTemp).Should().BeFalse(
-                "and nothing is written to the temporary directory, which is shared on most Unix hosts");
+                "the cache writes under the base path the default resolution chose");
         }
         finally
         {
             cache.ClearCache();
+        }
+    }
+
+    private sealed class CapturingLogger : Microsoft.Extensions.Logging.ILogger<FileBasedFeatureCache>
+    {
+        public List<string> Messages { get; } = new List<string>();
+
+        public IDisposable BeginScope<TState>(TState state) => null;
+
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            Microsoft.Extensions.Logging.LogLevel logLevel,
+            Microsoft.Extensions.Logging.EventId eventId,
+            TState state,
+            Exception exception,
+            Func<TState, Exception, string> formatter)
+        {
+            lock (Messages)
+            {
+                Messages.Add(formatter(state, exception));
+            }
         }
     }
 
