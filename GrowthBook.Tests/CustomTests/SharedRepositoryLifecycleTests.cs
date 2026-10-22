@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
@@ -20,9 +21,13 @@ public class SharedRepositoryLifecycleTests : UnitTest
 
         public CancellationTrackingRepository(IDictionary<string, Feature> features) => _features = features;
 
-        public int CancelCallCount { get; private set; }
+        private int _cancelCallCount;
 
-        public void Cancel() => CancelCallCount++;
+        // Interlocked, because one of these tests disposes from several threads at once and a
+        // miscounted race would read as the fix working.
+        public int CancelCallCount => Volatile.Read(ref _cancelCallCount);
+
+        public void Cancel() => Interlocked.Increment(ref _cancelCallCount);
 
         public Task<IDictionary<string, Feature>> GetFeatures(GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null) => Task.FromResult(_features);
         public Task<IDictionary<string, Feature>> GetFeaturesWithContext(Context context, GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null) => Task.FromResult(_features);
@@ -146,6 +151,42 @@ public class SharedRepositoryLifecycleTests : UnitTest
         factory.Dispose();
 
         repository.CancelCallCount.Should().Be(1);
+    }
+
+    /// <summary>
+    /// Two callers disposing at once must still cancel once. Checking the flag and then setting it
+    /// lets both get past the check, and a supplied repository is under no obligation to tolerate
+    /// being cancelled twice.
+    /// </summary>
+    [Fact]
+    public void DisposingTheFactoryFromSeveralThreadsAtOnceStillCancelsOnce()
+    {
+        const int Disposers = 32;
+
+        for (var attempt = 0; attempt < 200; attempt++)
+        {
+            var repository = new CancellationTrackingRepository(CreateFeatures());
+            var factory = new GrowthBookFactory(new Context { ClientKey = "test-key", FeatureRepository = repository });
+
+            using var start = new ManualResetEventSlim(false);
+
+            var disposers = new Task[Disposers];
+
+            for (var i = 0; i < Disposers; i++)
+            {
+                disposers[i] = Task.Run(() =>
+                {
+                    start.Wait(TimeSpan.FromSeconds(10));
+                    factory.Dispose();
+                });
+            }
+
+            start.Set();
+            Task.WaitAll(disposers);
+
+            repository.CancelCallCount.Should().Be(1,
+                $"the shared repository must be cancelled exactly once however many callers race (attempt {attempt})");
+        }
     }
 
     /// <summary>

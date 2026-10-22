@@ -355,35 +355,49 @@ public class LifecycleCallbackTests : UnitTest
     }
 
     /// <summary>
-    /// A repository whose Cancel throws, standing in for a consumer-supplied one - or the built-in
-    /// path, where CancellationTokenSource.Cancel surfaces an AggregateException from a registered
-    /// cancellation callback.
+    /// The cancellation source the instance-created refresh worker runs under. Reached by reflection
+    /// because an owned repository is built internally and a test has no handle on it.
     /// </summary>
-    private sealed class ThrowingRepository : IGrowthBookFeatureRepository
+    private static CancellationTokenSource OwnedRefreshWorkerCancellation(GrowthBook growthBook)
     {
-        public void Cancel() => throw new InvalidOperationException("cancellation blew up");
+        const System.Reflection.BindingFlags Private =
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
 
-        public Task<IDictionary<string, Feature>> GetFeatures(GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null)
-            => Task.FromResult<IDictionary<string, Feature>>(new Dictionary<string, Feature>());
+        var repository = typeof(GrowthBook)
+            .GetField("_featureRepository", Private)
+            .GetValue(growthBook);
 
-        public Task<IDictionary<string, Feature>> GetFeaturesWithContext(Context context, GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null)
-            => GetFeatures(options, cancellationToken);
+        var worker = repository.GetType()
+            .GetField("_backgroundRefreshWorker", Private)
+            .GetValue(repository);
 
-        public bool HasIdenticalAssignment(string experimentKey, ExperimentAssignment assignment) => false;
-        public void RecordAssignment(string experimentKey, ExperimentAssignment assignment) { }
-        public bool IsAlreadyTracked(string trackingKey) => false;
-        public void MarkAsTracked(string trackingKey) { }
-        public bool TryMarkAsTracked(string trackingKey) => true;
+        return (CancellationTokenSource)worker.GetType()
+            .GetField("_refreshWorkerCancellation", Private)
+            .GetValue(worker);
     }
 
+    /// <summary>
+    /// Only an instance that built its own repository cancels it, so only that instance can be hurt by
+    /// cancellation throwing. A repository supplied on the Context is never cancelled here at all,
+    /// which is what the earlier version of this test used - it passed without reaching the handler.
+    /// </summary>
+    /// <remarks>
+    /// The throw is arranged the way it happens in production rather than faked: a cancellation
+    /// callback registered on the worker's token makes <c>CancellationTokenSource.Cancel</c> surface an
+    /// <c>AggregateException</c>.
+    /// </remarks>
     [Fact]
     public void AThrowingRepositoryCancelDoesNotEscapeTeardown()
     {
+        // No FeatureRepository on the Context, so the instance builds one and owns its lifetime.
         var growthBook = new GrowthBook(new Context
         {
-            Attributes = JObject.FromObject(new { id = "user-1" }),
-            FeatureRepository = new ThrowingRepository()
+            Attributes = JObject.FromObject(new { id = "user-1" })
         });
+
+        var cancellation = OwnedRefreshWorkerCancellation(growthBook);
+
+        cancellation.Token.Register(() => throw new InvalidOperationException("cancellation blew up"));
 
         var calls = 0;
         growthBook.OnDestroy(() => calls++);
@@ -394,6 +408,8 @@ public class LifecycleCallbackTests : UnitTest
             "the instance is already marked destroyed by then, so an escaping exception would strand it " +
             "with the rest of the teardown undone and no way to retry");
 
+        cancellation.IsCancellationRequested.Should().BeTrue(
+            "the owned repository really was cancelled, so the handler this test covers was reached");
         calls.Should().Be(1);
         growthBook.IsDestroyed.Should().BeTrue();
     }

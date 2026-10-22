@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json.Linq;
 
@@ -12,7 +13,7 @@ namespace GrowthBook
     {
         private readonly Context _baseContext;
         private readonly IGrowthBookFeatureRepository _sharedRepository;
-        private bool _disposed = false;
+        private int _disposed;
 
         /// <summary>
         /// Creates a new GrowthBookFactory with base configuration.
@@ -32,7 +33,7 @@ namespace GrowthBook
         /// <returns>New GrowthBook instance with user context</returns>
         public GrowthBook CreateForUser(IDictionary<string, object> userAttributes, Action<Experiment, ExperimentResult> trackingCallback = null)
         {
-            if (_disposed) throw new ObjectDisposedException(nameof(GrowthBookFactory));
+            if (Volatile.Read(ref _disposed) != 0) throw new ObjectDisposedException(nameof(GrowthBookFactory));
             
             var context = _baseContext.Clone();
             
@@ -62,7 +63,7 @@ namespace GrowthBook
         /// <returns>New GrowthBook instance with user context</returns>
         public GrowthBook CreateForUser(object userAttributes, Action<Experiment, ExperimentResult> trackingCallback = null)
         {
-            if (_disposed) throw new ObjectDisposedException(nameof(GrowthBookFactory));
+            if (Volatile.Read(ref _disposed) != 0) throw new ObjectDisposedException(nameof(GrowthBookFactory));
             
             var context = _baseContext.Clone();
             
@@ -90,12 +91,11 @@ namespace GrowthBook
         /// </summary>
         public void Dispose()
         {
-            if (_disposed)
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
             {
                 return;
             }
 
-            _disposed = true;
             _sharedRepository?.Cancel();
         }
     }
