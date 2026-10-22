@@ -73,12 +73,37 @@ public class GetAllResultsTests : UnitTest
 
         var growthBook = new GrowthBook(context);
 
+        var reads = 0;
+
         Action evaluateAndEnumerateConcurrently = () =>
         {
             var writing = true;
 
+            using var readerIsRunning = new ManualResetEventSlim(false);
+
+            // Reads until the writer is finished rather than for a fixed count, and the writer waits
+            // for this loop before it starts. Without both, the writer can finish first, leaving the
+            // reader to see writing already false and take no snapshot at all - and taking the
+            // snapshot is the only place a non-concurrent store would throw.
+            var reader = Task.Run(() =>
+            {
+                readerIsRunning.Set();
+
+                while (Volatile.Read(ref writing))
+                {
+                    foreach (var entry in growthBook.GetAllResults())
+                    {
+                        _ = entry.Key;
+                    }
+
+                    Interlocked.Increment(ref reads);
+                }
+            });
+
             var writer = Task.Run(() =>
             {
+                readerIsRunning.Wait(TimeSpan.FromSeconds(10));
+
                 try
                 {
                     for (var pass = 0; pass < 200; pass++)
@@ -95,23 +120,12 @@ public class GetAllResultsTests : UnitTest
                 }
             });
 
-            // Reads until the writer is finished rather than for a fixed count, so the two really do
-            // overlap. Taking the snapshot is where a non-concurrent store throws, and a reader that
-            // happens to finish first would never reach that.
-            var reader = Task.Run(() =>
-            {
-                while (Volatile.Read(ref writing))
-                {
-                    foreach (var entry in growthBook.GetAllResults())
-                    {
-                        _ = entry.Key;
-                    }
-                }
-            });
-
             Task.WaitAll(writer, reader);
         };
 
         evaluateAndEnumerateConcurrently.Should().NotThrow("because assignments are stored in a concurrent dictionary and GetAllResults hands back a snapshot");
+
+        reads.Should().BeGreaterThan(0, "a run where the reader never took a snapshot proves nothing");
+        growthBook.GetAllResults().Should().NotBeEmpty("and the writer really did record assignments");
     }
 }
