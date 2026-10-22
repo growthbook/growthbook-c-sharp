@@ -266,18 +266,27 @@ namespace GrowthBook.Api
         /// checked for either.
         /// </para>
         /// </remarks>
-        private string GetDefaultBasePath()
-        {
-            var applicationData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        private string GetDefaultBasePath() =>
+            ResolveDefaultBasePath(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), _logger);
 
-            if (!string.IsNullOrEmpty(applicationData))
+        /// <summary>
+        /// Decides the base path from the application data directory the host reports.
+        /// </summary>
+        /// <remarks>
+        /// Taken apart from the lookup so that both answers can be asked for directly. Which one a
+        /// host gives is not something a test should have to depend on.
+        /// </remarks>
+        /// <param name="applicationDataPath">The per-user application data directory, or empty if the host has none.</param>
+        internal static string ResolveDefaultBasePath(string applicationDataPath, ILogger logger)
+        {
+            if (!string.IsNullOrEmpty(applicationDataPath))
             {
-                return Path.Combine(applicationData, "GrowthBook");
+                return Path.Combine(applicationDataPath, "GrowthBook");
             }
 
             // Some hosts report no application data directory at all. Falling back keeps the cache
             // working, but on a shared temporary directory it is worth saying so out loud.
-            _logger?.LogWarning("No per-user application data directory is available, so the feature cache falls back to the temporary directory. Pass a cachePath this process controls if that directory is shared.");
+            logger?.LogWarning("No per-user application data directory is available, so the feature cache falls back to the temporary directory. Pass a cachePath this process controls if that directory is shared.");
 
             return Path.GetTempPath();
         }
