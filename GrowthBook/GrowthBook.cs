@@ -108,7 +108,7 @@ namespace GrowthBook
             _logger = _loggerFactory.CreateLogger<GrowthBook>();
             var conditionEvaluatorLogger = _loggerFactory.CreateLogger<ConditionEvaluationProvider>();
 
-            _pluginRegistry = new PluginRegistry(context.Plugins, _logger);
+            _pluginRegistry = new PluginRegistry(context.Plugins, ownsPlugins: !context.PluginsAreShared, logger: _logger);
             _pluginRegistry.InitAll();
 
             _conditionEvaluator = new ConditionEvaluationProvider(conditionEvaluatorLogger);
@@ -374,7 +374,7 @@ namespace GrowthBook
         public async Task<bool> IsOnAsync(string key, CancellationToken? cancellationToken = null)
         {
             await EnsureFeaturesLoaded(cancellationToken).ConfigureAwait(false);
-            var result = EvaluateFeature(key);
+            var result = EvaluateFeatureForCaller(key);
             var value = result.Value;
             return !value.IsNull() && value.ToObject<bool>();
         }
@@ -442,7 +442,7 @@ namespace GrowthBook
                 LoadFeaturesWithoutCapturingContext();
             }
 
-            var result = EvaluateFeature(key);
+            var result = EvaluateFeatureForCaller(key);
             var value = result.Value;
 
             return value.IsNull() ? fallback : value.ToObject<T>();
@@ -470,9 +470,7 @@ namespace GrowthBook
             {
                 LoadFeaturesWithoutCapturingContext();
             }
-            var result = EvaluateFeature(featureId);
-            _pluginRegistry.FireFeatureEvaluated(featureId, result, Attributes);
-            return result;
+            return EvaluateFeatureForCaller(featureId);
         }
 
         /// <summary>
@@ -498,11 +496,7 @@ namespace GrowthBook
         {
             await EnsureFeaturesLoaded(cancellationToken).ConfigureAwait(false);
 
-            var result = EvaluateFeature(featureId);
-
-            _pluginRegistry.FireFeatureEvaluated(featureId, result, Attributes);
-
-            return result;
+            return EvaluateFeatureForCaller(featureId);
         }
 
         /// <summary>
@@ -532,6 +526,24 @@ namespace GrowthBook
             }
 
             return Task.Run(() => LoadFeatures(cancellationToken: cancellationToken));
+        }
+
+        /// <summary>
+        /// Evaluates a feature a caller asked about, and tells the plugins once.
+        /// </summary>
+        /// <remarks>
+        /// Every public way of checking a flag goes through here, so what a plugin sees does not depend
+        /// on whether the caller reached for <see cref="EvalFeature"/>, <see cref="GetFeatureValue{T}"/>
+        /// or <see cref="IsOnAsync"/>. Prerequisites are evaluated by the recursive
+        /// <see cref="EvaluateFeature"/> below and raise nothing: the caller asked about one feature.
+        /// </remarks>
+        private FeatureResult EvaluateFeatureForCaller(string featureId)
+        {
+            var result = EvaluateFeature(featureId);
+
+            _pluginRegistry.FireFeatureEvaluated(featureId, result, Attributes);
+
+            return result;
         }
 
         private FeatureResult EvaluateFeature(string featureId, ISet<string> evaluatedFeatures = default)
@@ -625,15 +637,18 @@ namespace GrowthBook
                         {
                             foreach (var trackData in rule.Tracks)
                             {
+                                // Separate blocks on purpose: a consumer's callback throwing is not a
+                                // reason for the plugins never to hear about the same assignment.
                                 try
                                 {
                                     _trackingCallback?.Invoke(trackData.Experiment, trackData.Result);
-                                    _pluginRegistry.FireExperimentViewed(trackData.Experiment, trackData.Result, Attributes);
                                 }
                                 catch (Exception ex)
                                 {
                                     _logger.LogError(ex, $"Encountered unhandled exception in tracking callback for feature ID '{featureId}'");
                                 }
+
+                                _pluginRegistry.FireExperimentViewed(trackData.Experiment, trackData.Result, Attributes);
                             }
                         }
 
@@ -1173,6 +1188,14 @@ namespace GrowthBook
         /// <param name="result">The result of the assignment.</param>
         private void TryToTrack(Experiment experiment, ExperimentResult result)
         {
+            if (_trackingCallback == null && !_pluginRegistry.HasExperimentViewedListener)
+            {
+                // Nothing would be reported, so the assignment must not be marked as tracked either.
+                // The mark can be shared through the feature repository, and a later instance that does
+                // have a callback would find the key already there and stay silent about an assignment
+                // nobody ever heard.
+                return;
+            }
 
             string key = result.HashAttribute + result.HashValue + experiment.Key + result.VariationId;
 
