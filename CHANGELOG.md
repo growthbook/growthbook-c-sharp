@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **Breaking:** condition evaluation is strict about types, matching SDK spec 0.10.0 (growthbook/growthbook#7379).
+  When an attribute's type differs from the condition's, the operator fails and its negation (`$ne`, `$nin`, `$vne`,
+  `$not`, `$nregex`) matches. Numeric strings are no longer compared as numbers (`"10" < "9"`), date strings are no
+  longer parsed as dates (ISO dates still order correctly as text), booleans are never ordered, a missing attribute
+  fails `$gt`/`$gte`/`$lt`/`$lte` instead of counting as 0, and version operators need both sides to be strings or
+  both numbers. `$exists` and `$type` are unchanged.
+- Added the `$savedGroup` operator for saved group references, with typed `list` and `condition` entries.
+- Updated the standard test cases to spec 0.10.1.
 - Fixed `Context.EncryptedFeatures` never being decrypted. The property was declared, documented and cloned, but
   nothing ever read it, so a caller who supplied an encrypted payload was left with an empty feature set and every
   flag reading as false - with nothing to distinguish a wrong key from a working one. The payload is now decrypted in

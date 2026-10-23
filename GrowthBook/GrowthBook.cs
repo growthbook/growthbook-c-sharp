@@ -153,7 +153,7 @@ namespace GrowthBook
 
             try
             {
-                Features = JObject.Parse(decryptedFeaturesJson).ToObject<Dictionary<string, Feature>>()
+                Features = JsonConvert.DeserializeObject<Dictionary<string, Feature>>(decryptedFeaturesJson, JsonUtilities.PayloadSettings)
                     ?? new Dictionary<string, Feature>();
             }
             catch (Exception ex)
