@@ -23,6 +23,7 @@ namespace GrowthBook.MultiUser
         private readonly IConditionEvaluationProvider _conditionEvaluator;
         private readonly FeatureEvaluationProvider _featureEvaluator;
         private readonly ExperimentEvaluationProvider _experimentEvaluator;
+        private readonly ILogger<GrowthBookClient> _logger;
         private readonly ILoggerFactory _loggerFactory;
         private readonly bool _ownsLoggerFactory;
         private readonly bool _ownsRepository;
@@ -57,6 +58,8 @@ namespace GrowthBook.MultiUser
                 _ownsLoggerFactory = true;
             }
 
+            _logger = _loggerFactory.CreateLogger<GrowthBookClient>();
+
             _conditionEvaluator = new ConditionEvaluationProvider(_loggerFactory.CreateLogger<ConditionEvaluationProvider>());
             _experimentEvaluator = new ExperimentEvaluationProvider(
                 _loggerFactory.CreateLogger<ExperimentEvaluationProvider>(), _conditionEvaluator);
@@ -83,12 +86,21 @@ namespace GrowthBook.MultiUser
                     // so a handler that evaluates does not see the previous set.
                     _ = Task.Run(async () =>
                     {
-                        var sequence = Interlocked.Increment(ref _refreshSequence);
-                        var features = await _repository.GetFeatures(null);
+                        try
+                        {
+                            var sequence = Interlocked.Increment(ref _refreshSequence);
+                            var features = await _repository.GetFeatures(null);
 
-                        PublishFeatures(features, sequence);
-
-                        options.OnFeaturesRefreshed?.Invoke(true);
+                            if (PublishFeatures(features, sequence))
+                            {
+                                NotifyFeaturesRefreshed();
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            // Nobody awaits this task, so an exception here would be lost entirely.
+                            _logger.LogError(ex, "Encountered unhandled exception while applying a background feature refresh");
+                        }
                     });
                 });
                 _ownsRepository = true;
@@ -105,13 +117,13 @@ namespace GrowthBook.MultiUser
             var features = await _repository.GetFeatures(null, ct);
             if (features != null)
             {
-                PublishFeatures(features, sequence);
-                // With a custom repository the internal callback is not registered,
-                // so fire OnFeaturesRefreshed explicitly. With the default repository
-                // the internal callback already fires it.
-                if (!_ownsRepository)
+                // With a custom repository the internal callback is not registered, so report the
+                // refresh here. With the default repository the internal callback already does.
+                // Either way, only when this load is the one that ended up in effect - overlapping
+                // loads can finish out of order, and the one that was overtaken has nothing to report.
+                if (PublishFeatures(features, sequence) && !_ownsRepository)
                 {
-                    _options.OnFeaturesRefreshed?.Invoke(true);
+                    NotifyFeaturesRefreshed();
                 }
             }
         }
@@ -128,10 +140,9 @@ namespace GrowthBook.MultiUser
 
             if (features != null)
             {
-                PublishFeatures(features, sequence);
-                if (!_ownsRepository)
+                if (PublishFeatures(features, sequence) && !_ownsRepository)
                 {
-                    _options.OnFeaturesRefreshed?.Invoke(true);
+                    NotifyFeaturesRefreshed();
                 }
             }
         }
@@ -246,22 +257,36 @@ namespace GrowthBook.MultiUser
         /// <summary>
         /// Installs a refreshed feature set unless a later refresh has already published one.
         /// </summary>
-        private void PublishFeatures(IDictionary<string, Feature> features, long sequence)
+        private bool PublishFeatures(IDictionary<string, Feature> features, long sequence)
         {
             if (features == null)
             {
-                return;
+                return false;
             }
 
             lock (_publishLock)
             {
                 if (sequence <= _publishedRefresh)
                 {
-                    return;
+                    return false;
                 }
 
                 _publishedRefresh = sequence;
                 _currentFeatures = features;
+
+                return true;
+            }
+        }
+
+        private void NotifyFeaturesRefreshed()
+        {
+            try
+            {
+                _options.OnFeaturesRefreshed?.Invoke(true);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Encountered unhandled exception in the OnFeaturesRefreshed callback");
             }
         }
 

@@ -1,3 +1,4 @@
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
@@ -300,5 +301,84 @@ public class GrowthBookClientTests
 
         trackedExperiment.Should().NotBeNull();
         trackedExperiment.Key.Should().Be("dark-mode");
+    }
+
+    /// <summary>
+    /// A handler that throws has already failed; the refresh it is being told about has not. The
+    /// features are in effect by then, and on the background path the exception would fault a task
+    /// nobody awaits, so it would never be seen at all.
+    /// </summary>
+    [Fact]
+    public async Task AThrowingRefreshHandlerDoesNotEscapeOrStopTheRefresh()
+    {
+        var mockRepo = Substitute.For<IGrowthBookFeatureRepository>();
+
+        mockRepo
+            .GetFeatures(Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(CreateFeatures()));
+
+        using var client = new GrowthBookClient(new Options
+        {
+            ClientKey = "sdk-test",
+            LoggerFactory = NullLoggerFactory.Instance,
+            FeatureRepository = mockRepo,
+            OnFeaturesRefreshed = _ => throw new InvalidOperationException("the application's handler is broken")
+        });
+
+        await client.Awaiting(c => c.InitializeAsync()).Should().NotThrowAsync();
+
+        client.GetFeatures().Should().ContainKey("dark-mode", "the features were applied before anyone was told");
+    }
+
+    /// <summary>
+    /// Overlapping refreshes can finish out of order. The one that was overtaken is discarded rather
+    /// than published, so reporting it would tell a listener that a feature set is in effect when
+    /// nothing is evaluating against it.
+    /// </summary>
+    [Fact]
+    public async Task ARefreshOvertakenByANewerOneIsNotReported()
+    {
+        using var firstCallMayFinish = new ManualResetEventSlim(false);
+        using var firstCallStarted = new ManualResetEventSlim(false);
+
+        var calls = 0;
+        var mockRepo = Substitute.For<IGrowthBookFeatureRepository>();
+
+        mockRepo
+            .GetFeatures(Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                if (Interlocked.Increment(ref calls) == 1)
+                {
+                    firstCallStarted.Set();
+                    firstCallMayFinish.Wait(TimeSpan.FromSeconds(10));
+                }
+
+                return Task.FromResult(CreateFeatures());
+            });
+
+        var reported = 0;
+
+        using var client = new GrowthBookClient(new Options
+        {
+            ClientKey = "sdk-test",
+            LoggerFactory = NullLoggerFactory.Instance,
+            FeatureRepository = mockRepo,
+            OnFeaturesRefreshed = _ => Interlocked.Increment(ref reported)
+        });
+
+        var overtaken = Task.Run(() => client.RefreshFeaturesAsync());
+
+        firstCallStarted.Wait(TimeSpan.FromSeconds(10));
+
+        // Starts later, so it carries the higher sequence, and finishes first.
+        await client.RefreshFeaturesAsync();
+
+        firstCallMayFinish.Set();
+        await overtaken;
+
+        reported.Should().Be(1,
+            "the newer refresh is the one in effect and the one that reported; the older carries " +
+            "older definitions however late it comes back");
     }
 }
