@@ -36,6 +36,7 @@ namespace GrowthBook.Api
         private bool _isServerSentEventsEnabled;
         private SSEClient _sseClient;
         private CancellationTokenSource _refreshWorkerCancellation = new CancellationTokenSource();
+        private int _storedFeatureCount = -1;
 
         public FeatureRefreshWorker(ILogger<FeatureRefreshWorker> logger, IHttpClientFactory httpClientFactory, GrowthBookConfigurationOptions config, IGrowthBookFeatureCache cache)
         {
@@ -71,12 +72,26 @@ namespace GrowthBook.Api
 
             if (response.IsNotModified)
             {
-                if (_cache is InMemoryFeatureCache inMemoryCache)
-                {
-                    await inMemoryCache.RefreshExpiration(cancellationToken);
-                }
+                var storedFeatureCount = Volatile.Read(ref _storedFeatureCount);
+                var cacheNoLongerHoldsThePayload = _cache.FeatureCount == 0 && storedFeatureCount != 0;
 
-                return await _cache.GetFeatures(cancellationToken);
+                if (cacheNoLongerHoldsThePayload)
+                {
+                    _logger.LogInformation("Server reported no change but the cache no longer holds the payload, discarding the stored ETag and asking for the whole payload");
+
+                    _etagCache.Remove(_featuresApiEndpoint);
+
+                    response = await httpClient.GetFeaturesFrom(_featuresApiEndpoint, _logger, _config, cancellationToken ?? _refreshWorkerCancellation.Token, _etagCache).ConfigureAwait(false);
+                }
+                else
+                {
+                    if (_cache is IFeatureCacheExpiration expiringCache)
+                    {
+                        await expiringCache.RefreshExpiration(cancellationToken).ConfigureAwait(false);
+                    }
+
+                    return await _cache.GetFeatures(cancellationToken);
+                }
             }
 
             if (response.Features is null)
@@ -85,6 +100,8 @@ namespace GrowthBook.Api
             }
 
             await _cache.RefreshWith(response.Features, cancellationToken);
+
+            Volatile.Write(ref _storedFeatureCount, response.Features.Count);
 
             // Now that the cache has been populated at least once, we need to see if we're allowed
             // to kick off the server sent events listener and make sure we're in the intended mode
