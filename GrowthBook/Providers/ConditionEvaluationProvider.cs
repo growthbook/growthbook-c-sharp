@@ -564,7 +564,12 @@ namespace GrowthBook.Providers
             {
                 _logger.LogDebug("Evaluating whether the specified value is in an array");
 
-                // Pairwise rather than a set of tokens, so timestamps Json.NET read as dates still match strings
+                if (stringComparison is null && TryIntersectScalars(conditionValue, actualValue, out var intersects))
+                {
+                    return intersects;
+                }
+
+                // Pair by pair, so timestamps Json.NET read as dates still match strings
                 return conditionValue.Any(condition => actualValue.Any(actual => TokensEqual(condition, actual, stringComparison)));
             }
             else if (conditionValue is JArray array)
@@ -586,6 +591,69 @@ namespace GrowthBook.Providers
                 }
 
                 return conditionValue.ToString().IndexOf(actualValue.ToString(), stringComparison ?? StringComparison.Ordinal) >= 0;
+            }
+        }
+
+        /// <summary>
+        /// Checks whether two lists share a value using a hash lookup, which keeps large saved groups fast. Only
+        /// handles lists of strings, numbers, booleans and nulls; returns false if either list holds anything else.
+        /// </summary>
+        private static bool TryIntersectScalars(JToken conditionValues, JToken actualValues, out bool intersects)
+        {
+            intersects = false;
+            var keys = new HashSet<(JTokenType Type, object Value)>();
+
+            foreach (var condition in conditionValues)
+            {
+                if (!TryGetScalarKey(condition, out var key))
+                {
+                    return false;
+                }
+
+                keys.Add(key);
+            }
+
+            foreach (var actual in actualValues)
+            {
+                if (!TryGetScalarKey(actual, out var key))
+                {
+                    return false;
+                }
+
+                if (keys.Contains(key))
+                {
+                    intersects = true;
+                    return true;
+                }
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Gets a hash key for a string, number, boolean or null that is equal exactly when <see cref="ValuesEqual"/>
+        /// is: 1 and 1.0 share a key, but "1", 1 and true don't.
+        /// </summary>
+        private static bool TryGetScalarKey(JToken token, out (JTokenType Type, object Value) key)
+        {
+            switch (token.Type)
+            {
+                case JTokenType.String:
+                case JTokenType.Boolean:
+                    key = (token.Type, ((JValue)token).Value);
+                    return true;
+                case JTokenType.Integer:
+                case JTokenType.Float:
+                    var number = token.Value<double>();
+                    // -0.0 equals 0, but their boxed doubles needn't hash the same
+                    key = (JTokenType.Float, number == 0 ? 0d : number);
+                    return true;
+                case JTokenType.Null:
+                    key = (JTokenType.Null, null);
+                    return true;
+                default:
+                    key = default;
+                    return false;
             }
         }
 
@@ -749,7 +817,8 @@ namespace GrowthBook.Providers
         }
 
         /// <summary>
-        /// Compares two values for equality, comparing arrays and objects element by element. Timestamps Json.NET
+        /// Compares two values for equality, comparing arrays and objects element by element. Numbers compare by
+        /// value whether written as integers or decimals. Timestamps Json.NET
         /// read as dates are equal when they are the same instant, and equal a string holding the same timestamp.
         /// </summary>
         private static bool ValuesEqual(JToken left, JToken right)
@@ -759,6 +828,12 @@ namespace GrowthBook.Providers
             if (left?.Type == JTokenType.Date && right?.Type == JTokenType.Date)
             {
                 return Instant(left) == Instant(right);
+            }
+
+            // JSON has one number type, so 1 equals 1.0
+            if (IsNumber(left) && IsNumber(right))
+            {
+                return left.Value<double>() == right.Value<double>();
             }
 
             if (left is JArray leftArray && right is JArray rightArray)
