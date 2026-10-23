@@ -7,6 +7,7 @@ using System.Text.RegularExpressions;
 using System.Web;
 using GrowthBook.Extensions;
 using GrowthBook.Services;
+using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -380,5 +381,83 @@ namespace GrowthBook.Utilities
         }
 
         public static string GetStickyBucketExperimentKey(string key, int bucketVersion) => $"{key}__{bucketVersion}";
+
+        /// <summary>
+        /// Whether any of the filters excludes this run.
+        /// </summary>
+        /// <remarks>
+        /// Moved here from <see cref="GrowthBook"/> unchanged, taking the attributes as an argument
+        /// rather than reading the instance's own, so that an evaluation can be performed for a set of
+        /// attributes the instance does not hold.
+        /// </remarks>
+        public static bool IsFilteredOut(IEnumerable<Filter> filters, JObject attributes, ILogger logger = null)
+        {
+            foreach (var filter in filters)
+            {
+                (_, var hashValue) = attributes.GetHashAttributeAndValue(filter.Attribute);
+
+                if (hashValue.IsNullOrWhitespace())
+                {
+                    logger?.LogDebug("Attributes are missing a filter's hash attribute of '{FilterAttribute}', marking as filtered out", filter.Attribute);
+                    return true;
+                }
+
+                var bucket = HashUtilities.Hash(filter.Seed, hashValue, filter.HashVersion);
+
+                var isInAnyRange = filter.Ranges.Any(x => InRange(bucket.Value, x));
+
+                if (!isInAnyRange)
+                {
+                    logger?.LogDebug("This run is not in any range associated with a filter, marking as filtered out");
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Whether this run falls inside the rule's rollout.
+        /// </summary>
+        /// <remarks>
+        /// Moved here from <see cref="GrowthBook"/> unchanged, for the same reason as
+        /// <see cref="IsFilteredOut"/>.
+        /// </remarks>
+        public static bool IsIncludedInRollout(string seed, JObject attributes, string hashAttribute = null, BucketRange range = null, double? coverage = null, int? hashVersion = null, ILogger logger = null)
+        {
+            if (coverage == null && range == null)
+            {
+                logger?.LogDebug("No coverage value or range was specified, marking as included in rollout");
+                return true;
+            }
+
+            if (range is null && coverage == 0)
+            {
+                logger?.LogDebug("Range and coverage were not set, marking as not included in rollout");
+                return false;
+            }
+
+            (_, var hashValue) = attributes.GetHashAttributeAndValue(hashAttribute);
+
+            if (hashValue is null)
+            {
+                logger?.LogDebug("Attributes do not have a value for hash attribute '{HashAttribute}', marking as excluded from rollout", hashAttribute);
+                return false;
+            }
+
+            var bucket = HashUtilities.Hash(seed, hashValue, hashVersion ?? 1);
+
+            if (range != null)
+            {
+                return InRange(bucket.Value, range);
+            }
+
+            if (coverage != null)
+            {
+                return bucket <= coverage;
+            }
+
+            return true;
+        }
     }
 }
