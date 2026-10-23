@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using GrowthBook.Extensions;
 using Microsoft.Extensions.Logging;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
 namespace GrowthBook.Providers
@@ -178,7 +180,7 @@ namespace GrowthBook.Providers
                 }
             }
 
-            return JToken.DeepEquals(conditionValue ?? JValue.CreateNull(), attributeValue ?? JValue.CreateNull());
+            return ValuesEqual(conditionValue, attributeValue);
         }
 
         /// <summary>
@@ -291,11 +293,11 @@ namespace GrowthBook.Providers
 
             if (op == "$eq")
             {
-                return conditionValue.Equals(attributeValue);
+                return ValuesEqual(conditionValue, attributeValue);
             }
             if (op == "$ne")
             {
-                return !conditionValue.Equals(attributeValue);
+                return !ValuesEqual(conditionValue, attributeValue);
             }
 
             // Handle comparison operators with a cleaner approach
@@ -630,17 +632,12 @@ namespace GrowthBook.Providers
 
         private static bool TokensEqual(JToken left, JToken right, StringComparison? stringComparison)
         {
-            if (stringComparison is null)
-            {
-                return JToken.DeepEquals(left ?? JValue.CreateNull(), right ?? JValue.CreateNull());
-            }
-
-            if (left?.Type == JTokenType.String && right?.Type == JTokenType.String)
+            if (stringComparison != null && left?.Type == JTokenType.String && right?.Type == JTokenType.String)
             {
                 return string.Equals(left.ToString(), right.ToString(), stringComparison.Value);
             }
 
-            return JToken.DeepEquals(left ?? JValue.CreateNull(), right ?? JValue.CreateNull());
+            return ValuesEqual(left, right);
         }
 
         /// <summary>
@@ -690,6 +687,7 @@ namespace GrowthBook.Providers
                 case JTokenType.Boolean:
                     return "boolean";
                 case JTokenType.String:
+                case JTokenType.Date:
                     return "string";
                 case JTokenType.Object:
                     return "object";
@@ -709,6 +707,8 @@ namespace GrowthBook.Providers
         /// <returns>True if both values have the same orderable type and the comparison is satisfied.</returns>
         private static bool EvaluateComparison(JToken attributeValue, JToken conditionValue, Func<int, bool> meetsComparison)
         {
+            (attributeValue, conditionValue) = AlignDates(attributeValue, conditionValue);
+
             if (!IsOrderable(attributeValue, conditionValue))
             {
                 return false;
@@ -717,6 +717,11 @@ namespace GrowthBook.Providers
             if (IsNumber(attributeValue))
             {
                 return meetsComparison(attributeValue.Value<double>().CompareTo(conditionValue.Value<double>()));
+            }
+
+            if (attributeValue.Type == JTokenType.Date && conditionValue.Type == JTokenType.Date)
+            {
+                return meetsComparison(Instant(attributeValue).CompareTo(Instant(conditionValue)));
             }
 
             return meetsComparison(string.CompareOrdinal(StringValue(attributeValue), StringValue(conditionValue)));
@@ -751,6 +756,61 @@ namespace GrowthBook.Providers
 
             return value.ToString();
         }
+
+        /// <summary>
+        /// Compares two values for equality. Timestamps Json.NET read as dates are equal when they are the same instant.
+        /// </summary>
+        private static bool ValuesEqual(JToken left, JToken right)
+        {
+            (left, right) = AlignDates(left, right);
+
+            if (left?.Type == JTokenType.Date && right?.Type == JTokenType.Date)
+            {
+                return Instant(left) == Instant(right);
+            }
+
+            return JToken.DeepEquals(left ?? JValue.CreateNull(), right ?? JValue.CreateNull());
+        }
+
+        /// <summary>
+        /// Json.NET reads ISO 8601 strings as dates by default, which loses their original text. When only one side
+        /// was read that way, reads the other side the same way so that equal timestamps compare as equal.
+        /// </summary>
+        private static (JToken Left, JToken Right) AlignDates(JToken left, JToken right)
+        {
+            if (left?.Type == JTokenType.Date && right?.Type == JTokenType.String)
+            {
+                return (left, ReadAsDate(right, left));
+            }
+
+            if (right?.Type == JTokenType.Date && left?.Type == JTokenType.String)
+            {
+                return (ReadAsDate(left, right), right);
+            }
+
+            return (left, right);
+        }
+
+        /// <summary>
+        /// Reads a string the way Json.NET read the given date, returning the string unchanged if it isn't a timestamp.
+        /// </summary>
+        private static JToken ReadAsDate(JToken text, JToken date)
+        {
+            var dateParseHandling = ((JValue)date).Value is DateTimeOffset
+                ? DateParseHandling.DateTimeOffset
+                : DateParseHandling.DateTime;
+
+            using (var reader = new JsonTextReader(new StringReader(JsonConvert.ToString(text.ToString()))) { DateParseHandling = dateParseHandling })
+            {
+                var token = JToken.ReadFrom(reader);
+
+                return token.Type == JTokenType.Date ? token : text;
+            }
+        }
+
+        // A date without an offset is treated as local time, the same way for both sides of a comparison
+        private static DateTimeOffset Instant(JToken date) =>
+            ((JValue)date).Value is DateTimeOffset offset ? offset : new DateTimeOffset((DateTime)((JValue)date).Value);
 
         /// <summary>
         /// Gets the text of a version, writing numbers the way JavaScript does (2.0 is "2").
