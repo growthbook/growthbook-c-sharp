@@ -34,7 +34,8 @@ namespace GrowthBook.Api
         private readonly LruETagCache _etagCache;
         private readonly string _featuresApiEndpoint;
         private readonly string _serverSentEventsApiEndpoint;
-        private bool _isServerSentEventsEnabled;
+        private volatile bool _isServerSentEventsEnabled;
+        private readonly object _sseClientLock = new object();
         private SSEClient _sseClient;
         private CancellationTokenSource _refreshWorkerCancellation = new CancellationTokenSource();
 
@@ -59,7 +60,11 @@ namespace GrowthBook.Api
         public void Cancel()
         {
             _refreshWorkerCancellation.Cancel();
-            _sseClient?.Disconnect();
+
+            lock (_sseClientLock)
+            {
+                _sseClient?.Disconnect();
+            }
         }
 
         public async Task<IDictionary<string, Feature>> RefreshCacheFromApi(CancellationToken? cancellationToken = null)
@@ -102,20 +107,23 @@ namespace GrowthBook.Api
 
         private void EnsureCorrectRefreshModeIsActive()
         {
-            if (_isServerSentEventsEnabled)
+            lock (_sseClientLock)
             {
-                if (_sseClient == null || _sseClient.ConnectionStatus == SSEConnectionStatus.Disconnected)
+                if (_isServerSentEventsEnabled)
                 {
-                    _logger.LogDebug("Server sent events are enabled but not connected, starting SSE client now");
-                    StartSSEClient();
+                    if (_sseClient == null || _sseClient.ConnectionStatus == SSEConnectionStatus.Disconnected)
+                    {
+                        _logger.LogDebug("Server sent events are enabled but not connected, starting SSE client now");
+                        StartSSEClient();
+                    }
                 }
-            }
-            else
-            {
-                if (_sseClient != null && _sseClient.ConnectionStatus != SSEConnectionStatus.Disconnected)
+                else
                 {
-                    _logger.LogDebug("Server sent events are disabled but client is connected, disconnecting now");
-                    _sseClient.Disconnect();
+                    if (_sseClient != null && _sseClient.ConnectionStatus != SSEConnectionStatus.Disconnected)
+                    {
+                        _logger.LogDebug("Server sent events are disabled but client is connected, disconnecting now");
+                        _sseClient.Disconnect();
+                    }
                 }
             }
         }
@@ -198,7 +206,13 @@ namespace GrowthBook.Api
         public void Dispose()
         {
             Cancel();
-            _sseClient?.Dispose();
+
+            lock (_sseClientLock)
+            {
+                _sseClient?.Dispose();
+                _sseClient = null;
+            }
+
             _refreshWorkerCancellation?.Dispose();
         }
     }
