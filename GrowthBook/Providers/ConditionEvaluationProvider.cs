@@ -25,12 +25,33 @@ namespace GrowthBook.Providers
             ["$gte"] = result => result >= 0
         };
 
+        /// <summary>
+        /// State shared by one evaluation: the saved groups and the <c>$savedGroup</c> ids already being resolved, to stop cycles.
+        /// </summary>
+        private sealed class EvalContext
+        {
+            public EvalContext(JObject savedGroups, HashSet<string> visited)
+            {
+                SavedGroups = savedGroups;
+                Visited = visited;
+            }
+
+            public JObject SavedGroups { get; }
+            public HashSet<string> Visited { get; }
+        }
+
         public ConditionEvaluationProvider(ILogger<ConditionEvaluationProvider> logger) => _logger = logger;
 
         /// <inheritdoc/>
         public bool EvalCondition(JToken attributes, JObject condition, JObject savedGroups = default)
         {
             _logger.LogInformation("Beginning to evaluate attributes based on the provided JSON condition");
+
+            return EvalCondition(attributes, condition, new EvalContext(savedGroups, new HashSet<string>()));
+        }
+
+        private bool EvalCondition(JToken attributes, JObject condition, EvalContext ctx)
+        {
             _logger.LogDebug("Attribute evaluation is based on the JSON condition \'{Condition}\'", condition);
 
             foreach (var innerCondition in condition.Properties())
@@ -38,31 +59,37 @@ namespace GrowthBook.Providers
                 switch(innerCondition.Name)
                 {
                     case "$or":
-                        if (!EvalOr(attributes, innerCondition.AsArray(), savedGroups))
+                        if (!EvalOr(attributes, innerCondition.AsArray(), ctx))
                         {
                             return false;
                         }
                         break;
                     case "$nor":
-                        if (EvalOr(attributes, innerCondition.AsArray(), savedGroups))
+                        if (EvalOr(attributes, innerCondition.AsArray(), ctx))
                         {
                             return false;
                         }
                         break;
                     case "$and":
-                        if (!EvalAnd(attributes, innerCondition.AsArray(), savedGroups))
+                        if (!EvalAnd(attributes, innerCondition.AsArray(), ctx))
                         {
                             return false;
                         }
                         break;
                     case "$not":
-                        if (EvalCondition(attributes, innerCondition.AsObject(), savedGroups))
+                        if (EvalCondition(attributes, innerCondition.AsObject(), ctx))
+                        {
+                            return false;
+                        }
+                        break;
+                    case "$savedGroup":
+                        if (!EvalSavedGroup(attributes, innerCondition.Value, ctx))
                         {
                             return false;
                         }
                         break;
                     default:
-                        if (!EvalConditionValue(innerCondition.Value, GetPath(attributes, innerCondition.Name), savedGroups))
+                        if (!EvalConditionValue(innerCondition.Value, GetPath(attributes, innerCondition.Name), ctx))
                         {
                             return false;
                         }
@@ -79,7 +106,7 @@ namespace GrowthBook.Providers
         /// <param name="attributes">The attributes to compare against.</param>
         /// <param name="condition">The condition to evaluate.</param>
         /// <returns>True if the attributes satisfy any of the conditions.</returns>
-        private bool EvalOr(JToken attributes, JArray conditions, JObject savedGroups)
+        private bool EvalOr(JToken attributes, JArray conditions, EvalContext ctx)
         {
             if (conditions.Count == 0)
             {
@@ -91,7 +118,7 @@ namespace GrowthBook.Providers
 
             foreach (JObject condition in conditions)
             {
-                if (EvalCondition(attributes, condition, savedGroups))
+                if (EvalCondition(attributes, condition, ctx))
                 {
                     return true;
                 }
@@ -106,13 +133,13 @@ namespace GrowthBook.Providers
         /// <param name="attributes">The attributes to compare against.</param>
         /// <param name="condition">The condition to evaluate.</param>
         /// <returns>True if the attributes satisfy all of the conditions.</returns>
-        private bool EvalAnd(JToken attributes, JArray conditions, JObject savedGroups)
+        private bool EvalAnd(JToken attributes, JArray conditions, EvalContext ctx)
         {
             _logger.LogDebug("Evaluating all conditions within an 'and' context");
 
             foreach (JObject condition in conditions)
             {
-                if (!EvalCondition(attributes, condition, savedGroups))
+                if (!EvalCondition(attributes, condition, ctx))
                 {
                     return false;
                 }
@@ -127,7 +154,7 @@ namespace GrowthBook.Providers
         /// <param name="conditionValue">The condition value to check.</param>
         /// <param name="attributeValue">The attribute value to check.</param>
         /// <returns>True if the condition value matches the attribute value.</returns>
-        private bool EvalConditionValue(JToken conditionValue, JToken attributeValue, JObject savedGroups)
+        private bool EvalConditionValue(JToken conditionValue, JToken attributeValue, EvalContext ctx)
         {
             _logger.LogDebug("Evaluating condition value \'{ConditionValue}\'", conditionValue);
 
@@ -141,7 +168,7 @@ namespace GrowthBook.Providers
 
                     foreach (JProperty property in conditionObj.Properties())
                     {
-                        if (!EvalOperatorCondition(property.Name, attributeValue, property.Value, savedGroups))
+                        if (!EvalOperatorCondition(property.Name, attributeValue, property.Value, ctx))
                         {
                             return false;
                         }
@@ -155,12 +182,79 @@ namespace GrowthBook.Providers
         }
 
         /// <summary>
+        /// Resolves a <c>$savedGroup</c> reference. Anything unrecognized matches nobody.
+        /// </summary>
+        /// <param name="attributes">The attributes to compare against.</param>
+        /// <param name="reference">The reference, an object with an <c>id</c> and an optional <c>attributeKey</c> override.</param>
+        /// <returns>True if the attributes are in the referenced group.</returns>
+        private bool EvalSavedGroup(JToken attributes, JToken reference, EvalContext ctx)
+        {
+            if (!(reference is JObject referenceObj) || referenceObj["id"]?.Type != JTokenType.String)
+            {
+                return false;
+            }
+
+            var id = referenceObj["id"].ToString();
+
+            if (ctx.Visited.Contains(id))
+            {
+                return false;
+            }
+
+            // Falling back to the entry's attribute would check a different population
+            var attributeKey = referenceObj["attributeKey"];
+
+            if (attributeKey != null && attributeKey.Type != JTokenType.String)
+            {
+                return false;
+            }
+
+            // Absent, or a legacy bare array
+            if (!(ctx.SavedGroups?[id] is JObject entry))
+            {
+                return false;
+            }
+
+            var type = entry["type"]?.Type == JTokenType.String ? entry["type"].ToString() : null;
+
+            if (type == "list")
+            {
+                // The override wins over the entry's own attribute
+                var key = attributeKey ?? entry["attributeKey"];
+
+                if (key?.Type != JTokenType.String || !(entry["values"] is JArray values))
+                {
+                    return false;
+                }
+
+                return IsIn(values, GetPath(attributes, key.ToString()));
+            }
+
+            if (type == "condition")
+            {
+                // A condition group has no single attribute, so any override is ignored
+                if (!(entry["condition"] is JObject condition))
+                {
+                    return false;
+                }
+
+                // A copy, so sibling groups don't see each other's ids
+                var visited = new HashSet<string>(ctx.Visited) { id };
+
+                return EvalCondition(attributes, condition, new EvalContext(ctx.SavedGroups, visited));
+            }
+
+            // A group type added after this SDK was built
+            return false;
+        }
+
+        /// <summary>
         /// Checks if attributeValue is an array, and if so at least one of the array items must match the condition.
         /// </summary>
         /// <param name="condition">The condition to check.</param>
         /// <param name="attributeValue">The attribute value to check.</param>
         /// <returns>True if attributeValue is an array and at least one of the array items matches the condition.</returns>
-        private bool ElemMatch(JObject condition, JToken attributeValue, JObject savedGroups)
+        private bool ElemMatch(JObject condition, JToken attributeValue, EvalContext ctx)
         {
             if (attributeValue?.Type != JTokenType.Array)
             {
@@ -170,12 +264,12 @@ namespace GrowthBook.Providers
 
             foreach (JToken elem in (JArray)attributeValue)
             {
-                if (IsOperatorObject(condition) && EvalConditionValue(condition, elem, savedGroups))
+                if (IsOperatorObject(condition) && EvalConditionValue(condition, elem, ctx))
                 {
                     return true;
                 }
 
-                if (EvalCondition(elem, condition, savedGroups))
+                if (EvalCondition(elem, condition, ctx))
                 {
                     return true;
                 }
@@ -191,7 +285,7 @@ namespace GrowthBook.Providers
         /// <param name="attributeValue">The attribute value to check.</param>
         /// <param name="conditionValue">The condition value to check.</param>
         /// <returns></returns>
-        private bool EvalOperatorCondition(string op, JToken attributeValue, JToken conditionValue, JObject savedGroups)
+        private bool EvalOperatorCondition(string op, JToken attributeValue, JToken conditionValue, EvalContext ctx)
         {
             _logger.LogDebug("Evaluating operator condition \'{Op}\'", op);
 
@@ -209,8 +303,6 @@ namespace GrowthBook.Providers
             {
                 return EvaluateComparison(attributeValue, conditionValue, comparisonFunc);
             }
-
-            var actualComparableValue = attributeValue as IComparable;
 
             if (op == "$regex")
             {
@@ -258,16 +350,16 @@ namespace GrowthBook.Providers
             }
             if (op == "$all")
             {
-                return IsAll(conditionValue, attributeValue, savedGroups, stringComparison: null);
+                return IsAll(conditionValue, attributeValue, ctx, stringComparison: null);
             }
             if (op == "$alli")
             {
-                return IsAll(conditionValue, attributeValue, savedGroups, StringComparison.OrdinalIgnoreCase);
+                return IsAll(conditionValue, attributeValue, ctx, StringComparison.OrdinalIgnoreCase);
             }
 
             if (op == "$elemMatch")
             {
-                return ElemMatch((JObject)conditionValue, attributeValue, savedGroups);
+                return ElemMatch((JObject)conditionValue, attributeValue, ctx);
             }
             if (op == "$size")
             {
@@ -276,7 +368,7 @@ namespace GrowthBook.Providers
                     return false;
                 }
 
-                return EvalConditionValue(conditionValue, ((JArray)attributeValue).Count, savedGroups);
+                return EvalConditionValue(conditionValue, ((JArray)attributeValue).Count, ctx);
             }
             if (op == "$exists")
             {
@@ -295,35 +387,35 @@ namespace GrowthBook.Providers
             }
             if (op == "$not")
             {
-                return !EvalConditionValue(conditionValue, attributeValue, savedGroups);
+                return !EvalConditionValue(conditionValue, attributeValue, ctx);
             }
             if (op == "$veq")
             {
-                return CompareVersions(attributeValue, conditionValue, x => x == 0);
+                return CompareVersions(attributeValue, conditionValue, x => x == 0, matchesOnTypeMismatch: false);
             }
             if (op == "$vne")
             {
-                return CompareVersions(attributeValue, conditionValue, x => x != 0);
+                return CompareVersions(attributeValue, conditionValue, x => x != 0, matchesOnTypeMismatch: true);
             }
             if (op == "$vlt")
             {
-                return CompareVersions(attributeValue, conditionValue, x => x < 0);
+                return CompareVersions(attributeValue, conditionValue, x => x < 0, matchesOnTypeMismatch: false);
             }
             if (op == "$vlte")
             {
-                return CompareVersions(attributeValue, conditionValue, x => x <= 0);
+                return CompareVersions(attributeValue, conditionValue, x => x <= 0, matchesOnTypeMismatch: false);
             }
             if (op == "$vgt")
             {
-                return CompareVersions(attributeValue, conditionValue, x => x > 0);
+                return CompareVersions(attributeValue, conditionValue, x => x > 0, matchesOnTypeMismatch: false);
             }
             if (op == "$vgte")
             {
-                return CompareVersions(attributeValue, conditionValue, x => x >= 0);
+                return CompareVersions(attributeValue, conditionValue, x => x >= 0, matchesOnTypeMismatch: false);
             }
             if (op == "$inGroup")
             {
-                var inGroupValues = GetSavedGroupValues(savedGroups, conditionValue);
+                var inGroupValues = GetSavedGroupValues(ctx.SavedGroups, conditionValue);
 
                 // The null check sits outside the negation on purpose, so a group that could not be
                 // resolved answers false for both operators rather than true for this one by default.
@@ -331,7 +423,7 @@ namespace GrowthBook.Providers
             }
             if (op == "$notInGroup")
             {
-                var notInGroupValues = GetSavedGroupValues(savedGroups, conditionValue);
+                var notInGroupValues = GetSavedGroupValues(ctx.SavedGroups, conditionValue);
 
                 return notInGroupValues != null && !IsIn(notInGroupValues, attributeValue);
             }
@@ -343,6 +435,12 @@ namespace GrowthBook.Providers
 
         internal static string PaddedVersionString(string input)
         {
+            // An empty version is version 0
+            if (string.IsNullOrEmpty(input))
+            {
+                input = "0";
+            }
+
             // Remove build info and leading `v` if any
             // Split version into parts (both core version numbers and pre-release tags)
             // "v1.2.3-rc.1+build123" -> ["1","2","3","rc","1"]
@@ -394,9 +492,15 @@ namespace GrowthBook.Providers
                 return false;
             }
 
+            // Only strings are matched. Any other type fails the regex, so its negation matches.
+            if (!IsString(attributeValue))
+            {
+                return negate;
+            }
+
             try
             {
-                var isMatch = Regex.IsMatch(attributeValue.ToString(), conditionValue.ToString(), options);
+                var isMatch = Regex.IsMatch(StringValue(attributeValue), conditionValue.ToString(), options);
 
                 return negate ? !isMatch : isMatch;
             }
@@ -492,7 +596,7 @@ namespace GrowthBook.Providers
             }
         }
 
-        private bool IsAll(JToken conditionValue, JToken attributeValue, JObject savedGroups, StringComparison? stringComparison)
+        private bool IsAll(JToken conditionValue, JToken attributeValue, EvalContext ctx, StringComparison? stringComparison)
         {
             if (conditionValue.Type != JTokenType.Array)
             {
@@ -510,7 +614,7 @@ namespace GrowthBook.Providers
             {
                 if (stringComparison is null)
                 {
-                    if (!attributeList.Any(x => EvalConditionValue(condition, x, savedGroups)))
+                    if (!attributeList.Any(x => EvalConditionValue(condition, x, ctx)))
                     {
                         return false;
                     }
@@ -539,10 +643,19 @@ namespace GrowthBook.Providers
             return JToken.DeepEquals(left ?? JValue.CreateNull(), right ?? JValue.CreateNull());
         }
 
-        private static bool CompareVersions(JToken left, JToken right, Func<int, bool> meetsComparison)
+        /// <summary>
+        /// Compares two versions. Both sides must be strings, or both numbers; anything else is a type mismatch.
+        /// </summary>
+        /// <param name="matchesOnTypeMismatch">The result for a type mismatch: true only for <c>$vne</c>, the negation of <c>$veq</c>.</param>
+        private static bool CompareVersions(JToken left, JToken right, Func<int, bool> meetsComparison, bool matchesOnTypeMismatch)
         {
-            var leftValue = PaddedVersionString(left.ToString());
-            var rightValue = PaddedVersionString(right.ToString());
+            if (!IsOrderable(left, right))
+            {
+                return matchesOnTypeMismatch;
+            }
+
+            var leftValue = PaddedVersionString(VersionText(left));
+            var rightValue = PaddedVersionString(VersionText(right));
 
             var comparisonResult = string.CompareOrdinal(leftValue, rightValue);
 
@@ -587,99 +700,64 @@ namespace GrowthBook.Providers
 
         /// <summary>
         /// Evaluates a comparison operation between an attribute value and a condition value.
-        /// Missing numeric attributes are compared as zero to match the standard fixture.
-        /// Explicit null values never satisfy comparison operators.
+        /// Numbers compare numerically and strings compare as text. Any other pairing, including a
+        /// missing or null attribute and booleans, fails the comparison.
         /// </summary>
         /// <param name="attributeValue">The attribute value to compare.</param>
         /// <param name="conditionValue">The condition value to compare against.</param>
         /// <param name="meetsComparison">Function that determines if the comparison result meets the criteria.</param>
-        /// <returns>True if the comparison is satisfied, false if attribute is null or comparison fails.</returns>
-        private bool EvaluateComparison(JToken attributeValue, JToken conditionValue, Func<int, bool> meetsComparison)
+        /// <returns>True if both values have the same orderable type and the comparison is satisfied.</returns>
+        private static bool EvaluateComparison(JToken attributeValue, JToken conditionValue, Func<int, bool> meetsComparison)
         {
-            if (attributeValue == null)
-            {
-                if (conditionValue.Type == JTokenType.Integer || conditionValue.Type == JTokenType.Float)
-                {
-                    return meetsComparison(0d.CompareTo(conditionValue.Value<double>()));
-                }
-
-                return false;
-            }
-
-            // Explicit null attributes should never satisfy comparison operators.
-            if (attributeValue.Type == JTokenType.Null)
+            if (!IsOrderable(attributeValue, conditionValue))
             {
                 return false;
             }
 
-            // Try to parse both values as DateTime first
-            if (TryParseDateTimes(attributeValue, conditionValue, out var attrDate, out var condDate))
+            if (IsNumber(attributeValue))
             {
-                var dateComparisonResult = attrDate.CompareTo(condDate);
-                return meetsComparison(dateComparisonResult);
+                return meetsComparison(attributeValue.Value<double>().CompareTo(conditionValue.Value<double>()));
             }
 
-            // Try to parse both values as numbers
-            if (TryParseNumbers(attributeValue, conditionValue, out var attrNumber, out var condNumber))
-            {
-                var numberComparisonResult = attrNumber.CompareTo(condNumber);
-                return meetsComparison(numberComparisonResult);
-            }
-
-            // Fall back to string comparison
-            var attrString = attributeValue.ToString();
-            var condString = conditionValue.ToString();
-
-            var stringComparisonResult = string.Compare(attrString, condString, StringComparison.Ordinal);
-            return meetsComparison(stringComparisonResult);
+            return meetsComparison(string.CompareOrdinal(StringValue(attributeValue), StringValue(conditionValue)));
         }
 
         /// <summary>
-        /// Attempts to parse both values as DateTime objects for proper date comparison.
+        /// Returns true when both values are numbers, or both are strings.
         /// </summary>
-        private static bool TryParseDateTimes(JToken attributeValue, JToken conditionValue, out DateTime attrDate, out DateTime condDate)
+        private static bool IsOrderable(JToken left, JToken right) =>
+            (IsNumber(left) && IsNumber(right)) || (IsString(left) && IsString(right));
+
+        private static bool IsNumber(JToken value) =>
+            value?.Type == JTokenType.Integer || value?.Type == JTokenType.Float;
+
+        // Json.NET reads ISO 8601 date-time strings as dates by default, but they are still strings in the payload.
+        private static bool IsString(JToken value) =>
+            value?.Type == JTokenType.String || value?.Type == JTokenType.Date;
+
+        /// <summary>
+        /// Gets the text of a string value. A date read by Json.NET is written back in round-trip ISO 8601 format.
+        /// </summary>
+        private static string StringValue(JToken value)
         {
-            attrDate = default;
-            condDate = default;
+            if (value.Type == JTokenType.Date)
+            {
+                var date = ((JValue)value).Value;
 
-            var attrString = attributeValue.ToString();
-            var condString = conditionValue.ToString();
+                return date is DateTimeOffset offset
+                    ? offset.ToString("yyyy-MM-dd'T'HH:mm:ss.FFFFFFFzzz", CultureInfo.InvariantCulture)
+                    : ((DateTime)date).ToString("yyyy-MM-dd'T'HH:mm:ss.FFFFFFFK", CultureInfo.InvariantCulture);
+            }
 
-            // Try parsing both values as DateTime
-            var attrParsed = DateTime.TryParse(attrString, null, DateTimeStyles.RoundtripKind, out attrDate);
-            var condParsed = DateTime.TryParse(condString, null, DateTimeStyles.RoundtripKind, out condDate);
-
-            return attrParsed && condParsed;
+            return value.ToString();
         }
 
         /// <summary>
-        /// Attempts to parse both values as numeric values for proper numeric comparison.
+        /// Gets the text of a version, writing numbers the way JavaScript does (2.0 is "2").
         /// </summary>
-        private static bool TryParseNumbers(JToken attributeValue, JToken conditionValue, out double attrNumber, out double condNumber)
-        {
-            attrNumber = default;
-            condNumber = default;
-
-            // First try to get numeric values from JToken types directly
-            if (attributeValue.Type == JTokenType.Integer || attributeValue.Type == JTokenType.Float)
-            {
-                attrNumber = attributeValue.Value<double>();
-            }
-            else if (!double.TryParse(attributeValue.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out attrNumber))
-            {
-                return false;
-            }
-
-            if (conditionValue.Type == JTokenType.Integer || conditionValue.Type == JTokenType.Float)
-            {
-                condNumber = conditionValue.Value<double>();
-            }
-            else if (!double.TryParse(conditionValue.ToString(), NumberStyles.Float, CultureInfo.InvariantCulture, out condNumber))
-            {
-                return false;
-            }
-
-            return true;
-        }
+        private static string VersionText(JToken value) =>
+            IsNumber(value)
+                ? value.Value<double>().ToString("R", CultureInfo.InvariantCulture)
+                : StringValue(value);
     }
 }

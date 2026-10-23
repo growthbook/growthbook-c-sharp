@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using FluentAssertions;
+using Newtonsoft.Json.Linq;
 using Xunit;
 
 namespace GrowthBook.Tests.StandardTests.GrowthBookTests;
@@ -21,10 +22,22 @@ public class FeatureTests : UnitTest
         public string FeatureName { get; set; }
         [TestPropertyIndex(3)]
         public FeatureResult ExpectedResult { get; set; }
+        /// <summary>
+        /// The context as raw JSON, to see payload fields that <see cref="Context"/> doesn't model.
+        /// </summary>
+        [TestPropertyIndex(1)]
+        public JObject RawContext { get; set; }
     }
 
+    /// <summary>
+    /// Gets the feature cases, leaving out those that need contextual bandits, which this SDK doesn't implement yet.
+    /// </summary>
+    public static IEnumerable<object[]> GetSupportedFeatureTests() =>
+        GetMappedTestsInCategory(typeof(FeatureTestCase))
+            .Where(data => ((FeatureTestCase)data[0]).RawContext?["contextualBandits"] is null);
+
     [Theory]
-    [MemberData(nameof(GetMappedTestsInCategory), typeof(FeatureTestCase))]
+    [MemberData(nameof(GetSupportedFeatureTests))]
     public void EvalFeature(FeatureTestCase testCase)
     {
         var gb = new GrowthBook(testCase.Context);

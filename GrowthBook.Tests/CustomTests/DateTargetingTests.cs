@@ -12,7 +12,7 @@ namespace GrowthBook.Tests.CustomTests
 {
     /// <summary>
     /// Tests for date targeting functionality improvements - GitHub issue #46
-    /// Verifies that the EvaluateComparison fix properly handles DateTime and numeric parsing
+    /// Verifies that comparisons order ISO dates as text, numbers numerically, and never coerce strings to numbers
     /// </summary>
     public class DateTargetingTests
     {
@@ -51,11 +51,11 @@ namespace GrowthBook.Tests.CustomTests
             using var growthBook = new GrowthBookSdk.GrowthBook(context);
             
             var result = growthBook.IsOn("date-feature");
-            result.Should().BeTrue("dates should be parsed and compared as DateTime objects");
+            result.Should().BeTrue("ISO dates order correctly when compared as text");
         }
 
         [Fact]
-        public void NumericComparison_Should_Work_With_Number_Parsing()
+        public void NumericComparison_Should_Compare_Numbers_Numerically_And_Strings_As_Text()
         {
             var context = new Context
             {
@@ -105,11 +105,11 @@ namespace GrowthBook.Tests.CustomTests
             using var growthBook = new GrowthBookSdk.GrowthBook(context);
             
             growthBook.IsOn("age-feature").Should().BeTrue("integers should be compared numerically");
-            growthBook.IsOn("price-feature").Should().BeTrue("numeric strings should be parsed and compared as numbers");
+            growthBook.IsOn("price-feature").Should().BeFalse("numeric strings compare as text, and \"99.50\" sorts after \"100.00\"");
         }
 
         [Fact]
-        public void NumericComparison_Should_Parse_Decimal_Strings_With_Invariant_Culture()
+        public void StringComparison_Should_Not_Depend_On_Culture()
         {
             var originalCulture = Thread.CurrentThread.CurrentCulture;
             var originalUICulture = Thread.CurrentThread.CurrentUICulture;
@@ -121,10 +121,10 @@ namespace GrowthBook.Tests.CustomTests
                 var context = new Context
                 {
                     Enabled = true,
-                    Attributes = JObject.FromObject(new { priceString = "99.50" }),
+                    Attributes = JObject.FromObject(new { name = "B" }),
                     Features = new Dictionary<string, Feature>
                     {
-                        ["price-feature"] = new Feature
+                        ["name-feature"] = new Feature
                         {
                             DefaultValue = false,
                             Rules = new List<FeatureRule>
@@ -132,8 +132,8 @@ namespace GrowthBook.Tests.CustomTests
                                 new FeatureRule
                                 {
                                     Condition = JObject.Parse(@"{
-                                        ""priceString"": {
-                                            ""$lt"": ""100.00""
+                                        ""name"": {
+                                            ""$lt"": ""a""
                                         }
                                     }"),
                                     Force = true
@@ -146,7 +146,7 @@ namespace GrowthBook.Tests.CustomTests
 
                 using var growthBook = new GrowthBookSdk.GrowthBook(context);
 
-                growthBook.IsOn("price-feature").Should().BeTrue("decimal targeting strings should not depend on the process culture");
+                growthBook.IsOn("name-feature").Should().BeTrue("strings compare by character code, so \"B\" < \"a\" whatever the process culture");
             }
             finally
             {
