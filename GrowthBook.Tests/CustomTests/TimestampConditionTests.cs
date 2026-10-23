@@ -53,6 +53,46 @@ namespace GrowthBook.Tests.CustomTests
             _provider.EvalCondition(attributes, JObject.Parse($@"{{ ""d"": {{ ""$in"": [""{timestamp}""] }} }}")).Should().BeTrue();
         }
 
+        /// <summary>
+        /// Reads JSON the way the SDK reads a features payload, keeping timestamps as strings.
+        /// </summary>
+        private static JObject ParseAsStrings(string json) =>
+            (JObject)JToken.ReadFrom(new JsonTextReader(new System.IO.StringReader(json)) { DateParseHandling = DateParseHandling.None });
+
+        public static IEnumerable<object[]> NestedTimestampConditions() => new[]
+        {
+            new object[] { @"{ ""d"": { ""$in"": [""2026-10-20T00:00:00Z""] } }", true },
+            new object[] { @"{ ""d"": { ""$nin"": [""2026-10-20T00:00:00Z""] } }", false },
+            new object[] { @"{ ""d"": { ""$in"": [""2026-10-21T00:00:00Z""] } }", false },
+            new object[] { @"{ ""d"": { ""$nin"": [""2026-10-21T00:00:00Z""] } }", true },
+            new object[] { @"{ ""d"": { ""$all"": [""2026-10-20T00:00:00Z""] } }", true },
+            new object[] { @"{ ""d"": { ""$elemMatch"": { ""$eq"": ""2026-10-20T00:00:00Z"" } } }", true },
+            new object[] { @"{ ""d"": [""2026-10-20T00:00:00Z"", ""x""] }", true },
+            new object[] { @"{ ""d"": [""2026-10-20T00:00:00Z""] }", false },
+            new object[] { @"{ ""o"": { ""at"": ""2026-10-20T00:00:00Z"", ""tags"": [""2026-10-20T00:00:00Z""] } }", true },
+            new object[] { @"{ ""o"": { ""at"": ""2026-10-21T00:00:00Z"", ""tags"": [""2026-10-20T00:00:00Z""] } }", false },
+            new object[] { @"{ ""d"": { ""$inGroup"": ""dates"" } }", true },
+            new object[] { @"{ ""d"": { ""$notInGroup"": ""dates"" } }", false }
+        };
+
+        [Theory]
+        [MemberData(nameof(NestedTimestampConditions))]
+        public void DatesInsideArraysAndObjectsMatchTheSameTimestampAsAString(string condition, bool expected)
+        {
+            const string attributesJson = @"{ ""d"": [""2026-10-20T00:00:00Z"", ""x""], ""o"": { ""at"": ""2026-10-20T00:00:00Z"", ""tags"": [""2026-10-20T00:00:00Z""] } }";
+            var savedGroups = ParseAsStrings(@"{ ""dates"": [""2026-10-20T00:00:00Z""] }");
+
+            // Every pairing of a date read by Json.NET and a string must agree
+            foreach (var attributes in new[] { JObject.Parse(attributesJson), ParseAsStrings(attributesJson) })
+            {
+                foreach (var parsedCondition in new[] { JObject.Parse(condition), ParseAsStrings(condition) })
+                {
+                    _provider.EvalCondition(attributes, parsedCondition, savedGroups).Should().Be(expected,
+                        "attribute dates: {0}, condition dates: {1}", attributes["d"][0].Type, parsedCondition.ToString());
+                }
+            }
+        }
+
         [Fact]
         public void ADateConditionEqualToAStringAttributeIsNotPastAStrictCutoffEitherWay()
         {

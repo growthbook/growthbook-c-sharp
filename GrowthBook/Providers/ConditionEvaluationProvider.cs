@@ -564,17 +564,8 @@ namespace GrowthBook.Providers
             {
                 _logger.LogDebug("Evaluating whether the specified value is in an array");
 
-                if (stringComparison is null)
-                {
-                    var conditionValues = new HashSet<JToken>(conditionValue);
-                    var actualValues = new HashSet<JToken>(actualValue);
-
-                    conditionValues.IntersectWith(actualValues);
-
-                    return conditionValues.Any();
-                }
-
-                return conditionValue.Any(condition => actualValue.Any(actual => TokensEqual(condition, actual, stringComparison.Value)));
+                // Pairwise rather than a set of tokens, so timestamps Json.NET read as dates still match strings
+                return conditionValue.Any(condition => actualValue.Any(actual => TokensEqual(condition, actual, stringComparison)));
             }
             else if (conditionValue is JArray array)
             {
@@ -758,7 +749,8 @@ namespace GrowthBook.Providers
         }
 
         /// <summary>
-        /// Compares two values for equality. Timestamps Json.NET read as dates are equal when they are the same instant.
+        /// Compares two values for equality, comparing arrays and objects element by element. Timestamps Json.NET
+        /// read as dates are equal when they are the same instant, and equal a string holding the same timestamp.
         /// </summary>
         private static bool ValuesEqual(JToken left, JToken right)
         {
@@ -767,6 +759,17 @@ namespace GrowthBook.Providers
             if (left?.Type == JTokenType.Date && right?.Type == JTokenType.Date)
             {
                 return Instant(left) == Instant(right);
+            }
+
+            if (left is JArray leftArray && right is JArray rightArray)
+            {
+                return leftArray.Count == rightArray.Count && leftArray.Zip(rightArray, ValuesEqual).All(equal => equal);
+            }
+
+            if (left is JObject leftObject && right is JObject rightObject)
+            {
+                return leftObject.Count == rightObject.Count
+                    && leftObject.Properties().All(property => rightObject.TryGetValue(property.Name, out var value) && ValuesEqual(property.Value, value));
             }
 
             return JToken.DeepEquals(left ?? JValue.CreateNull(), right ?? JValue.CreateNull());
