@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Numerics;
 using System.Text.RegularExpressions;
 using GrowthBook.Extensions;
 using Microsoft.Extensions.Logging;
@@ -632,7 +633,7 @@ namespace GrowthBook.Providers
 
         /// <summary>
         /// Gets a hash key for a string, number, boolean or null that is equal exactly when <see cref="ValuesEqual"/>
-        /// is: 1 and 1.0 share a key, but "1", 1 and true don't.
+        /// is: 1 and 1.0 share a key, but "1", 1 and true don't, and neither do distinct large integers.
         /// </summary>
         private static bool TryGetScalarKey(JToken token, out (JTokenType Type, object Value) key)
         {
@@ -643,10 +644,27 @@ namespace GrowthBook.Providers
                     key = (token.Type, ((JValue)token).Value);
                     return true;
                 case JTokenType.Integer:
+                    key = (JTokenType.Integer, IntegerValue(token));
+                    return true;
                 case JTokenType.Float:
-                    var number = token.Value<double>();
-                    // -0.0 equals 0, but their boxed doubles needn't hash the same
-                    key = (JTokenType.Float, number == 0 ? 0d : number);
+                    var number = DoubleValue(token);
+
+                    // A whole number below 2^53 equals exactly one integer, so it shares that integer's key (this also
+                    // makes -0.0 and 0 the same). A larger one equals every integer that rounds to it, which a key
+                    // can't express, so those lists are compared pair by pair.
+                    if (Math.Floor(number) == number)
+                    {
+                        if (Math.Abs(number) >= MaxSafeInteger)
+                        {
+                            key = default;
+                            return false;
+                        }
+
+                        key = (JTokenType.Integer, new BigInteger(number));
+                        return true;
+                    }
+
+                    key = (JTokenType.Float, number);
                     return true;
                 case JTokenType.Null:
                     key = (JTokenType.Null, null);
@@ -775,7 +793,7 @@ namespace GrowthBook.Providers
 
             if (IsNumber(attributeValue))
             {
-                return meetsComparison(attributeValue.Value<double>().CompareTo(conditionValue.Value<double>()));
+                return meetsComparison(CompareNumbers(attributeValue, conditionValue));
             }
 
             if (attributeValue.Type == JTokenType.Date && conditionValue.Type == JTokenType.Date)
@@ -794,6 +812,37 @@ namespace GrowthBook.Providers
 
         private static bool IsNumber(JToken value) =>
             value?.Type == JTokenType.Integer || value?.Type == JTokenType.Float;
+
+        // 2^53: above it, doubles can't represent every integer
+        private const double MaxSafeInteger = 9007199254740992d;
+
+        /// <summary>
+        /// Compares two numbers. Two integers compare exactly, so large ids that round to the same double stay
+        /// distinct; otherwise both compare as doubles, as in JavaScript.
+        /// </summary>
+        private static int CompareNumbers(JToken left, JToken right) =>
+            left.Type == JTokenType.Integer && right.Type == JTokenType.Integer
+                ? IntegerValue(left).CompareTo(IntegerValue(right))
+                : DoubleValue(left).CompareTo(DoubleValue(right));
+
+        // Json.NET holds an integer as a long, or as a BigInteger when it doesn't fit
+        private static BigInteger IntegerValue(JToken value)
+        {
+            switch (((JValue)value).Value)
+            {
+                case BigInteger integer:
+                    return integer;
+                case ulong unsigned:
+                    return unsigned;
+                default:
+                    return Convert.ToInt64(((JValue)value).Value, CultureInfo.InvariantCulture);
+            }
+        }
+
+        private static double DoubleValue(JToken value) =>
+            value.Type == JTokenType.Integer
+                ? (double)IntegerValue(value)
+                : Convert.ToDouble(((JValue)value).Value, CultureInfo.InvariantCulture);
 
         // Json.NET reads ISO 8601 date-time strings as dates by default, but they are still strings in the payload.
         private static bool IsString(JToken value) =>
@@ -833,7 +882,7 @@ namespace GrowthBook.Providers
             // JSON has one number type, so 1 equals 1.0
             if (IsNumber(left) && IsNumber(right))
             {
-                return left.Value<double>() == right.Value<double>();
+                return CompareNumbers(left, right) == 0;
             }
 
             if (left is JArray leftArray && right is JArray rightArray)
@@ -895,7 +944,7 @@ namespace GrowthBook.Providers
         /// </summary>
         private static string VersionText(JToken value) =>
             IsNumber(value)
-                ? value.Value<double>().ToString("R", CultureInfo.InvariantCulture)
+                ? DoubleValue(value).ToString("R", CultureInfo.InvariantCulture)
                 : StringValue(value);
     }
 }

@@ -61,6 +61,63 @@ namespace GrowthBook.Tests.CustomTests
             }
         }
 
+        public static IEnumerable<object[]> NumberEquality() => new[]
+        {
+            // Above 2^53, distinct integers share a double, so integers compare exactly
+            new object[] { "9007199254740993", "9007199254740992", false },
+            new object[] { "9007199254740993", "9007199254740993", true },
+            new object[] { "9223372036854775807", "9223372036854775806", false },
+            new object[] { "9223372036854775807", "9223372036854775807", true },
+            new object[] { "18446744073709551617", "18446744073709551616", false },
+            new object[] { "18446744073709551617", "18446744073709551617", true },
+            new object[] { "-9007199254740993", "-9007199254740992", false },
+            new object[] { "1", "1.0", true },
+            new object[] { "1.0", "1", true },
+            new object[] { "0", "-0.0", true },
+            new object[] { "1.5", "1.5", true },
+            new object[] { "1", "1.5", false },
+            new object[] { "4503599627370495.5", "4503599627370495", false },
+            // A decimal compares as a double, as in JavaScript, where these are the same number
+            new object[] { "9007199254740993", "9007199254740992.0", true }
+        };
+
+        [Theory]
+        [MemberData(nameof(NumberEquality))]
+        public void NumbersAreEqualOnlyWhenTheirValuesAre(string attribute, string condition, bool expected)
+        {
+            var attributes = JObject.Parse($"{{ \"v\": {attribute}, \"a\": [{attribute}], \"o\": {{ \"n\": [{attribute}] }} }}");
+
+            Eval(attributes, $"{{ \"v\": {condition} }}").Should().Be(expected, "plain equality");
+            Eval(attributes, $"{{ \"v\": {{ \"$eq\": {condition} }} }}").Should().Be(expected, "$eq");
+            Eval(attributes, $"{{ \"v\": {{ \"$ne\": {condition} }} }}").Should().Be(!expected, "$ne");
+            Eval(attributes, $"{{ \"v\": {{ \"$gte\": {condition}, \"$lte\": {condition} }} }}").Should().Be(expected, "$gte and $lte");
+            Eval(attributes, $"{{ \"v\": {{ \"$in\": [{condition}] }} }}").Should().Be(expected, "scalar $in");
+            Eval(attributes, $"{{ \"a\": [{condition}] }}").Should().Be(expected, "array equality");
+            Eval(attributes, $"{{ \"o\": {{ \"n\": [{condition}] }} }}").Should().Be(expected, "nested equality");
+            Eval(attributes, $"{{ \"a\": {{ \"$elemMatch\": {{ \"$eq\": {condition} }} }} }}").Should().Be(expected, "$elemMatch");
+
+            foreach (var withDate in new[] { false, true })
+            {
+                var list = withDate ? $"[{DateElement}, {condition}]" : $"[{condition}]";
+                var savedGroups = JObject.Parse($"{{ \"g\": {list} }}");
+
+                Eval(attributes, $"{{ \"a\": {{ \"$in\": {list} }} }}").Should().Be(expected, "array $in, date in list: {0}", withDate);
+                Eval(attributes, $"{{ \"a\": {{ \"$nin\": {list} }} }}").Should().Be(!expected, "array $nin, date in list: {0}", withDate);
+                Eval(attributes, "{ \"a\": { \"$inGroup\": \"g\" } }", savedGroups).Should().Be(expected, "array $inGroup, date in list: {0}", withDate);
+            }
+        }
+
+        [Fact]
+        public void LargeIntegersOrderExactly()
+        {
+            var attributes = JObject.Parse("{ \"v\": 9007199254740993 }");
+
+            Eval(attributes, "{ \"v\": { \"$gt\": 9007199254740992 } }").Should().BeTrue();
+            Eval(attributes, "{ \"v\": { \"$lt\": 9007199254740994 } }").Should().BeTrue();
+            Eval(attributes, "{ \"v\": { \"$gt\": 18446744073709551616 } }").Should().BeFalse();
+            Eval(attributes, "{ \"v\": { \"$gt\": 9007199254740992.5 } }").Should().BeFalse("a decimal is compared as a double");
+        }
+
         [Fact]
         public void CaseInsensitiveMembershipIgnoresCaseOnly()
         {
