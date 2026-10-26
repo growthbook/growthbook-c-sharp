@@ -338,12 +338,12 @@ namespace GrowthBook.Providers
         }
 
         /// <summary>
-        /// Checks if attributeValue is an array, and if so at least one of the array items must match the condition.
+        /// Checks if attributeValue is an array, and if so at least one of the array items must match the expected value.
         /// </summary>
-        /// <param name="condition">The condition to check.</param>
+        /// <param name="expected">The <c>$elemMatch</c> value: operators or a condition, usually an object.</param>
         /// <param name="attributeValue">The attribute value to check.</param>
-        /// <returns>True if attributeValue is an array and at least one of the array items matches the condition.</returns>
-        private bool? ElemMatch(JObject condition, JToken attributeValue, EvalContext ctx)
+        /// <returns>True if attributeValue is an array and at least one of the array items matches.</returns>
+        private bool? ElemMatch(JToken expected, JToken attributeValue, EvalContext ctx)
         {
             if (attributeValue?.Type != JTokenType.Array)
             {
@@ -351,9 +351,7 @@ namespace GrowthBook.Providers
                 return false;
             }
 
-            // Operators test each element itself. A condition, including one that only uses
-            // $or, $and, $nor, or $savedGroup, tests each element's fields.
-            var testsElement = IsOperatorObject(condition) && !condition.Properties().Any(x => ConditionOperators.Contains(x.Name));
+            var check = GetElemMatchCheck(expected, ctx);
 
             bool? result = false;
 
@@ -365,7 +363,7 @@ namespace GrowthBook.Providers
                     continue;
                 }
 
-                var r = testsElement ? EvalConditionValue(condition, elem, ctx) : EvalCondition(elem, condition, ctx);
+                var r = check(elem);
 
                 if (r == true)
                 {
@@ -379,6 +377,59 @@ namespace GrowthBook.Providers
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// Builds the test for each array element, reading the value the way the JS SDK does with
+        /// <c>Object.keys</c>.
+        /// </summary>
+        private Func<JToken, bool?> GetElemMatchCheck(JToken expected, EvalContext ctx)
+        {
+            if (expected.IsNull())
+            {
+                throw new ArgumentException("$elemMatch needs a value to match array elements against");
+            }
+
+            if (expected is JObject condition)
+            {
+                // Operators test each element itself. A condition, including one that only uses
+                // $or, $and, $nor, or $savedGroup, tests each element's fields.
+                if (IsOperatorObject(condition) && !condition.Properties().Any(x => ConditionOperators.Contains(x.Name)))
+                {
+                    return elem => EvalConditionValue(condition, elem, ctx);
+                }
+
+                return elem => EvalCondition(elem, condition, ctx);
+            }
+
+            // An array or a non-empty string has index keys, so it is a condition on each element's "0", "1", ...
+            // fields. Anything else has no keys, so each element is compared with the value itself.
+            if (expected is JArray array)
+            {
+                var indexed = IndexedCondition(array);
+                return elem => EvalCondition(elem, indexed, ctx);
+            }
+
+            if (expected.Type == JTokenType.String && expected.ToString().Length > 0)
+            {
+                var indexed = IndexedCondition(expected.ToString().Select(x => (JToken)x.ToString()));
+                return elem => EvalCondition(elem, indexed, ctx);
+            }
+
+            return elem => EvalConditionValue(expected, elem, ctx);
+        }
+
+        private static JObject IndexedCondition(IEnumerable<JToken> values)
+        {
+            var condition = new JObject();
+            var index = 0;
+
+            foreach (var value in values)
+            {
+                condition[(index++).ToString(CultureInfo.InvariantCulture)] = value;
+            }
+
+            return condition;
         }
 
         /// <summary>
@@ -462,7 +513,7 @@ namespace GrowthBook.Providers
 
             if (op == "$elemMatch")
             {
-                return ElemMatch((JObject)conditionValue, attributeValue, ctx);
+                return ElemMatch(conditionValue, attributeValue, ctx);
             }
             if (op == "$size")
             {
