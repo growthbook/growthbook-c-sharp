@@ -1093,7 +1093,8 @@ namespace GrowthBook
 
             if (coverage != null)
             {
-                return bucket <= coverage;
+                // Half-open like InRange, so a coverage of k/10000 includes exactly k hash buckets
+                return bucket < coverage;
             }
 
             return true;
