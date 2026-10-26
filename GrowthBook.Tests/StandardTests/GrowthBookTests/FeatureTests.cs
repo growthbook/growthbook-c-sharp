@@ -43,6 +43,7 @@ public class FeatureTests : UnitTest
         var gb = new GrowthBook(testCase.Context);
         var actualResult = gb.EvalFeature(testCase.FeatureName);
 
-        actualResult.Should().BeEquivalentTo(testCase.ExpectedResult, "because every expected property value should have a matching actual property value");
+        actualResult.Should().BeEquivalentTo(testCase.ExpectedResult, options => options.ComparingByMembers<FeatureResult>().Excluding(x => x.Value), "because every expected property value should have a matching actual property value");
+        JToken.DeepEquals(testCase.ExpectedResult.Value ?? JValue.CreateNull(), actualResult.Value ?? JValue.CreateNull()).Should().BeTrue($"because the feature value should match (expected {testCase.ExpectedResult.Value?.ToString(Newtonsoft.Json.Formatting.None)}, got {actualResult.Value?.ToString(Newtonsoft.Json.Formatting.None) ?? "null"})");
     }
 }

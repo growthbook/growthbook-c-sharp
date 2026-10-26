@@ -23,14 +23,16 @@ namespace GrowthBook.Converters
             {
                 var array = (JArray)token;
 
-                if (double.TryParse(array[0].ToString(), out var start) && double.TryParse(array[1].ToString(), out var end))
+                if (array.Count == 2 && IsNumber(array[0]) && IsNumber(array[1]))
                 {
-                    return new BucketRange(start, end);
+                    return new BucketRange(array[0].Value<double>(), array[1].Value<double>());
                 }
             }
 
             return null;
         }
+
+        private static bool IsNumber(JToken token) => token.Type == JTokenType.Integer || token.Type == JTokenType.Float;
 
         public override void WriteJson(JsonWriter writer, object value, JsonSerializer serializer)
         {
