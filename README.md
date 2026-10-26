@@ -200,6 +200,24 @@ or create it when initializing
 
 ---
 
+### 6. **Payload Reduction**
+
+On a server that bootstraps a client-side SDK, `PayloadReducer.ReducePayload` shrinks a decrypted SDK payload to what one user can need. It takes the attributes you know (anything missing is unknown), removes conditions that are already decided, drops features and saved groups nothing uses, and can filter by project, tag or custom field. The client evaluates the reduced payload the same as the full one.
+
+```csharp
+var reduced = PayloadReducer.ReducePayload(
+    payload,                                  // JObject with features, experiments, savedGroups...
+    JObject.FromObject(new { id = "123" }),   // the attributes known on the server
+    new ReducePayloadOptions
+    {
+        Include = new PayloadFilters { Projects = new[] { "mobileProjectId" } }
+    });
+```
+
+`PayloadReducer.PruneCondition` does the same for a single condition: it returns `true` or `false` once the result is decided, or the condition minus every decided branch.
+
+---
+
 ## Sticky Bucketing
 Implement a `StickyBucketService`:
 

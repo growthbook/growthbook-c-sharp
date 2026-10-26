@@ -14,7 +14,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fails `$gt`/`$gte`/`$lt`/`$lte` instead of counting as 0, and version operators need both sides to be strings or
   both numbers. `$exists` and `$type` are unchanged.
 - Added the `$savedGroup` operator for saved group references, with typed `list` and `condition` entries.
-- Updated the standard test cases to spec 0.10.1.
+- **Breaking:** a condition that uses an operator or saved group type this SDK doesn't support no longer passes when
+  negated with `$not` or `$nor` (spec 0.11.0, growthbook/growthbook#7346). `$elemMatch` with `$or`, `$and`, `$nor` or
+  `$savedGroup` now tests each element's fields, and a malformed condition fails that rule, experiment or prerequisite
+  instead of failing the whole evaluation.
+- **Breaking:** a percentage rollout no longer includes the user whose hash equals its coverage, so a coverage of
+  k/10000 includes exactly k hash buckets (spec 0.11.1, growthbook/growthbook#7425).
+- **Breaking:** equal weights and payload bucket ranges are computed in double precision (growthbook-c-sharp#111), so
+  users close to a range boundary can be bucketed differently.
+- Added `PayloadReducer.ReducePayload` and `PayloadReducer.PruneCondition` to reduce a payload for client-side
+  bootstrapping (growthbook/growthbook#7238).
+- Updated the standard test cases to spec 0.11.2.
 - Fixed `Context.EncryptedFeatures` never being decrypted. The property was declared, documented and cloned, but
   nothing ever read it, so a caller who supplied an encrypted payload was left with an empty feature set and every
   flag reading as false - with nothing to distinguish a wrong key from a working one. The payload is now decrypted in
