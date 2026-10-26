@@ -356,6 +356,134 @@ public class FeatureRefreshWorkerTests : ApiUnitTest<FeatureRefreshWorker>
     }
 
     /// <summary>
+    /// Two refreshes overlapping must not leave the recorded count describing a different payload
+    /// than the one the cache holds. One can save an empty map and be suspended before recording its
+    /// count while another saves a full one and records two; when the first resumes and writes zero,
+    /// a later ClearCache looks like an ordinary empty payload and the flags never come back.
+    /// </summary>
+    [Fact]
+    public async Task OverlappingRefreshesDoNotLeaveTheCountDescribingAnotherPayload()
+    {
+        var empty = JsonConvert.SerializeObject(new FeaturesResponse { Features = new Dictionary<string, Feature>() });
+        var full = JsonConvert.SerializeObject(new FeaturesResponse { Features = _availableFeatures });
+
+        var handler = new SequencedETagHandler(empty, full);
+        var cache = new GatedCache();
+        var worker = new FeatureRefreshWorker(_logger, new ETagHttpClientFactory(handler), _config, cache);
+
+        // The first refresh saves the empty payload and is held inside RefreshWith, which is exactly
+        // the window between saving the features and recording how many there were.
+        var first = Task.Run(() => worker.RefreshCacheFromApi());
+
+        cache.FirstWriteStarted.Wait(TimeSpan.FromSeconds(10)).Should().BeTrue();
+
+        var second = Task.Run(() => worker.RefreshCacheFromApi());
+
+        // Give the second refresh the chance to get all the way through, which is what creates the
+        // bad pairing: it records two while the first is still suspended, and the first then records
+        // zero on top. Keeping the store and the count together is what stops it finishing here.
+        await Task.WhenAny(second, Task.Delay(TimeSpan.FromSeconds(1)));
+
+        cache.ReleaseFirstWrite();
+
+        await Task.WhenAll(first, second);
+
+        // Whatever order they finished in, the cache and the recorded count have to agree. Clearing
+        // the cache now must therefore read as lost features rather than as an empty payload.
+        cache.Clear();
+
+        var recovered = await worker.RefreshCacheFromApi();
+
+        recovered.Should().NotBeNullOrEmpty(
+            "a cleared cache has to be refilled, and that only happens when the recorded count " +
+            "describes the payload the cache was actually holding");
+    }
+
+    /// <summary>
+    /// Serves the given payloads in order, then answers 304 to a conditional request and repeats the
+    /// last payload to an unconditional one.
+    /// </summary>
+    private sealed class SequencedETagHandler : DelegatingHandler
+    {
+        private readonly string[] _payloads;
+        private int _served;
+
+        public int Served => Volatile.Read(ref _served);
+
+        public SequencedETagHandler(params string[] payloads)
+        {
+            _payloads = payloads;
+            InnerHandler = new HttpClientHandler();
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var index = Interlocked.Increment(ref _served) - 1;
+
+            HttpResponseMessage response;
+
+            if (index < _payloads.Length)
+            {
+                response = new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(_payloads[index], Encoding.UTF8, "application/json")
+                };
+            }
+            else if (request.Headers.IfNoneMatch.Any())
+            {
+                response = new HttpResponseMessage(HttpStatusCode.NotModified);
+            }
+            else
+            {
+                response = new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(_payloads[_payloads.Length - 1], Encoding.UTF8, "application/json")
+                };
+            }
+
+            response.Headers.ETag = new System.Net.Http.Headers.EntityTagHeaderValue("\"sequenced\"");
+
+            return Task.FromResult(response);
+        }
+    }
+
+    /// <summary>
+    /// Records features as soon as it is asked to, but holds the first caller there until released -
+    /// the suspension point the finding describes.
+    /// </summary>
+    private sealed class GatedCache : IGrowthBookFeatureCache
+    {
+        private readonly ManualResetEventSlim _release = new ManualResetEventSlim(false);
+        private IDictionary<string, Feature> _features = new Dictionary<string, Feature>();
+        private int _writes;
+
+        public ManualResetEventSlim FirstWriteStarted { get; } = new ManualResetEventSlim(false);
+
+        public int FeatureCount => _features.Count;
+
+        public bool IsCacheExpired => false;
+
+        public void ReleaseFirstWrite() => _release.Set();
+
+        public void Clear() => _features = new Dictionary<string, Feature>();
+
+        public Task<IDictionary<string, Feature>> GetFeatures(CancellationToken? cancellationToken = null) =>
+            Task.FromResult(_features);
+
+        public async Task RefreshWith(IDictionary<string, Feature> features, CancellationToken? cancellationToken = null)
+        {
+            _features = features;
+
+            if (Interlocked.Increment(ref _writes) == 1)
+            {
+                FirstWriteStarted.Set();
+
+                await Task.Run(() => _release.Wait(TimeSpan.FromSeconds(10))).ConfigureAwait(false);
+            }
+        }
+    }
+
+    /// <summary>
     /// Answers 304 to a conditional request and 200 to an unconditional one, as a server does.
     /// </summary>
     private sealed class ConditionalETagHandler : DelegatingHandler
