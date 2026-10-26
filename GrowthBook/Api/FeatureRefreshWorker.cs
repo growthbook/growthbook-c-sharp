@@ -43,6 +43,13 @@ namespace GrowthBook.Api
         private long _cacheWriteSequence;
         private long _cachedSequence;
         private CancellationTokenSource _refreshWorkerCancellation = new CancellationTokenSource();
+
+        /// <summary>
+        /// The size of the payload last written to the cache. Written with the cache under <see cref="_cacheWriteLock"/>,
+        /// and read with it under the same lock: they describe one fact, and updating them in separate steps let an
+        /// overlapping refresh pair one payload's count with another payload's features, after which a cleared cache
+        /// is indistinguishable from an empty one and the flags never come back.
+        /// </summary>
         private int _storedFeatureCount = -1;
 
         public FeatureRefreshWorker(ILogger<FeatureRefreshWorker> logger, IHttpClientFactory httpClientFactory, GrowthBookConfigurationOptions config, IGrowthBookFeatureCache cache)
@@ -85,8 +92,18 @@ namespace GrowthBook.Api
 
             if (response.IsNotModified)
             {
-                var storedFeatureCount = Volatile.Read(ref _storedFeatureCount);
-                var cacheNoLongerHoldsThePayload = _cache.FeatureCount == 0 && storedFeatureCount != 0;
+                bool cacheNoLongerHoldsThePayload;
+
+                await _cacheWriteLock.WaitAsync(cancellationToken ?? _refreshWorkerCancellation.Token).ConfigureAwait(false);
+
+                try
+                {
+                    cacheNoLongerHoldsThePayload = _cache.FeatureCount == 0 && _storedFeatureCount != 0;
+                }
+                finally
+                {
+                    _cacheWriteLock.Release();
+                }
 
                 if (cacheNoLongerHoldsThePayload)
                 {
@@ -117,8 +134,6 @@ namespace GrowthBook.Api
                 return await _cache.GetFeatures(cancellationToken).ConfigureAwait(false);
             }
 
-            Volatile.Write(ref _storedFeatureCount, response.Features.Count);
-
             // Now that the cache has been populated at least once, we need to see if we're allowed
             // to kick off the server sent events listener and make sure we're in the intended mode
             // of operating going forward.
@@ -145,6 +160,7 @@ namespace GrowthBook.Api
 
                 await _cache.RefreshWith(features, cancellationToken).ConfigureAwait(false);
                 _cachedSequence = sequence;
+                _storedFeatureCount = features.Count;
 
                 if (etag != null)
                 {
