@@ -176,6 +176,46 @@ public class FeatureRefreshWorkerTests : ApiUnitTest<FeatureRefreshWorker>
     }
 
 
+    /// <summary>
+    /// Whoever built the repository asked to be told when a refresh lands. GrowthBookClient uses this
+    /// to publish the new feature set, so a refresh that says nothing is a refresh nobody applies.
+    /// </summary>
+    [Fact]
+    public async Task ASuccessfulRefreshIsReportedToTheConfiguredCallback()
+    {
+        var outcomes = new List<bool>();
+
+        _config.PreferServerSentEvents = false;
+        _config.OnFeaturesRefreshed = succeeded => outcomes.Add(succeeded);
+
+        _cache
+            .RefreshWith(Arg.Any<IDictionary<string, Feature>>(), Arg.Any<CancellationToken?>())
+            .Returns(Task.CompletedTask);
+
+        await _worker.RefreshCacheFromApi();
+
+        outcomes.Should().Equal(new[] { true });
+    }
+
+    /// <summary>
+    /// The handler has already failed by the time it throws; the refresh has not, and the cache is
+    /// already written. Letting it escape would turn someone else's bug into a failed refresh.
+    /// </summary>
+    [Fact]
+    public async Task AThrowingRefreshCallbackDoesNotFailTheRefresh()
+    {
+        _config.PreferServerSentEvents = false;
+        _config.OnFeaturesRefreshed = _ => throw new InvalidOperationException("the application's handler is broken");
+
+        _cache
+            .RefreshWith(Arg.Any<IDictionary<string, Feature>>(), Arg.Any<CancellationToken?>())
+            .Returns(Task.CompletedTask);
+
+        var features = await _worker.Awaiting(w => w.RefreshCacheFromApi()).Should().NotThrowAsync();
+
+        features.Subject.Should().BeEquivalentTo(_availableFeatures);
+    }
+
     [Fact]
     public async Task HttpRequestWithSuccessStatusThatPrefersApiCallWillGetFeaturesFromApiAndRefreshCache()
     {
