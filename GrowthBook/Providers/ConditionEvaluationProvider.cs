@@ -929,11 +929,11 @@ namespace GrowthBook.Providers
                 }
 
                 // Pair by pair, so timestamps Json.NET read as dates still match strings
-                return conditionValue.Any(condition => actualValue.Any(actual => TokensEqual(condition, actual, stringComparison)));
+                return conditionValue.Any(condition => actualValue.Any(actual => IsSameMember(condition, actual, stringComparison)));
             }
             else if (conditionValue is JArray array)
             {
-                return array.Any(x => TokensEqual(x, actualValue, stringComparison));
+                return array.Any(x => IsSameMember(x, actualValue, stringComparison));
             }
             else
             {
@@ -1092,6 +1092,14 @@ namespace GrowthBook.Providers
 
             return result;
         }
+
+        /// <summary>
+        /// Compares two list members. JavaScript checks membership with <c>Array.prototype.includes</c>, which
+        /// matches an array or object only by identity, so one parsed separately never matches; other values
+        /// compare as in <see cref="TokensEqual"/>.
+        /// </summary>
+        private static bool IsSameMember(JToken left, JToken right, StringComparison? stringComparison) =>
+            !(left is JContainer) && !(right is JContainer) && TokensEqual(left, right, stringComparison);
 
         private static bool TokensEqual(JToken left, JToken right, StringComparison? stringComparison)
         {

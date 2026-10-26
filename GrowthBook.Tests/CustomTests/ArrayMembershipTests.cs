@@ -128,13 +128,60 @@ namespace GrowthBook.Tests.CustomTests
             Eval(attributes, "{ \"v\": { \"$ini\": [1] } }").Should().BeFalse();
         }
 
-        [Fact]
-        public void AnArrayOfObjectsStillMatchesByValue()
+        public static IEnumerable<object[]> NestedValues() => new[]
         {
-            var attributes = JObject.Parse("{ \"v\": [{ \"id\": 1 }] }");
+            new object[] { "[[1]]", "[[1]]" },
+            new object[] { "[1]", "[[1]]" },
+            new object[] { "[{ \"id\": 1 }]", "[{ \"id\": 1 }]" },
+            new object[] { "[{ \"id\": 1 }]", "[{ \"id\": 1.0 }]" },
+            new object[] { "{ \"id\": 1 }", "[{ \"id\": 1 }]" },
+            new object[] { "[[\"a\"]]", "[[\"A\"]]" }
+        };
 
-            Eval(attributes, "{ \"v\": { \"$in\": [{ \"id\": 1.0 }] } }").Should().BeTrue();
-            Eval(attributes, "{ \"v\": { \"$in\": [{ \"id\": \"1\" }] } }").Should().BeFalse();
+        // In JavaScript, membership uses Array.prototype.includes, which matches an array or object only by identity,
+        // so one parsed separately from the attributes never matches
+        [Theory]
+        [MemberData(nameof(NestedValues))]
+        public void AnArrayOrObjectIsNeverAMember(string attribute, string list)
+        {
+            foreach (var withDate in new[] { false, true })
+            {
+                var conditionList = withDate ? list.Insert(1, DateElement + ", ") : list;
+                var attributes = JObject.Parse($"{{ \"v\": {attribute} }}");
+                var savedGroups = JObject.Parse($"{{ \"g\": {conditionList} }}");
+
+                Eval(attributes, $"{{ \"v\": {{ \"$in\": {conditionList} }} }}", savedGroups).Should().BeFalse("$in, date in list: {0}", withDate);
+                Eval(attributes, $"{{ \"v\": {{ \"$nin\": {conditionList} }} }}", savedGroups).Should().BeTrue("$nin, date in list: {0}", withDate);
+                Eval(attributes, $"{{ \"v\": {{ \"$ini\": {conditionList} }} }}", savedGroups).Should().BeFalse("$ini, date in list: {0}", withDate);
+                Eval(attributes, $"{{ \"v\": {{ \"$nini\": {conditionList} }} }}", savedGroups).Should().BeTrue("$nini, date in list: {0}", withDate);
+                Eval(attributes, "{ \"v\": { \"$inGroup\": \"g\" } }", savedGroups).Should().BeFalse("$inGroup, date in list: {0}", withDate);
+                Eval(attributes, "{ \"v\": { \"$notInGroup\": \"g\" } }", savedGroups).Should().BeTrue("$notInGroup, date in list: {0}", withDate);
+            }
+        }
+
+        [Fact]
+        public void AScalarStillMatchesInAListHoldingNestedValues()
+        {
+            var attributes = JObject.Parse("{ \"v\": [[1], 2] }");
+
+            Eval(attributes, "{ \"v\": { \"$in\": [[1], 2] } }").Should().BeTrue();
+            Eval(attributes, "{ \"v\": { \"$in\": [[1], 3] } }").Should().BeFalse();
+        }
+
+        [Fact]
+        public void PruningAndReductionDoNotMatchNestedMembers()
+        {
+            var attributes = JObject.Parse("{ \"a\": [[1]] }");
+
+            ((bool)PayloadReducer.PruneCondition(attributes, JObject.Parse("{ \"a\": { \"$in\": [[1]] } }"))).Should().BeFalse();
+            ((bool)PayloadReducer.PruneCondition(attributes, JObject.Parse("{ \"a\": { \"$nin\": [[1]] } }"))).Should().BeTrue();
+
+            var payload = JObject.Parse(@"{ ""features"": { ""f"": { ""defaultValue"": false, ""rules"": [
+                { ""condition"": { ""a"": { ""$in"": [[1]] } }, ""force"": true }
+            ] } } }");
+            var rule = PayloadReducer.ReducePayload(payload, attributes)["features"]["f"]["rules"][0];
+
+            JToken.DeepEquals(rule, JObject.Parse(@"{ ""force"": true }")).Should().BeFalse("the rule fails, so it must not become unconditional");
         }
 
         [Fact]
