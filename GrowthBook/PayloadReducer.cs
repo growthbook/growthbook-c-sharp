@@ -157,7 +157,7 @@ namespace GrowthBook
                 var experiments = new JArray(
                     (_payload["experiments"] as JArray ?? new JArray())
                         .Where(x => Matches(Metadata(x)))
-                        .Select(Prune));
+                        .Select(x => Prune(x, isRule: false)));
 
                 foreach (var experiment in experiments)
                 {
@@ -271,7 +271,7 @@ namespace GrowthBook
             }
 
             // Reduces a rule or an auto experiment
-            private JObject Prune(JToken item)
+            private JObject Prune(JToken item, bool isRule)
             {
                 var output = (JObject)item.DeepClone();
 
@@ -294,8 +294,9 @@ namespace GrowthBook
                         // rule's prerequisites are checked before it
                         output["condition"] = new JObject { ["$not"] = new JObject() };
 
-                        // A force rule that never passes never returns its value
-                        if (output.ContainsKey("force"))
+                        // A force rule that never passes never returns its value. An auto experiment's forced
+                        // variation still applies to a sticky bucketed user.
+                        if (isRule && output.ContainsKey("force"))
                         {
                             output["force"] = JValue.CreateNull();
                         }
@@ -351,7 +352,7 @@ namespace GrowthBook
 
                     output["rules"] = new JArray(rules
                         .Where(r => !scoped || RuleInProjects(Metadata(r)))
-                        .Select(Prune));
+                        .Select(r => Prune(r, isRule: true)));
                 }
 
                 // Stored before its parents are added, so a prerequisite cycle ends
@@ -389,8 +390,15 @@ namespace GrowthBook
 
                     var id = reference.ToString();
 
-                    if (bandits.ContainsKey(id) || !(allBandits[id] is JObject bandit))
+                    if (bandits.ContainsKey(id) || !allBandits.TryGetValue(id, out var definition))
                     {
+                        continue;
+                    }
+
+                    // Evaluation tolerates a definition that isn't an object, so it stays
+                    if (!(definition is JObject bandit))
+                    {
+                        bandits[id] = definition.DeepClone();
                         continue;
                     }
 
@@ -423,6 +431,7 @@ namespace GrowthBook
             // needs no list of the operators that reference groups.
             private JObject KeepSavedGroups(params JToken[] roots)
             {
+                var asWritten = GroupsKeptAsWritten(roots);
                 var groups = new JObject();
                 var pending = new Stack<JToken>(roots.Reverse());
 
@@ -440,7 +449,9 @@ namespace GrowthBook
                         }
 
                         var group = _savedGroups[id].DeepClone();
-                        var condition = Evaluator.PruneSavedGroup(_attributes, id, _savedGroups);
+                        var condition = asWritten.Contains(id) || Reaches(id, id, new HashSet<string>())
+                            ? null
+                            : Evaluator.PruneSavedGroup(_attributes, id, _savedGroups);
 
                         if (condition is JObject && group is JObject groupObj)
                         {
@@ -467,6 +478,100 @@ namespace GrowthBook
                 }
 
                 return groups;
+            }
+
+            // Groups that keep their condition as written: those evaluated against something other than the user
+            // (each item in $elemMatch, or the parent's value in a prerequisite), and the groups those reference
+            private HashSet<string> GroupsKeptAsWritten(JToken[] roots)
+            {
+                var asWritten = new HashSet<string>();
+                var seen = new HashSet<string>();
+
+                void Mark(JToken token, bool user)
+                {
+                    if (token is null)
+                    {
+                        return;
+                    }
+
+                    if (token.Type == JTokenType.String)
+                    {
+                        var id = token.ToString();
+
+                        if (!_savedGroups.ContainsKey(id) || asWritten.Contains(id) || (user && seen.Contains(id)))
+                        {
+                            return;
+                        }
+
+                        (user ? seen : asWritten).Add(id);
+                        Mark(_savedGroups[id], user);
+                    }
+                    else if (token is JObject obj)
+                    {
+                        foreach (var property in obj.Properties())
+                        {
+                            Mark(property.Value, user && property.Name != "$elemMatch" && property.Name != "parentConditions");
+                        }
+                    }
+                    else if (token is JArray array)
+                    {
+                        foreach (var value in array)
+                        {
+                            Mark(value, user);
+                        }
+                    }
+                }
+
+                foreach (var root in roots)
+                {
+                    Mark(root, true);
+                }
+
+                return asWritten;
+            }
+
+            // A group on a cycle can't be reduced on its own: its result depends on which group the evaluation
+            // entered the cycle from
+            private bool Reaches(string from, string to, HashSet<string> visited)
+            {
+                var found = new List<string>();
+                var pending = new Stack<JToken>();
+                pending.Push(_savedGroups[from]);
+
+                while (pending.Count > 0)
+                {
+                    var token = pending.Pop();
+
+                    if (token.Type == JTokenType.String)
+                    {
+                        if (_savedGroups.ContainsKey(token.ToString()))
+                        {
+                            found.Add(token.ToString());
+                        }
+                    }
+                    else if (token is JContainer container)
+                    {
+                        foreach (var child in container.Children())
+                        {
+                            pending.Push(child is JProperty property ? property.Value : child);
+                        }
+                    }
+                }
+
+                return found.Any(id =>
+                {
+                    if (id == to)
+                    {
+                        return true;
+                    }
+
+                    if (!visited.Add(id))
+                    {
+                        return false;
+                    }
+
+                    return Reaches(id, to, visited);
+                });
             }
         }
     }
