@@ -206,12 +206,18 @@ namespace GrowthBook
             private static bool Has(JToken actual, IList<string> wanted) =>
                 wanted != null && Has(actual, wanted.Select(x => (JToken)x));
 
-            // Like JS ===: objects and arrays never equal, numbers compare by value
+            // Like JS ===: objects and arrays never equal, numbers compare by value. An explicit null equals null, but
+            // a missing field (a C# null, undefined in JS) equals nothing.
             private static bool ScalarEquals(JToken left, JToken right)
             {
-                if (!(left is JValue l) || !(right is JValue r) || l.Type == JTokenType.Null || r.Type == JTokenType.Null)
+                if (!(left is JValue l) || !(right is JValue r))
                 {
                     return false;
+                }
+
+                if (l.Type == JTokenType.Null || r.Type == JTokenType.Null)
+                {
+                    return l.Type == r.Type;
                 }
 
                 var leftIsNumber = l.Type == JTokenType.Integer || l.Type == JTokenType.Float;
