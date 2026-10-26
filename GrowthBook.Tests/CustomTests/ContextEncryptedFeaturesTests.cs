@@ -1,3 +1,7 @@
+// GrowthBookFactory is deprecated in favour of GrowthBookClient, and these exercise it on
+// purpose: it still ships and still has to work. Suppressed rather than silenced globally so
+// that a new use of it anywhere else is still reported.
+#pragma warning disable CS0618
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -413,3 +417,4 @@ public class ContextEncryptedFeaturesTests
         }
     }
 }
+#pragma warning restore CS0618
