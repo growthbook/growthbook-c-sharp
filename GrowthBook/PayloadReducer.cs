@@ -432,6 +432,7 @@ namespace GrowthBook
             private JObject KeepSavedGroups(params JToken[] roots)
             {
                 var asWritten = GroupsKeptAsWritten(roots);
+                var onCycles = GroupsOnCycles();
                 var groups = new JObject();
                 var pending = new Stack<JToken>(roots.Reverse());
 
@@ -449,7 +450,7 @@ namespace GrowthBook
                         }
 
                         var group = _savedGroups[id].DeepClone();
-                        var condition = asWritten.Contains(id) || Reaches(id, id, new HashSet<string>())
+                        var condition = asWritten.Contains(id) || onCycles.Contains(id)
                             ? null
                             : Evaluator.PruneSavedGroup(_attributes, id, _savedGroups);
 
@@ -486,12 +487,21 @@ namespace GrowthBook
             {
                 var asWritten = new HashSet<string>();
                 var seen = new HashSet<string>();
+                var pending = new Stack<(JToken Token, bool User)>();
 
-                void Mark(JToken token, bool user)
+                foreach (var root in roots.Reverse())
                 {
+                    pending.Push((root, true));
+                }
+
+                // Iterative, so a long chain of groups can't overflow the stack
+                while (pending.Count > 0)
+                {
+                    var (token, user) = pending.Pop();
+
                     if (token is null)
                     {
-                        return;
+                        continue;
                     }
 
                     if (token.Type == JTokenType.String)
@@ -500,43 +510,128 @@ namespace GrowthBook
 
                         if (!_savedGroups.ContainsKey(id) || asWritten.Contains(id) || (user && seen.Contains(id)))
                         {
-                            return;
+                            continue;
                         }
 
                         (user ? seen : asWritten).Add(id);
-                        Mark(_savedGroups[id], user);
+                        pending.Push((_savedGroups[id], user));
                     }
                     else if (token is JObject obj)
                     {
-                        foreach (var property in obj.Properties())
+                        foreach (var property in obj.Properties().Reverse())
                         {
-                            Mark(property.Value, user && property.Name != "$elemMatch" && property.Name != "parentConditions");
+                            pending.Push((property.Value, user && property.Name != "$elemMatch" && property.Name != "parentConditions"));
                         }
                     }
                     else if (token is JArray array)
                     {
-                        foreach (var value in array)
+                        foreach (var value in array.Reverse())
                         {
-                            Mark(value, user);
+                            pending.Push((value, user));
                         }
                     }
-                }
-
-                foreach (var root in roots)
-                {
-                    Mark(root, true);
                 }
 
                 return asWritten;
             }
 
             // A group on a cycle can't be reduced on its own: its result depends on which group the evaluation
-            // entered the cycle from
-            private bool Reaches(string from, string to, HashSet<string> visited)
+            // entered the cycle from. A group is on a cycle when it references itself or shares a strongly
+            // connected component with another group.
+            private HashSet<string> GroupsOnCycles()
+            {
+                var references = new Dictionary<string, List<string>>();
+
+                foreach (var group in _savedGroups.Properties())
+                {
+                    references[group.Name] = ReferencedGroups(group.Value);
+                }
+
+                // Tarjan's algorithm, iterative, so a long chain of groups can't overflow the stack
+                var index = new Dictionary<string, int>();
+                var lowLink = new Dictionary<string, int>();
+                var onStack = new HashSet<string>();
+                var stack = new Stack<string>();
+                var onCycles = new HashSet<string>();
+                var next = 0;
+
+                foreach (var root in references.Keys)
+                {
+                    if (index.ContainsKey(root))
+                    {
+                        continue;
+                    }
+
+                    var work = new Stack<(string Id, int Child)>();
+                    work.Push((root, 0));
+
+                    while (work.Count > 0)
+                    {
+                        var (id, child) = work.Pop();
+
+                        if (child == 0)
+                        {
+                            index[id] = lowLink[id] = next++;
+                            stack.Push(id);
+                            onStack.Add(id);
+                        }
+
+                        var edges = references[id];
+
+                        if (child < edges.Count)
+                        {
+                            var target = edges[child];
+                            work.Push((id, child + 1));
+
+                            if (!index.ContainsKey(target))
+                            {
+                                work.Push((target, 0));
+                            }
+                            else if (onStack.Contains(target))
+                            {
+                                lowLink[id] = Math.Min(lowLink[id], index[target]);
+                            }
+
+                            continue;
+                        }
+
+                        if (lowLink[id] == index[id])
+                        {
+                            var component = new List<string>();
+                            string member;
+
+                            do
+                            {
+                                member = stack.Pop();
+                                onStack.Remove(member);
+                                component.Add(member);
+                            }
+                            while (member != id);
+
+                            if (component.Count > 1 || edges.Contains(id))
+                            {
+                                onCycles.UnionWith(component);
+                            }
+                        }
+
+                        if (work.Count > 0)
+                        {
+                            var parent = work.Peek().Id;
+                            lowLink[parent] = Math.Min(lowLink[parent], lowLink[id]);
+                        }
+                    }
+                }
+
+                return onCycles;
+            }
+
+            // The saved group ids that appear as strings anywhere in a group's entry, each once
+            private List<string> ReferencedGroups(JToken entry)
             {
                 var found = new List<string>();
+                var unique = new HashSet<string>();
                 var pending = new Stack<JToken>();
-                pending.Push(_savedGroups[from]);
+                pending.Push(entry);
 
                 while (pending.Count > 0)
                 {
@@ -544,9 +639,11 @@ namespace GrowthBook
 
                     if (token.Type == JTokenType.String)
                     {
-                        if (_savedGroups.ContainsKey(token.ToString()))
+                        var id = token.ToString();
+
+                        if (_savedGroups.ContainsKey(id) && unique.Add(id))
                         {
-                            found.Add(token.ToString());
+                            found.Add(id);
                         }
                     }
                     else if (token is JContainer container)
@@ -558,20 +655,7 @@ namespace GrowthBook
                     }
                 }
 
-                return found.Any(id =>
-                {
-                    if (id == to)
-                    {
-                        return true;
-                    }
-
-                    if (!visited.Add(id))
-                    {
-                        return false;
-                    }
-
-                    return Reaches(id, to, visited);
-                });
+                return found;
             }
         }
     }
