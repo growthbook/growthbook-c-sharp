@@ -39,6 +39,8 @@ public class StandardCasesMetadataTests
     private static readonly HashSet<string> IntentionallyUntestedCategories = new HashSet<string>
     {
         "urlRedirect",
+        "pruneCondition",
+        "reducePayload",
         // Contextual bandits aren't implemented in this SDK yet
         "contextualBandit"
     };
@@ -48,7 +50,7 @@ public class StandardCasesMetadataTests
     {
         var standardCases = LoadStandardCases();
 
-        standardCases["specVersion"]?.ToString().Should().Be("0.10.1");
+        standardCases["specVersion"]?.ToString().Should().Be("0.11.2");
     }
 
     [Fact]

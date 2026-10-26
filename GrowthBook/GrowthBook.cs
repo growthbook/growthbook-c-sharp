@@ -540,7 +540,7 @@ namespace GrowthBook
 
                             var evaluationObject = new JObject { ["value"] = parentResult.Value };
 
-                            var isSuccess = _conditionEvaluator.EvalCondition(evaluationObject, parentCondition.Condition ?? new JObject(), _savedGroups);
+                            var isSuccess = EvalConditionSafely(evaluationObject, parentCondition.Condition ?? new JObject());
 
                             if (!isSuccess)
                             {
@@ -569,7 +569,7 @@ namespace GrowthBook
                         continue;
                     }
 
-                    if (!rule.Condition.IsNull() && !_conditionEvaluator.EvalCondition(Attributes, rule.Condition, _savedGroups))
+                    if (!rule.Condition.IsNull() && !EvalConditionSafely(Attributes, rule.Condition))
                     {
                         _logger.LogDebug("Rule {RuleIndex}: attribute condition did not match, continuing", ruleIndex);
                         continue;
@@ -901,7 +901,7 @@ namespace GrowthBook
 
                 if (!experiment.Condition.IsNull())
                 {
-                    if (!_conditionEvaluator.EvalCondition(Attributes, experiment.Condition, _savedGroups))
+                    if (!EvalConditionSafely(Attributes, experiment.Condition))
                     {
                         _logger.LogDebug("Aborting experiment, associated conditions have prohibited participation");
                         return GetExperimentResult(experiment, featureId: featureId);
@@ -923,7 +923,7 @@ namespace GrowthBook
 
                         var evaluationObject = new JObject { ["value"] = parentResult.Value };
 
-                        if (!_conditionEvaluator.EvalCondition(evaluationObject, parentCondition.Condition ?? new JObject(), _savedGroups))
+                        if (!EvalConditionSafely(evaluationObject, parentCondition.Condition ?? new JObject()))
                         {
                             return GetExperimentResult(experiment, featureId: featureId);
                         }
@@ -1041,6 +1041,25 @@ namespace GrowthBook
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// Evaluates a condition, failing it instead of throwing when it is malformed.
+        /// </summary>
+        /// <param name="attributes">The attributes to evaluate against.</param>
+        /// <param name="condition">The condition to evaluate.</param>
+        /// <returns>True if the condition passes; false if it fails or can't be evaluated.</returns>
+        private bool EvalConditionSafely(JToken attributes, JObject condition)
+        {
+            try
+            {
+                return _conditionEvaluator.EvalCondition(attributes, condition, _savedGroups);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Condition evaluation failed, treating the condition as not matching");
+                return false;
+            }
         }
 
         private bool IsIncludedInRollout(string seed, string hashAttribute = null, BucketRange range = null, double? coverage = null, int? hashVersion = null)
