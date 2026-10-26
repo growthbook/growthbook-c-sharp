@@ -22,6 +22,8 @@ public class StandardCasesMetadataTests
         "getQueryStringOverride",
         "hash",
         "inNamespace",
+        "pruneCondition",
+        "reducePayload",
         "run",
         "stickyBucket"
     };
@@ -39,8 +41,6 @@ public class StandardCasesMetadataTests
     private static readonly HashSet<string> IntentionallyUntestedCategories = new HashSet<string>
     {
         "urlRedirect",
-        "pruneCondition",
-        "reducePayload",
         // Contextual bandits aren't implemented in this SDK yet
         "contextualBandit"
     };

@@ -219,23 +219,47 @@ namespace GrowthBook.Providers
         }
 
         /// <summary>
-        /// Resolves a <c>$savedGroup</c> reference. Anything unrecognized matches nobody.
+        /// The kinds of entry a <c>$savedGroup</c> reference can resolve to.
         /// </summary>
-        /// <param name="attributes">The attributes to compare against.</param>
-        /// <param name="reference">The reference, an object with an <c>id</c> and an optional <c>attributeKey</c> override.</param>
-        /// <returns>True if the attributes are in the referenced group, or null for a group type this SDK doesn't support.</returns>
-        private bool? EvalSavedGroup(JToken attributes, JToken reference, EvalContext ctx)
+        private enum SavedGroupKind
         {
+            /// <summary>Missing, malformed, or already being resolved: it matches nobody.</summary>
+            Invalid,
+            /// <summary>A list of values for one attribute.</summary>
+            List,
+            /// <summary>A condition on the attributes.</summary>
+            Condition,
+            /// <summary>A group type added after this SDK was built.</summary>
+            Unknown
+        }
+
+        /// <summary>
+        /// A <c>$savedGroup</c> reference resolved to its entry.
+        /// </summary>
+        private sealed class ResolvedSavedGroup
+        {
+            public SavedGroupKind Kind { get; set; }
+            public string AttributeKey { get; set; }
+            public JArray Values { get; set; }
+            public JObject Condition { get; set; }
+            /// <summary>The context for evaluating a condition group, with this group's id marked as visited.</summary>
+            public EvalContext ConditionContext { get; set; }
+        }
+
+        private static ResolvedSavedGroup ResolveSavedGroup(JToken reference, EvalContext ctx)
+        {
+            var invalid = new ResolvedSavedGroup { Kind = SavedGroupKind.Invalid };
+
             if (!(reference is JObject referenceObj) || referenceObj["id"]?.Type != JTokenType.String)
             {
-                return false;
+                return invalid;
             }
 
             var id = referenceObj["id"].ToString();
 
             if (ctx.Visited.Contains(id))
             {
-                return false;
+                return invalid;
             }
 
             // Falling back to the entry's attribute would check a different population
@@ -243,13 +267,13 @@ namespace GrowthBook.Providers
 
             if (attributeKey != null && attributeKey.Type != JTokenType.String)
             {
-                return false;
+                return invalid;
             }
 
             // Absent, or a legacy bare array
             if (!(ctx.SavedGroups?[id] is JObject entry))
             {
-                return false;
+                return invalid;
             }
 
             var type = entry["type"]?.Type == JTokenType.String ? entry["type"].ToString() : null;
@@ -261,10 +285,10 @@ namespace GrowthBook.Providers
 
                 if (key?.Type != JTokenType.String || !(entry["values"] is JArray values))
                 {
-                    return false;
+                    return invalid;
                 }
 
-                return IsIn(values, GetPath(attributes, key.ToString()));
+                return new ResolvedSavedGroup { Kind = SavedGroupKind.List, AttributeKey = key.ToString(), Values = values };
             }
 
             if (type == "condition")
@@ -272,17 +296,45 @@ namespace GrowthBook.Providers
                 // A condition group has no single attribute, so any override is ignored
                 if (!(entry["condition"] is JObject condition))
                 {
-                    return false;
+                    return invalid;
                 }
 
                 // A copy, so sibling groups don't see each other's ids
                 var visited = new HashSet<string>(ctx.Visited) { id };
 
-                return EvalCondition(attributes, condition, new EvalContext(ctx.SavedGroups, visited));
+                return new ResolvedSavedGroup
+                {
+                    Kind = SavedGroupKind.Condition,
+                    Condition = condition,
+                    ConditionContext = new EvalContext(ctx.SavedGroups, visited)
+                };
             }
 
-            // A group type added after this SDK was built. A client SDK may support it.
-            return null;
+            return new ResolvedSavedGroup { Kind = SavedGroupKind.Unknown };
+        }
+
+        /// <summary>
+        /// Resolves a <c>$savedGroup</c> reference. Anything unrecognized matches nobody.
+        /// </summary>
+        /// <param name="attributes">The attributes to compare against.</param>
+        /// <param name="reference">The reference, an object with an <c>id</c> and an optional <c>attributeKey</c> override.</param>
+        /// <returns>True if the attributes are in the referenced group, or null for a group type this SDK doesn't support.</returns>
+        private bool? EvalSavedGroup(JToken attributes, JToken reference, EvalContext ctx)
+        {
+            var group = ResolveSavedGroup(reference, ctx);
+
+            switch (group.Kind)
+            {
+                case SavedGroupKind.List:
+                    return IsIn(group.Values, GetPath(attributes, group.AttributeKey));
+                case SavedGroupKind.Condition:
+                    return EvalCondition(attributes, group.Condition, group.ConditionContext);
+                case SavedGroupKind.Unknown:
+                    // A client SDK may support it
+                    return null;
+                default:
+                    return false;
+            }
         }
 
         /// <summary>
@@ -499,6 +551,181 @@ namespace GrowthBook.Providers
 
             return null;
         }
+
+        /// <summary>
+        /// Partially evaluates a condition when only some attributes are known, for example on a server.
+        /// Attributes missing from <paramref name="attributes"/> are unknown.
+        /// </summary>
+        /// <returns>
+        /// A boolean token once the result can't depend on the unknown attributes, otherwise the condition
+        /// minus every branch that is already decided.
+        /// </returns>
+        internal JToken PruneCondition(JObject attributes, JObject condition, JObject savedGroups)
+        {
+            return PruneWithContext(attributes ?? new JObject(), condition, new EvalContext(savedGroups ?? new JObject(), new HashSet<string>()));
+        }
+
+        /// <summary>
+        /// Prunes the saved group with the given id.
+        /// </summary>
+        /// <returns>
+        /// A boolean token once decided, the group's condition minus every decided branch for a condition
+        /// group that isn't, or null for a list group whose attribute is unknown or a group type this SDK
+        /// doesn't support.
+        /// </returns>
+        internal JToken PruneSavedGroup(JObject attributes, string id, JObject savedGroups)
+        {
+            var ctx = new EvalContext(savedGroups ?? new JObject(), new HashSet<string>());
+
+            return PruneSavedGroupReference(attributes ?? new JObject(), new JObject { ["id"] = id }, ctx, PruneWithContext);
+        }
+
+        private JToken PruneWithContext(JObject attributes, JObject condition, EvalContext ctx)
+        {
+            // One that throws, such as a malformed one, stays as written. Evaluating it fails as a whole,
+            // so no part of it can be decided.
+            try
+            {
+                return PruneEntries(attributes, condition, ctx);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Unable to prune the condition, keeping it as written");
+                return condition;
+            }
+        }
+
+        /// <returns>A boolean token, or the condition with every decided entry removed.</returns>
+        private JToken PruneEntries(JObject attributes, JObject condition, EvalContext ctx)
+        {
+            var output = new JObject();
+
+            foreach (var property in condition.Properties())
+            {
+                var key = property.Name;
+
+                // A boolean token, a pruned container, or null for an undecided leaf
+                JToken r;
+
+                switch (key)
+                {
+                    case "$or":
+                    case "$nor":
+                    case "$and":
+                        r = PruneList(attributes, (JArray)property.Value, ctx, or: key != "$and");
+                        break;
+                    case "$not":
+                        r = PruneEntries(attributes, (JObject)property.Value, ctx);
+                        break;
+                    case "$savedGroup":
+                        r = PruneSavedGroupReference(attributes, property.Value, ctx, PruneEntries);
+
+                        // Keep an undecided reference as is rather than inlining the group
+                        if (!IsBoolean(r))
+                        {
+                            r = null;
+                        }
+                        break;
+                    default:
+                        // Null when the attribute is unknown, or the value uses an operator this SDK doesn't
+                        // support, which the client's SDK may
+                        r = IsKnown(attributes, key)
+                            ? ToToken(EvalConditionValue(property.Value, GetPath(attributes, key), ctx))
+                            : null;
+                        break;
+                }
+
+                // $not and $nor pass when what they hold fails
+                if ((key == "$not" || key == "$nor") && IsBoolean(r))
+                {
+                    r = !r.Value<bool>();
+                }
+
+                // One failing entry fails the whole condition, and a passing one is dropped
+                if (IsBoolean(r) && !r.Value<bool>())
+                {
+                    return false;
+                }
+
+                if (r is null)
+                {
+                    output[key] = property.Value.DeepClone();
+                }
+                else if (!IsBoolean(r))
+                {
+                    output[key] = r;
+                }
+            }
+
+            return output.Count > 0 ? output : (JToken)true;
+        }
+
+        /// <summary>
+        /// Prunes an <c>$or</c> (or an <c>$and</c>) list.
+        /// </summary>
+        /// <returns>The conditions still undecided, or the list's result once there are none.</returns>
+        private JToken PruneList(JObject attributes, JArray conditions, EvalContext ctx, bool or)
+        {
+            var output = new JArray();
+
+            foreach (var condition in conditions)
+            {
+                var r = PruneEntries(attributes, (JObject)condition, ctx);
+
+                // One passing condition decides an $or, and one failing condition an $and
+                if (IsBoolean(r) && r.Value<bool>() == or)
+                {
+                    return or;
+                }
+
+                if (!IsBoolean(r))
+                {
+                    output.Add(r);
+                }
+            }
+
+            if (output.Count > 0)
+            {
+                return output;
+            }
+
+            // Every condition failed an $or, or passed an $and. Like EvalOr, an empty $or passes.
+            return or ? conditions.Count == 0 : true;
+        }
+
+        /// <summary>
+        /// Prunes a <c>$savedGroup</c> reference with the given function for condition groups.
+        /// </summary>
+        /// <returns>A boolean token, a pruned condition, or null while it is undecided.</returns>
+        private JToken PruneSavedGroupReference(JObject attributes, JToken reference, EvalContext ctx, Func<JObject, JObject, EvalContext, JToken> prune)
+        {
+            var group = ResolveSavedGroup(reference, ctx);
+
+            switch (group.Kind)
+            {
+                case SavedGroupKind.List:
+                    if (!IsKnown(attributes, group.AttributeKey))
+                    {
+                        return null;
+                    }
+                    return IsIn(group.Values, GetPath(attributes, group.AttributeKey));
+                case SavedGroupKind.Condition:
+                    return prune(attributes, group.Condition, group.ConditionContext);
+                case SavedGroupKind.Unknown:
+                    return null;
+                default:
+                    return false;
+            }
+        }
+
+        /// <summary>
+        /// A nested path is unknown, since the server may only have part of the object.
+        /// </summary>
+        private static bool IsKnown(JObject attributes, string path) => !path.Contains(".") && attributes.ContainsKey(path);
+
+        private static bool IsBoolean(JToken token) => token?.Type == JTokenType.Boolean;
+
+        private static JToken ToToken(bool? result) => result.HasValue ? new JValue(result.Value) : null;
 
         internal static string PaddedVersionString(string input)
         {
