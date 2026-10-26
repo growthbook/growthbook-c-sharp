@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Linq;
 using FluentAssertions;
 using Newtonsoft.Json.Linq;
@@ -84,6 +85,65 @@ public class PayloadReducerSavedGroupTests : UnitTest
 
         // entry only leads into the cycle, so it is still reduced
         JToken.DeepEquals(groups["entry"]["condition"], JObject.Parse(@"{ ""$savedGroup"": { ""id"": ""a"" } }")).Should().BeTrue();
+    }
+
+    public static IEnumerable<object[]> ListGroups() => new[]
+    {
+        new object[] { JObject.Parse(@"{ ""type"": ""list"", ""attributeKey"": ""id"", ""values"": [ ""c"", ""other"" ] }") },
+        // A legacy group that is a bare array of values
+        new object[] { JArray.Parse(@"[ ""c"", ""other"" ]") }
+    };
+
+    private static JObject ListGroupPayload(JToken list, string rules) => JObject.Parse($@"{{
+        ""features"": {{ ""f"": {{ ""defaultValue"": false, ""rules"": {rules} }} }},
+        ""savedGroups"": {{
+            ""L"": {list},
+            ""c"": {{ ""type"": ""condition"", ""condition"": {{ ""country"": ""US"", ""id"": {{ ""$inGroup"": ""L"" }} }} }},
+            ""other"": {{ ""type"": ""condition"", ""condition"": {{ ""country"": ""US"" }} }}
+        }}
+    }}");
+
+    [Theory]
+    [MemberData(nameof(ListGroups))]
+    public void AListsValuesNeverFormACycleOrKeepOtherGroups(JToken list)
+    {
+        var payload = ListGroupPayload(list, @"[ { ""condition"": { ""$savedGroup"": { ""id"": ""c"" } }, ""force"": true } ]");
+
+        var groups = (JObject)PayloadReducer.ReducePayload(payload, JObject.Parse(@"{ ""country"": ""US"" }"))["savedGroups"];
+
+        // L's values name c and other, but those are ids, not references: c is reduced and other isn't kept
+        groups.Properties().Select(x => x.Name).Should().BeEquivalentTo("c", "L");
+        JToken.DeepEquals(groups["c"]["condition"], JObject.Parse(@"{ ""id"": { ""$inGroup"": ""L"" } }")).Should().BeTrue();
+        JToken.DeepEquals(groups["L"], list).Should().BeTrue();
+    }
+
+    [Theory]
+    [MemberData(nameof(ListGroups))]
+    public void AListInElemMatchDoesNotKeepTheGroupsItsValuesNameAsWritten(JToken list)
+    {
+        var payload = ListGroupPayload(list, @"[
+            { ""condition"": { ""tags"": { ""$elemMatch"": { ""$inGroup"": ""L"" } } }, ""force"": true },
+            { ""condition"": { ""$savedGroup"": { ""id"": ""other"" } }, ""force"": true }
+        ]");
+
+        var result = PayloadReducer.ReducePayload(payload, JObject.Parse(@"{ ""country"": ""US"" }"));
+        var groups = (JObject)result["savedGroups"];
+
+        // other is evaluated against the user, so its reference passes and goes, and other with it
+        groups.Properties().Select(x => x.Name).Should().BeEquivalentTo("L");
+        JToken.DeepEquals(result["features"]["f"]["rules"][1], JObject.Parse(@"{ ""force"": true }")).Should().BeTrue();
+    }
+
+    [Fact]
+    public void APayloadWithoutSavedGroupsHasNoneInTheResult()
+    {
+        var payload = JObject.Parse(@"{ ""features"": { ""f"": { ""defaultValue"": false, ""rules"": [
+            { ""condition"": { ""tags"": { ""$elemMatch"": { ""$eq"": ""g"" } } }, ""force"": true }
+        ] } } }");
+
+        var result = PayloadReducer.ReducePayload(payload, new JObject());
+
+        JToken.DeepEquals(result["savedGroups"], new JObject()).Should().BeTrue();
     }
 
     [Fact]

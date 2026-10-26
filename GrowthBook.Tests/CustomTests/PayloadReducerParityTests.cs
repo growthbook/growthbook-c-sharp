@@ -120,4 +120,14 @@ public class PayloadReducerParityTests
 
         rules.Should().NotContain(rule => JToken.DeepEquals(rule, JObject.Parse(@"{ ""force"": true }")));
     }
+
+    [Fact]
+    public void APayloadWithoutContextualBanditsHasNoContextualBanditsKey()
+    {
+        var payload = JObject.Parse(@"{ ""features"": { ""f"": { ""defaultValue"": 1, ""rules"": [ { ""contextualBanditRef"": ""b"", ""force"": 2 } ] } } }");
+
+        var result = PayloadReducer.ReducePayload(payload, new JObject());
+
+        result.ContainsKey("contextualBandits").Should().BeFalse();
+    }
 }

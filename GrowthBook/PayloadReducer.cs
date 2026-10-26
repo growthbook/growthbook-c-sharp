@@ -437,6 +437,12 @@ namespace GrowthBook
             // needs no list of the operators that reference groups.
             private JObject KeepSavedGroups(params JToken[] roots)
             {
+                // Walking the payload is only needed when there are groups to find
+                if (!_savedGroups.HasValues)
+                {
+                    return new JObject();
+                }
+
                 var asWritten = GroupsKeptAsWritten(roots);
                 var onCycles = GroupsOnCycles();
                 var groups = new JObject();
@@ -466,7 +472,11 @@ namespace GrowthBook
                         }
 
                         groups[id] = group;
-                        pending.Push(group);
+
+                        if (CanReference(group))
+                        {
+                            pending.Push(group);
+                        }
                     }
                     else if (token is JObject obj)
                     {
@@ -520,7 +530,11 @@ namespace GrowthBook
                         }
 
                         (user ? seen : asWritten).Add(id);
-                        pending.Push((_savedGroups[id], user));
+
+                        if (CanReference(_savedGroups[id]))
+                        {
+                            pending.Push((_savedGroups[id], user));
+                        }
                     }
                     else if (token is JObject obj)
                     {
@@ -631,10 +645,20 @@ namespace GrowthBook
                 return onCycles;
             }
 
+            // A list's values (or a legacy bare array's) are attribute values, never references to other groups
+            private static bool CanReference(JToken entry) =>
+                entry is JObject group && !JToken.DeepEquals(group["type"], "list");
+
             // The saved group ids that appear as strings anywhere in a group's entry, each once
             private List<string> ReferencedGroups(JToken entry)
             {
                 var found = new List<string>();
+
+                if (!CanReference(entry))
+                {
+                    return found;
+                }
+
                 var unique = new HashSet<string>();
                 var pending = new Stack<JToken>();
                 pending.Push(entry);

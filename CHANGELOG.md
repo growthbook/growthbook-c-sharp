@@ -25,7 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `PayloadReducer.ReducePayload` and `PayloadReducer.PruneCondition` to reduce a payload for client-side
   bootstrapping (growthbook/growthbook#7238). As in spec 0.11.3 (growthbook/growthbook#7452), a condition saved group
   that `$elemMatch` or a prerequisite references, or one on a reference cycle, keeps its condition as written; an auto
-  experiment keeps its forced variation; and a contextual bandit definition that isn't an object is kept as it is.
+  experiment keeps its forced variation; a contextual bandit definition that isn't an object is kept as it is; and
+  a list saved group's values are never read as references to other groups.
 - Updated the standard test cases to spec 0.11.3.
 - Fixed `Context.EncryptedFeatures` never being decrypted. The property was declared, documented and cloned, but
   nothing ever read it, so a caller who supplied an encrypted payload was left with an empty feature set and every
