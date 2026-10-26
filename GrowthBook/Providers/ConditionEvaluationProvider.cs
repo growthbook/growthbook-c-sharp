@@ -1338,7 +1338,75 @@ namespace GrowthBook.Providers
         /// </summary>
         private static string VersionText(JToken value) =>
             IsNumber(value)
-                ? DoubleValue(value).ToString("R", CultureInfo.InvariantCulture)
+                ? JavaScriptNumberText(DoubleValue(value))
                 : StringValue(value);
+
+        /// <summary>
+        /// Writes a number the way JavaScript's <c>String(number)</c> does (ECMAScript Number::toString): the
+        /// shortest digits that read back as the same number, in plain decimal notation from 1e-7 up to 1e21 and in
+        /// exponent notation outside it ("0.000002", "1e-7", "1e+21"), with -0 written as "0".
+        /// </summary>
+        /// <param name="value">The number to write.</param>
+        /// <returns>The number's JavaScript text.</returns>
+        internal static string JavaScriptNumberText(double value)
+        {
+            if (double.IsNaN(value))
+            {
+                return "NaN";
+            }
+
+            if (double.IsInfinity(value))
+            {
+                return value > 0 ? "Infinity" : "-Infinity";
+            }
+
+            if (value == 0)
+            {
+                return "0";
+            }
+
+            if (value < 0)
+            {
+                return "-" + JavaScriptNumberText(-value);
+            }
+
+            // "R" gives the shortest round-trip digits, as in "1.5", "2E-06" or "1.23E-18"
+            var roundTrip = value.ToString("R", CultureInfo.InvariantCulture);
+            var exponentIndex = roundTrip.IndexOf('E');
+            var mantissa = exponentIndex < 0 ? roundTrip : roundTrip.Substring(0, exponentIndex);
+            var exponent = exponentIndex < 0 ? 0 : int.Parse(roundTrip.Substring(exponentIndex + 1), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture);
+            var pointIndex = mantissa.IndexOf('.');
+            var integerDigits = pointIndex < 0 ? mantissa : mantissa.Substring(0, pointIndex);
+
+            // The value is 0.digits × 10^n
+            var digits = (integerDigits + (pointIndex < 0 ? "" : mantissa.Substring(pointIndex + 1))).TrimEnd('0');
+            var n = integerDigits.Length + exponent;
+            var significant = digits.TrimStart('0');
+            n -= digits.Length - significant.Length;
+            digits = significant;
+
+            var k = digits.Length;
+
+            if (k <= n && n <= 21)
+            {
+                return digits + new string('0', n - k);
+            }
+
+            if (0 < n && n <= 21)
+            {
+                return digits.Substring(0, n) + "." + digits.Substring(n);
+            }
+
+            if (-6 < n && n <= 0)
+            {
+                return "0." + new string('0', -n) + digits;
+            }
+
+            var exponentText = (n - 1 < 0 ? "-" : "+") + Math.Abs(n - 1).ToString(CultureInfo.InvariantCulture);
+
+            return k == 1
+                ? digits + "e" + exponentText
+                : digits.Substring(0, 1) + "." + digits.Substring(1) + "e" + exponentText;
+        }
     }
 }
