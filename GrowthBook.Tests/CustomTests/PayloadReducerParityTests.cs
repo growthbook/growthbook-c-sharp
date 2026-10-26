@@ -71,6 +71,37 @@ public class PayloadReducerParityTests
         RuleStaysConditional(attributes, condition);
     }
 
+    public static IEnumerable<object[]> NaNComparisons() => new[]
+    {
+        new object[] { @"{ ""a"": { ""$lt"": 1 } }" },
+        new object[] { @"{ ""a"": { ""$lte"": 1 } }" },
+        new object[] { @"{ ""a"": { ""$gt"": 1 } }" },
+        new object[] { @"{ ""a"": { ""$gte"": 1 } }" },
+        new object[] { @"{ ""b"": { ""$lt"": 1 } }" },
+        new object[] { @"{ ""b"": { ""$gt"": 1 } }" }
+    };
+
+    [Theory]
+    [MemberData(nameof(NaNComparisons))]
+    public void ComparisonsWithNaNAlwaysFail(string conditionJson)
+    {
+        var attributes = new JObject { ["a"] = double.NaN, ["b"] = 1 };
+        var condition = JObject.Parse(conditionJson);
+
+        // The condition has no NaN, so put one on its side for b
+        if (condition["b"] is JObject comparison)
+        {
+            foreach (var property in comparison.Properties())
+            {
+                property.Value = double.NaN;
+            }
+        }
+
+        _provider.EvalCondition(attributes, condition).Should().BeFalse();
+        ((bool)PayloadReducer.PruneCondition(attributes, condition)).Should().BeFalse();
+        RuleStaysConditional(attributes, condition);
+    }
+
     // A rule whose condition fails for the user must not become unconditional
     private static void RuleStaysConditional(JObject attributes, JObject condition)
     {

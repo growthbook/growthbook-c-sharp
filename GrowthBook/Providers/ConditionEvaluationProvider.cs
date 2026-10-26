@@ -1170,7 +1170,7 @@ namespace GrowthBook.Providers
         /// <summary>
         /// Evaluates a comparison operation between an attribute value and a condition value.
         /// Numbers compare numerically and strings compare as text. Any other pairing, including a
-        /// missing or null attribute and booleans, fails the comparison.
+        /// missing or null attribute and booleans, fails the comparison, as does NaN.
         /// </summary>
         /// <param name="attributeValue">The attribute value to compare.</param>
         /// <param name="conditionValue">The condition value to compare against.</param>
@@ -1187,6 +1187,12 @@ namespace GrowthBook.Providers
 
             if (IsNumber(attributeValue))
             {
+                // In JavaScript every ordering with NaN is false, while CompareTo orders NaN below other numbers
+                if (double.IsNaN(DoubleValue(attributeValue)) || double.IsNaN(DoubleValue(conditionValue)))
+                {
+                    return false;
+                }
+
                 return meetsComparison(CompareNumbers(attributeValue, conditionValue));
             }
 
