@@ -410,9 +410,10 @@ namespace GrowthBook.Providers
                 return elem => EvalCondition(elem, indexed, ctx);
             }
 
-            if (expected.Type == JTokenType.String && expected.ToString().Length > 0)
+            // A timestamp Json.NET read as a date is still the string the payload holds
+            if (IsString(expected) && StringValue(expected).Length > 0)
             {
-                var indexed = IndexedCondition(expected.ToString().Select(x => (JToken)x.ToString()));
+                var indexed = IndexedCondition(StringValue(expected).Select(x => (JToken)x.ToString()));
                 return elem => EvalCondition(elem, indexed, ctx);
             }
 

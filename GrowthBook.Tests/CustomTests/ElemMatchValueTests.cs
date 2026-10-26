@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using FluentAssertions;
 using GrowthBook.Providers;
 using Microsoft.Extensions.Logging.Abstractions;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Xunit;
 
@@ -34,6 +35,27 @@ public class ElemMatchValueTests : UnitTest
     {
         Evaluator.EvalCondition(JObject.Parse(attributes), JObject.Parse(condition)).Should().Be(expected);
     }
+
+    [Theory]
+    // A timestamp string is a condition on index keys, so it never matches a timestamp element, whether
+    // Json.NET read either side as a date or kept it as a string
+    [InlineData(true, true)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(false, false)]
+    public void ATimestampValueIsReadAsAString(bool conditionAsDate, bool attributesAsDate)
+    {
+        var condition = Parse(@"{ ""items"": { ""$elemMatch"": ""2026-10-20T00:00:00Z"" } }", conditionAsDate);
+        var attributes = Parse(@"{ ""items"": [ ""2026-10-20T00:00:00Z"" ] }", attributesAsDate);
+
+        Evaluator.EvalCondition(attributes, condition).Should().BeFalse();
+    }
+
+    private static JObject Parse(string json, bool datesAsDates) =>
+        (JObject)JToken.ReadFrom(new JsonTextReader(new System.IO.StringReader(json))
+        {
+            DateParseHandling = datesAsDates ? DateParseHandling.DateTime : DateParseHandling.None
+        });
 
     [Fact]
     public void ARuleWhoseOrPassesDespiteAnElemMatchOnAMissingAttributeIsApplied()
