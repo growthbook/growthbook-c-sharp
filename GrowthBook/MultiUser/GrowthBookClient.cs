@@ -161,6 +161,13 @@ namespace GrowthBook.MultiUser
             => _options.GlobalForcedVariations = forcedVariations;
 
         /// <summary>
+        /// Replaces the saved group definitions that <c>$inGroup</c> and <c>$notInGroup</c> conditions
+        /// are evaluated against.
+        /// </summary>
+        public void SetSavedGroups(JObject savedGroups)
+            => _options.SavedGroups = savedGroups;
+
+        /// <summary>
         /// Replaces the tracking callback used to report experiment assignments to your analytics system.
         /// </summary>
         public void SetTrackingCallback(Action<Experiment, ExperimentResult> callback)
@@ -299,7 +306,8 @@ namespace GrowthBook.MultiUser
                 TrackingCallback = _options.TrackingCallback,
                 StickyBucketService = stickyBucketService,
                 ForcedVariations = _options.GlobalForcedVariations,
-                Attributes = _options.GlobalAttributes
+                Attributes = _options.GlobalAttributes,
+                SavedGroups = _options.SavedGroups
             };
 
             var user = new UserContext

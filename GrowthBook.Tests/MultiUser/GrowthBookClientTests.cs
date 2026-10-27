@@ -338,4 +338,72 @@ public class GrowthBookClientTests
             "the newer refresh is the one in effect and the one that reported; the older carries " +
             "older definitions however late it comes back");
     }
+
+    private static IDictionary<string, Feature> SavedGroupFeature() => new Dictionary<string, Feature>
+    {
+        ["beta-only"] = new Feature
+        {
+            DefaultValue = JToken.FromObject(false),
+            Rules = new List<FeatureRule>
+            {
+                new FeatureRule
+                {
+                    Condition = JObject.Parse("{\"id\":{\"$inGroup\":\"beta\"}}"),
+                    Force = JToken.FromObject(true)
+                }
+            }
+        }
+    };
+
+    private static GrowthBookClient ClientWithSavedGroups(JObject savedGroups)
+    {
+        var repository = Substitute.For<IGrowthBookFeatureRepository>();
+
+        repository
+            .GetFeatures(Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(SavedGroupFeature()));
+
+        return new GrowthBookClient(new Options
+        {
+            ClientKey = "sdk-test",
+            LoggerFactory = NullLoggerFactory.Instance,
+            FeatureRepository = repository,
+            SavedGroups = savedGroups
+        });
+    }
+
+    /// <summary>
+    /// A condition naming a saved group has nothing to resolve it against unless the definitions are
+    /// supplied. Without them the rule simply does not match, so the feature targets correctly in the
+    /// dashboard and is silently off for everyone here.
+    /// </summary>
+    [Fact]
+    public async Task ASavedGroupConditionMatchesWhenTheGroupsAreSupplied()
+    {
+        using var client = ClientWithSavedGroups(JObject.Parse("{\"beta\":[\"user-1\"]}"));
+
+        await client.InitializeAsync();
+
+        client.IsOn("beta-only", new UserContext { Attributes = new JObject { ["id"] = "user-1" } })
+            .Should().BeTrue("user-1 is in the beta group");
+
+        client.IsOn("beta-only", new UserContext { Attributes = new JObject { ["id"] = "user-2" } })
+            .Should().BeFalse("user-2 is not");
+    }
+
+    [Fact]
+    public async Task SavedGroupsCanBeReplacedAfterTheClientIsBuilt()
+    {
+        using var client = ClientWithSavedGroups(JObject.Parse("{\"beta\":[]}"));
+
+        await client.InitializeAsync();
+
+        var user = new UserContext { Attributes = new JObject { ["id"] = "user-1" } };
+
+        client.IsOn("beta-only", user).Should().BeFalse();
+
+        client.SetSavedGroups(JObject.Parse("{\"beta\":[\"user-1\"]}"));
+
+        client.IsOn("beta-only", user).Should().BeTrue();
+    }
 }
