@@ -76,7 +76,9 @@ namespace GrowthBook
             _assigned = new Dictionary<string, ExperimentAssignment>();
             _tracked = new ConcurrentDictionary<string, byte>();
             _stickyBucketService = context.StickyBucketService;
-            _stickyBucketAssignmentDocs = context.StickyBucketAssignmentDocs ?? new Dictionary<string, StickyAssignmentsDocument>();
+            _stickyBucketAssignmentDocs = context.StickyBucketAssignmentDocs is null
+                ? new ConcurrentDictionary<string, StickyAssignmentsDocument>()
+                : new ConcurrentDictionary<string, StickyAssignmentsDocument>(context.StickyBucketAssignmentDocs);
             _savedGroups = context.SavedGroups;
             _previousAttributes = context.Attributes?.DeepClone() as JObject;
             _previousForcedVariations = context.ForcedVariations?.ToDictionary(k => k.Key, v => v.Value);
@@ -116,6 +118,9 @@ namespace GrowthBook
             _featureEvaluator = new FeatureEvaluationProvider(
                 _loggerFactory.CreateLogger<FeatureEvaluationProvider>(),
                 _conditionEvaluator);
+
+            _featureEvaluator.ExperimentEvaluator = _experimentEvaluator;
+            _experimentEvaluator.FeatureEvaluator = _featureEvaluator;
 
             ApplyEncryptedFeatures(context);
 
