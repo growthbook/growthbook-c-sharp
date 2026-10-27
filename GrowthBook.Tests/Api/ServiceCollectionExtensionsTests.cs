@@ -3,10 +3,13 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
+using GrowthBook.Evaluation;
+using GrowthBook.Exceptions;
 using GrowthBook.Extensions;
 using GrowthBook.MultiUser;
 using GrowthBook.MultiUser.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Newtonsoft.Json.Linq;
 using NSubstitute;
@@ -110,6 +113,133 @@ public class ServiceCollectionExtensionsTests
         });
 
         finished.Should().BeTrue("resolving the client must not wait on the thread doing the resolving");
+    }
+
+    /// <summary>
+    /// A feature API that is down at startup must not take the application down with it. Letting the
+    /// exception escape would, and worse: a container does not cache a singleton whose factory threw,
+    /// so every later resolution builds another client and blocks on another load.
+    /// </summary>
+    [Fact]
+    public void AFailedFirstLoadStillYieldsOneUsableClient()
+    {
+        var attempts = 0;
+        var repository = Substitute.For<IGrowthBookFeatureRepository>();
+
+        repository
+            .GetFeatures(Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                Interlocked.Increment(ref attempts);
+
+                return Task.FromException<IDictionary<string, Feature>>(
+                    new FeatureLoadException("the features api is unreachable", 503));
+            });
+
+        var services = new ServiceCollection();
+
+        services.AddGrowthBookClient(options =>
+        {
+            options.ClientKey = "sdk-test";
+            options.LoggerFactory = NullLoggerFactory.Instance;
+            options.FeatureRepository = repository;
+        });
+
+        using var provider = services.BuildServiceProvider();
+
+        var first = provider.Invoking(p => p.GetRequiredService<GrowthBookClient>()).Should().NotThrow().Subject;
+        var second = provider.GetRequiredService<GrowthBookClient>();
+
+        first.Should().BeSameAs(second, "a failed load must not leave the factory running again on every resolution");
+        attempts.Should().Be(1);
+
+        first.EvalFeature("anything", new UserContext { Attributes = new JObject { ["id"] = "user-1" } })
+            .On.Should().BeFalse("without features every flag reads as its default");
+    }
+
+    /// <summary>
+    /// Starting without features is worse than not starting for some applications, so failing fast
+    /// stays available - but as something asked for rather than the default.
+    /// </summary>
+    [Fact]
+    public void FailingFastIsAvailableAsAnOptIn()
+    {
+        var repository = Substitute.For<IGrowthBookFeatureRepository>();
+
+        repository
+            .GetFeatures(Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromException<IDictionary<string, Feature>>(
+                new FeatureLoadException("the features api is unreachable", 503)));
+
+        var services = new ServiceCollection();
+
+        services.AddGrowthBookClient(options =>
+        {
+            options.ClientKey = "sdk-test";
+            options.LoggerFactory = NullLoggerFactory.Instance;
+            options.FeatureRepository = repository;
+            options.ThrowOnInitializationFailure = true;
+        });
+
+        using var provider = services.BuildServiceProvider();
+
+        provider.Invoking(p => p.GetRequiredService<GrowthBookClient>())
+            .Should().Throw<FeatureLoadException>();
+    }
+
+    /// <summary>
+    /// An application and a library it depends on can both register the client. AddSingleton would
+    /// leave two descriptors, and two clients each polling the API.
+    /// </summary>
+    [Fact]
+    public void RegisteringTwiceLeavesOneClient()
+    {
+        var services = new ServiceCollection();
+
+        for (var i = 0; i < 2; i++)
+        {
+            services.AddGrowthBookClient(options =>
+            {
+                options.ClientKey = "sdk-test";
+                options.LoggerFactory = NullLoggerFactory.Instance;
+                options.FeatureRepository = CreateRepository();
+            });
+        }
+
+        using var provider = services.BuildServiceProvider();
+
+        provider.GetServices<GrowthBookClient>().Should().ContainSingle();
+    }
+
+    /// <summary>
+    /// Registration must not write into the options the caller still holds, and the client must not
+    /// be left sharing them.
+    /// </summary>
+    [Fact]
+    public void TheCallersOptionsAreNotModifiedOrShared()
+    {
+        var options = new Options
+        {
+            ClientKey = "sdk-test",
+            FeatureRepository = CreateRepository(),
+            GlobalAttributes = new JObject { ["tier"] = "gold" }
+        };
+
+        var services = new ServiceCollection();
+
+        services.AddSingleton<ILoggerFactory>(NullLoggerFactory.Instance);
+        services.AddGrowthBookClient(options);
+
+        using var provider = services.BuildServiceProvider();
+
+        var client = provider.GetRequiredService<GrowthBookClient>();
+
+        options.LoggerFactory.Should().BeNull("registration resolved one for the client, not for the caller");
+
+        client.SetGlobalAttributes(new JObject { ["tier"] = "platinum" });
+
+        options.GlobalAttributes["tier"].Value<string>().Should().Be("gold",
+            "the client was given a copy, so changing its state leaves the caller's options alone");
     }
 
     [Fact]
