@@ -88,5 +88,46 @@ namespace GrowthBook.MultiUser.Configuration
 
         /// <summary>Service that provides sticky bucketing to ensure consistent experiment assignments across sessions.</summary>
         public IStickyBucketService StickyBucketService { get; set; }
-    }
+    
+        /// <summary>
+        /// Whether a failed first load should stop the client being created.
+        /// </summary>
+        /// <remarks>
+        /// False by default: a feature API that is down or rejecting the key at startup should not
+        /// take the application down with it, so the client is created and serves default values.
+        /// It does not recover on its own - nothing refreshes until something calls
+        /// <see cref="MultiUser.GrowthBookClient.RefreshFeaturesAsync"/>, and streaming only starts
+        /// after a load has succeeded - so the failure is logged as an error rather than a warning.
+        /// <para>
+        /// Set to true where starting without features is worse than not starting: the client is
+        /// disposed and the exception is rethrown.
+        /// </para>
+        /// </remarks>
+        public bool ThrowOnInitializationFailure { get; set; }
+
+        /// <summary>
+        /// A copy, so that handing these options to a client does not tie the caller's instance to it.
+        /// </summary>
+        internal Options Clone() => new Options
+        {
+            ClientKey = ClientKey,
+            ApiHost = ApiHost,
+            DecryptionKey = DecryptionKey,
+            Enabled = Enabled,
+            QaMode = QaMode,
+            GlobalAttributes = GlobalAttributes?.DeepClone() as JObject,
+            GlobalForcedVariations = GlobalForcedVariations is null
+                ? null
+                : new Dictionary<string, int>(GlobalForcedVariations),
+            LoggerFactory = LoggerFactory,
+            FeatureRepository = FeatureRepository,
+            OnFeaturesRefreshed = OnFeaturesRefreshed,
+            BackgroundSync = BackgroundSync,
+            CacheExpirationInSeconds = CacheExpirationInSeconds,
+            HttpRequestTimeoutInSeconds = HttpRequestTimeoutInSeconds,
+            TrackingCallback = TrackingCallback,
+            StickyBucketService = StickyBucketService,
+            ThrowOnInitializationFailure = ThrowOnInitializationFailure
+        };
+}
 }
