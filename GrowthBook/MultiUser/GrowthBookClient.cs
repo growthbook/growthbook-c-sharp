@@ -62,10 +62,15 @@ namespace GrowthBook.MultiUser
             _logger = _loggerFactory.CreateLogger<GrowthBookClient>();
 
             _conditionEvaluator = new ConditionEvaluationProvider(_loggerFactory.CreateLogger<ConditionEvaluationProvider>());
+            // Built as a pair and wired to each other: a feature rule can run an experiment and an
+            // experiment's prerequisite is a feature, so neither works alone.
             _experimentEvaluator = new ExperimentEvaluationProvider(
                 _loggerFactory.CreateLogger<ExperimentEvaluationProvider>(), _conditionEvaluator);
             _featureEvaluator = new FeatureEvaluationProvider(
                 _loggerFactory.CreateLogger<FeatureEvaluationProvider>(), _conditionEvaluator);
+
+            _featureEvaluator.ExperimentEvaluator = _experimentEvaluator;
+            _experimentEvaluator.FeatureEvaluator = _featureEvaluator;
 
             if (options.FeatureRepository != null)
             {
