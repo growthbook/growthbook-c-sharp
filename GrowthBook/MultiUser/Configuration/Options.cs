@@ -27,6 +27,22 @@ namespace GrowthBook.MultiUser.Configuration
         /// <summary>Attributes applied to every user evaluation. Per-request <see cref="UserContext.Attributes"/> take precedence.</summary>
         public JObject GlobalAttributes { get; set; }
 
+        /// <summary>
+        /// Saved group definitions, used by <c>$inGroup</c> and <c>$notInGroup</c> conditions.
+        /// </summary>
+        /// <remarks>
+        /// Without these, every condition that names a saved group evaluates to false for every
+        /// user - the feature targets correctly in the dashboard and silently does not here.
+        /// <para>
+        /// They have to be supplied because the feature payload does not surface them: the
+        /// repository returns features alone, so there is nowhere for the <c>savedGroups</c> the API
+        /// sends to arrive. The JavaScript SDK takes them from the payload and keeps them in its
+        /// options, which is where this should end up once the repository can hand over more than
+        /// the features.
+        /// </para>
+        /// </remarks>
+        public JObject SavedGroups { get; set; }
+
         /// <summary>Force specific experiments to always assign a specific variation for all users. Used for QA.</summary>
         public IDictionary<string, int> GlobalForcedVariations { get; set; }
 
