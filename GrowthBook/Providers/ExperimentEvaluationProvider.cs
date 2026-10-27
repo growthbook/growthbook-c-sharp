@@ -20,6 +20,8 @@ namespace GrowthBook.Providers
             _conditionEvaluator = conditionEvaluator;
         }
 
+        internal FeatureEvaluationProvider FeatureEvaluator { get; set; }
+
         public ExperimentResult RunExperiment(Experiment experiment, string featureId, EvaluationContext context)
         {
             // 1. Abort if there aren't enough variations present.
@@ -134,7 +136,7 @@ namespace GrowthBook.Providers
 
                 if (experiment.Filters?.Any() == true)
                 {
-                    if (ExperimentUtilities.IsFilteredOut(experiment.Filters, context.GetAttributes()))
+                    if (ExperimentUtilities.IsFilteredOut(experiment.Filters, context.GetAttributes(), _logger))
                     {
                         _logger.LogDebug("Aborting experiment, filters have been applied and matched this run");
                         return GetExperimentResult(experiment, context, featureId: featureId);
@@ -164,7 +166,7 @@ namespace GrowthBook.Providers
                     foreach (var parentCondition in experiment.ParentConditions)
                     {
                         context.Stack.EvaluatedFeatures = new HashSet<string>(snapshot);
-                        var parentResult = new FeatureEvaluationProvider(_logger, _conditionEvaluator).EvaluateFeature(parentCondition.Id, context);
+                        var parentResult = FeatureEvaluator.EvaluateFeature(parentCondition.Id, context);
                         // Use a fresh copy of the evaluated feature ids to avoid
                         // incorrectly flagging repeated prerequisite evaluations as cycles
 
@@ -265,7 +267,7 @@ namespace GrowthBook.Providers
         /// assignment is already decided and may already be saved, so neither a throwing callback nor another
         /// callback having thrown may change what the user is shown.
         /// </summary>
-        private void TrackExposure(Experiment experiment, ExperimentResult result, EvaluationContext context)
+        internal void TrackExposure(Experiment experiment, ExperimentResult result, EvaluationContext context)
         {
             var trackedExperiments = context.User.TrackedExperiments;
 

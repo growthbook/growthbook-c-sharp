@@ -13,7 +13,6 @@ namespace GrowthBook.Providers
     {
         private readonly ILogger _logger;
         private readonly IConditionEvaluationProvider _conditionEvaluator;
-        private readonly ExperimentEvaluationProvider _experimentEvaluator;
 
         public FeatureEvaluationProvider(
             ILogger logger,
@@ -21,8 +20,9 @@ namespace GrowthBook.Providers
         {
             _logger = logger;
             _conditionEvaluator = conditionEvaluator;
-            _experimentEvaluator = new ExperimentEvaluationProvider(logger, conditionEvaluator);
         }
+
+        internal ExperimentEvaluationProvider ExperimentEvaluator { get; set; }
 
         public FeatureResult EvaluateFeature(string featureId, EvaluationContext context)
         {
@@ -102,7 +102,7 @@ namespace GrowthBook.Providers
                         }
                     }
 
-                    if (rule.Filters?.Any() == true && ExperimentUtilities.IsFilteredOut(rule.Filters, context.GetAttributes()))
+                    if (rule.Filters?.Any() == true && ExperimentUtilities.IsFilteredOut(rule.Filters, context.GetAttributes(), _logger))
                     {
                         continue;
                     }
@@ -117,7 +117,7 @@ namespace GrowthBook.Providers
                     if (!rule.Force.IsNull())
                     {
                         if (!ExperimentUtilities.IsIncludedInRollout(rule.Seed ?? featureId, context.GetAttributes(), rule.HashAttribute, rule.Range, rule.Coverage,
-                                rule.HashVersion))
+                                rule.HashVersion, _logger))
                         {
                             _logger.LogDebug("Rule {RuleIndex}: excluded by rollout/coverage, continuing", ruleIndex);
                             continue;
@@ -127,16 +127,7 @@ namespace GrowthBook.Providers
                         {
                             foreach (var trackData in rule.Tracks)
                             {
-                                try
-                                {
-                                    context.Global.TrackingCallback?.Invoke(trackData.Experiment, trackData.Result);
-                                    context.User.TrackingCallback?.Invoke(trackData.Experiment, trackData.Result);
-                                }
-                                catch (Exception ex)
-                                {
-                                    _logger.LogError(ex,
-                                        $"Encountered unhandled exception in tracking callback for feature ID '{featureId}'");
-                                }
+                                ExperimentEvaluator.TrackExposure(trackData.Experiment, trackData.Result, context);
                             }
                         }
 
@@ -176,7 +167,7 @@ namespace GrowthBook.Providers
                         Condition = rule.Condition
                     };
 
-                    var result = _experimentEvaluator.RunExperiment(experiment, featureId, context);
+                    var result = ExperimentEvaluator.RunExperiment(experiment, featureId, context);
 
                     context.Global.OnExperimentAssigned?.Invoke(experiment, result);
 
