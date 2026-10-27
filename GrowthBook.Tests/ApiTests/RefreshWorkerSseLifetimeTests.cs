@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using System.Net.Http;
 using System.Reflection;
 using FluentAssertions;
@@ -18,14 +20,14 @@ public class RefreshWorkerSseLifetimeTests
 {
     private const BindingFlags Private = BindingFlags.Instance | BindingFlags.NonPublic;
 
-    private static FeatureRefreshWorker NewWorker()
+    private static FeatureRefreshWorker NewWorker(ILogger<FeatureRefreshWorker> logger = null)
     {
         var httpClientFactory = Substitute.For<IHttpClientFactory>();
 
         httpClientFactory.CreateClient(Arg.Any<string>()).Returns(_ => new HttpClient());
 
         return new FeatureRefreshWorker(
-            NullLogger<FeatureRefreshWorker>.Instance,
+            logger ?? NullLogger<FeatureRefreshWorker>.Instance,
             httpClientFactory,
             new GrowthBookConfigurationOptions { ApiHost = "https://example.test", ClientKey = "key" },
             new InMemoryFeatureCache(cacheExpirationInSeconds: 60));
@@ -75,6 +77,54 @@ public class RefreshWorkerSseLifetimeTests
 
         worker.Invoking(w => w.Cancel()).Should().NotThrow();
         worker.Invoking(w => w.Dispose()).Should().NotThrow();
+    }
+
+    /// <summary>
+    /// A refresh in flight can reach the mode check after the worker is disposed. Clearing the client
+    /// is not enough on its own: the check then finds nothing and starts a replacement that nobody
+    /// will dispose, whose connection task reads a cancellation source that has already been disposed.
+    /// </summary>
+    [Fact]
+    public void ADisposedWorkerDoesNotTryToStartAnotherSseClient()
+    {
+        var messages = new List<string>();
+        var worker = NewWorker(new CapturingLogger(messages));
+
+        typeof(FeatureRefreshWorker).GetField("_isServerSentEventsEnabled", Private).SetValue(worker, true);
+
+        AttachClient(worker);
+
+        worker.Dispose();
+
+        typeof(FeatureRefreshWorker)
+            .GetMethod("EnsureCorrectRefreshModeIsActive", Private)
+            .Invoke(worker, null);
+
+        CurrentClient(worker).Should().BeNull("a disposed worker has nothing left to connect with");
+
+        // Without the guard the check finds no client and tries to build one, which fails on the
+        // disposed cancellation source and is logged. Nothing is attempted at all now.
+        messages.Should().NotContain(m => m.Contains("Error initializing SSE client"));
+        messages.Should().NotContain(m => m.Contains("starting SSE client now"));
+    }
+
+    private sealed class CapturingLogger : ILogger<FeatureRefreshWorker>
+    {
+        private readonly List<string> _messages;
+
+        public CapturingLogger(List<string> messages) => _messages = messages;
+
+        public IDisposable BeginScope<TState>(TState state) => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception exception, Func<TState, Exception, string> formatter)
+        {
+            lock (_messages)
+            {
+                _messages.Add(formatter(state, exception));
+            }
+        }
     }
 
     /// <summary>

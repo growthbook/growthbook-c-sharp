@@ -36,6 +36,7 @@ namespace GrowthBook.Api
         private volatile bool _isServerSentEventsEnabled;
         private readonly object _sseClientLock = new object();
         private SSEClient _sseClient;
+        private bool _isDisposed;
         private CancellationTokenSource _refreshWorkerCancellation = new CancellationTokenSource();
 
         public FeatureRefreshWorker(ILogger<FeatureRefreshWorker> logger, IHttpClientFactory httpClientFactory, GrowthBookConfigurationOptions config, IGrowthBookFeatureCache cache)
@@ -108,6 +109,11 @@ namespace GrowthBook.Api
         {
             lock (_sseClientLock)
             {
+                if (_isDisposed)
+                {
+                    return;
+                }
+
                 if (_isServerSentEventsEnabled)
                 {
                     if (_sseClient == null || _sseClient.ConnectionStatus == SSEConnectionStatus.Disconnected)
@@ -136,10 +142,13 @@ namespace GrowthBook.Api
                 var sseLogger = _logger as ILogger<SSEClient> ?? 
                     new Microsoft.Extensions.Logging.Abstractions.NullLogger<SSEClient>();
                 
-                _sseClient = new SSEClient(sseLogger, _httpClientFactory, _serverSentEventsApiEndpoint, null, ConfiguredClients.ServerSentEventsApiClient);
-                
-                // Add general event listener for all events (handles data field)
-                _sseClient.AddEventListener(null, async (sseEvent) =>
+                var client = new SSEClient(sseLogger, _httpClientFactory, _serverSentEventsApiEndpoint, null, ConfiguredClients.ServerSentEventsApiClient);
+
+                var token = _refreshWorkerCancellation.Token;
+
+                _sseClient = client;
+            
+                client.AddEventListener(null, async (sseEvent) =>
                 {
                     if (sseEvent.HasData)
                     {
@@ -153,12 +162,12 @@ namespace GrowthBook.Api
                 });
 
                 // Add connection status event handlers
-                _sseClient.ConnectionStatusChanged += (status) =>
+                client.ConnectionStatusChanged += (status) =>
                 {
                     _logger.LogInformation("SSE connection status changed to: {Status}", status);
                 };
 
-                _sseClient.ConnectionError += (exception) =>
+                client.ConnectionError += (exception) =>
                 {
                     _logger.LogError(exception, "SSE connection error occurred");
                 };
@@ -168,7 +177,7 @@ namespace GrowthBook.Api
                 {
                     try
                     {
-                        await _sseClient.ConnectAsync(_refreshWorkerCancellation.Token).ConfigureAwait(false);
+                        await client.ConnectAsync(token).ConfigureAwait(false);
                     }
                     catch (Exception ex)
                     {
@@ -210,6 +219,8 @@ namespace GrowthBook.Api
 
             lock (_sseClientLock)
             {
+                _isDisposed = true;
+
                 _sseClient?.Dispose();
                 _sseClient = null;
             }
