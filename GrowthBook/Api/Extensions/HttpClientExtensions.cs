@@ -35,6 +35,17 @@ namespace GrowthBook.Api.Extensions
         {
             using (var request = new HttpRequestMessage(HttpMethod.Get, endpoint))
             {
+                // Reserved header names (User-Agent, If-None-Match, Cache-Control) are rejected at
+                // construction time (see GrowthBook.ValidateHeaderAndStreamingConfiguration), so this
+                // never needs to defend against ApiHostRequestHeaders clobbering IfNoneMatch below.
+                if (config.ApiHostRequestHeaders != null)
+                {
+                    foreach (var header in config.ApiHostRequestHeaders)
+                    {
+                        request.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                    }
+                }
+
                 var cachedETag = etagCache?.Get(endpoint);
 
                 if (etagCache != null && !string.IsNullOrWhiteSpace(cachedETag))

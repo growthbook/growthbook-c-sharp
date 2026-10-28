@@ -189,9 +189,7 @@ namespace GrowthBook.Api
 
         private IDictionary<string, string> GetApiRequestHeaders(Context context)
         {
-            // For now, return empty headers. This can be extended later to support custom headers
-            // from context or configuration
-            return new Dictionary<string, string>();
+            return context.ApiHostRequestHeaders ?? new Dictionary<string, string>();
         }
     }
 }
