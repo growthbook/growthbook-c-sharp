@@ -26,6 +26,8 @@ namespace GrowthBook
     public class GrowthBook : IGrowthBook, IDisposable
     {
         private readonly bool _qaMode;
+        private IDictionary<string, Feature> _features;
+        private string _encryptedFeatures;
         private readonly Dictionary<string, ExperimentAssignment> _assigned;
         private readonly ConcurrentDictionary<string, byte> _tracked;
         private Action<Experiment, ExperimentResult> _trackingCallback;
@@ -133,6 +135,8 @@ namespace GrowthBook
 
                 _featureRepository = new FeatureRepository(featureRepositoryLogger, featureCache, featureRefreshWorker, remoteEvaluationService);
             }
+
+            RetainEncryptedFeatures(context);
         }
 
         private void ApplyEncryptedFeatures(Context context)
@@ -158,7 +162,7 @@ namespace GrowthBook
             }
             catch (Exception ex)
             {
-                throw new DecryptionException("The decrypted value was not a valid feature payload", ex);
+                throw new DecryptionException($"The decrypted value was not a valid feature payload ({ex.GetType().Name})");
             }
 
             _logger.LogInformation("Decrypted '{FeatureCount}' feature(s) from the context", Features.Count);
@@ -170,9 +174,35 @@ namespace GrowthBook
         public JObject Attributes { get; set; }
 
         /// <summary>
+        /// Records the ciphertext the context carried, once construction has finished assigning the
+        /// features. Assigning Features clears it, so this has to be the last word in the
+        /// constructor - anything that sets the features later is a genuine replacement.
+        /// </summary>
+        private void RetainEncryptedFeatures(Context context)
+        {
+            _encryptedFeatures = context.EncryptedFeatures;
+        }
+
+        /// <summary>
         /// Dictionary of the currently loaded feature objects.
         /// </summary>
-        public IDictionary<string, Feature> Features { get; set; }
+        /// <remarks>
+        /// Assigning this clears the retained ciphertext. The two described the same payload when the
+        /// instance was built, and once the features are replaced they no longer do - exporting the old
+        /// ciphertext would hand another tier definitions this instance is not evaluating.
+        /// </remarks>
+        public IDictionary<string, Feature> Features
+        {
+            get
+            {
+                return _features;
+            }
+            set
+            {
+                _features = value;
+                _encryptedFeatures = null;
+            }
+        }
 
         /// <summary>
         /// The currently loaded experiments (separate from features).
@@ -449,6 +479,67 @@ namespace GrowthBook
             var value = result.Value;
 
             return value.IsNull() ? fallback : value.ToObject<T>();
+        }
+
+        /// <inheritdoc />
+        public JObject GetPayload()
+        {
+            var payload = new JObject();
+            var encryptedFeatures = _encryptedFeatures;
+
+            if (encryptedFeatures.IsNullOrWhitespace())
+            {
+                payload["features"] = JObject.FromObject(Features ?? new Dictionary<string, Feature>());
+            }
+            else
+            {
+                payload["encryptedFeatures"] = encryptedFeatures;
+            }
+
+            payload["experiments"] = JArray.FromObject(Experiments ?? new List<Experiment>());
+
+            if (_savedGroups != null)
+            {
+                payload["savedGroups"] = _savedGroups.DeepClone();
+            }
+
+            return payload;
+        }
+
+        /// <inheritdoc />
+        public JObject GetDecryptedPayload()
+        {
+            var encryptedFeatures = _encryptedFeatures;
+            var payload = GetPayload();
+
+            if (encryptedFeatures.IsNullOrWhitespace())
+            {
+                return payload;
+            }
+
+            // A wrong key does not fail the AES step, it yields garbage that fails to parse - and the
+            // parser puts a fragment of that garbage in its message. Both paths are wrapped so the caller
+            // gets one exception type and neither the key nor any decrypted bytes reach the message.
+            JObject features;
+
+            try
+            {
+                features = JObject.Parse(encryptedFeatures.DecryptWith(_context.DecryptionKey));
+            }
+            catch (DecryptionException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                throw new DecryptionException(
+                    $"The encrypted payload could not be decrypted with the configured decryption key ({ex.GetType().Name})");
+            }
+
+            payload.Remove("encryptedFeatures");
+            payload["features"] = features;
+
+            return payload;
         }
 
         /// <inheritdoc />
