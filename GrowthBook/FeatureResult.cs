@@ -76,7 +76,7 @@ namespace GrowthBook
 
         public override bool Equals(object obj)
         {
-            if (obj.GetType() == typeof(FeatureResult))
+            if (obj?.GetType() == typeof(FeatureResult))
             {
                 FeatureResult objResult = (FeatureResult)obj;
                 return object.Equals(Experiment, objResult.Experiment)
@@ -89,9 +89,23 @@ namespace GrowthBook
             return false;
         }
 
+        /// <summary>
+        /// A hash over exactly the fields Equals compares, so equal instances hash equally.
+        /// </summary>
+        /// <remarks>Value is compared with JToken.DeepEquals, which ignores property ordering, so no serialized form of it hashes consistently with Equals. Leaving it out only costs distribution.</remarks>
         public override int GetHashCode()
         {
-            throw new NotImplementedException();
+            unchecked
+            {
+                var hash = 17;
+
+                hash = hash * 31 + On.GetHashCode();
+                hash = hash * 31 + (Source?.GetHashCode() ?? 0);
+                hash = hash * 31 + (Experiment?.GetHashCode() ?? 0);
+                hash = hash * 31 + (ExperimentResult?.GetHashCode() ?? 0);
+
+                return hash;
+            }
         }
     }
 }
