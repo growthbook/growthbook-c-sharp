@@ -74,16 +74,16 @@ namespace GrowthBook.Api
             {
                 var httpClient = _httpClientFactory.CreateClient(ConfiguredClients.DefaultApiClient);
 
-            var response = await httpClient.GetFeaturesFrom(_featuresApiEndpoint, _logger, _config, cancellationToken ?? _refreshWorkerCancellation.Token, _etagCache);
+            var response = await httpClient.GetFeaturesFrom(_featuresApiEndpoint, _logger, _config, cancellationToken ?? _refreshWorkerCancellation.Token, _etagCache).ConfigureAwait(false);
 
             if (response.IsNotModified)
             {
                 if (_cache is InMemoryFeatureCache inMemoryCache)
                 {
-                    await inMemoryCache.RefreshExpiration(cancellationToken);
+                    await inMemoryCache.RefreshExpiration(cancellationToken).ConfigureAwait(false);
                 }
 
-                return await _cache.GetFeatures(cancellationToken);
+                return await _cache.GetFeatures(cancellationToken).ConfigureAwait(false);
             }
 
             if (response.Features is null)
@@ -92,7 +92,7 @@ namespace GrowthBook.Api
                 return null;
             }
 
-            await _cache.RefreshWith(response.Features, cancellationToken);
+            await _cache.RefreshWith(response.Features, cancellationToken).ConfigureAwait(false);
             NotifyFeaturesRefreshed(true);
 
             // Now that the cache has been populated at least once, we need to see if we're allowed
@@ -189,7 +189,7 @@ namespace GrowthBook.Api
                             try
                             {
                                 var features = GetFeaturesFrom(sseEvent.Data);
-                                await _cache.RefreshWith(features, _refreshWorkerCancellation.Token);
+                                await _cache.RefreshWith(features, _refreshWorkerCancellation.Token).ConfigureAwait(false);
                                 NotifyFeaturesRefreshed(true);
 
                                 // Update last known event ID to prevent duplicates
@@ -235,7 +235,7 @@ namespace GrowthBook.Api
                 {
                     try
                     {
-                        await _sseClient.ConnectAsync(_refreshWorkerCancellation.Token);
+                        await _sseClient.ConnectAsync(_refreshWorkerCancellation.Token).ConfigureAwait(false);
                     }
                     catch (Exception ex)
                     {

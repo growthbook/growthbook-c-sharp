@@ -48,7 +48,7 @@ namespace GrowthBook.Api
             // first initialized, it should be pre-expired so that this is automatically hit
             // in order to populate the initial cache values.
 
-            await _refreshLock.WaitAsync(cancellationToken ?? CancellationToken.None);
+            await _refreshLock.WaitAsync(cancellationToken ?? CancellationToken.None).ConfigureAwait(false);
             try
             {
                 if (_cache.IsCacheExpired || options?.ForceRefresh == true)
@@ -73,7 +73,7 @@ namespace GrowthBook.Api
                         // the worker running on its own cancellation, which Cancel() trips.
                         var taskFactory = new TaskFactory(CancellationToken.None);
                         refreshTask = taskFactory.StartNew(async () =>
-                            await _backgroundRefreshWorker.RefreshCacheFromApi(null)).Unwrap();
+                            await _backgroundRefreshWorker.RefreshCacheFromApi(null).ConfigureAwait(false)).Unwrap();
 
                         _inFlightRefresh = refreshTask;
                     }
@@ -93,7 +93,7 @@ namespace GrowthBook.Api
                         _logger.LogDebug(
                             "Feature count: '{CacheFeatureCount}' and option to wait for completion: '{OptionsWaitForCompletion}'",
                             _cache.FeatureCount, options?.WaitForCompletion);
-                        return await WaitForRefresh(refreshTask, cancellationToken ?? CancellationToken.None);
+                        return await WaitForRefresh(refreshTask, cancellationToken ?? CancellationToken.None).ConfigureAwait(false);
                     }
                     else
                     {
@@ -109,7 +109,7 @@ namespace GrowthBook.Api
                 _logger.LogInformation(
                     "Cache is not expired and the option to force refresh was not set, retrieving features from cache");
 
-                return await _cache.GetFeatures(cancellationToken);
+                return await _cache.GetFeatures(cancellationToken).ConfigureAwait(false);
             }
             finally
             {
@@ -126,20 +126,20 @@ namespace GrowthBook.Api
         {
             if (!cancellationToken.CanBeCanceled)
             {
-                return await refreshTask;
+                return await refreshTask.ConfigureAwait(false);
             }
 
             var cancelled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
             using (cancellationToken.Register(state => ((TaskCompletionSource<bool>)state).TrySetResult(true), cancelled))
             {
-                if (await Task.WhenAny(refreshTask, cancelled.Task) != refreshTask)
+                if (await Task.WhenAny(refreshTask, cancelled.Task).ConfigureAwait(false) != refreshTask)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
                 }
             }
 
-            return await refreshTask;
+            return await refreshTask.ConfigureAwait(false);
         }
 
         /// <inheritdoc/>
@@ -187,14 +187,14 @@ namespace GrowthBook.Api
             if (!context.RemoteEval)
             {
                 _logger.LogDebug("Remote evaluation is disabled, using regular feature retrieval");
-                return await GetFeatures(options, cancellationToken);
+                return await GetFeatures(options, cancellationToken).ConfigureAwait(false);
             }
 
             // Validate remote evaluation configuration
             if (_remoteEvaluationService == null)
             {
                 _logger.LogWarning("Remote evaluation is enabled but IRemoteEvaluationService is not available, falling back to regular feature retrieval");
-                return await GetFeatures(options, cancellationToken);
+                return await GetFeatures(options, cancellationToken).ConfigureAwait(false);
             }
 
             try
@@ -220,7 +220,7 @@ namespace GrowthBook.Api
                     context.ClientKey,
                     request,
                     GetApiRequestHeaders(context),
-                    cancellationToken ?? CancellationToken.None);
+                    cancellationToken ?? CancellationToken.None).ConfigureAwait(false);
 
                 if (response.IsSuccess)
                 {

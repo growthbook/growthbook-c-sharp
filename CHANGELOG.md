@@ -7,11 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Fixed `Context.EncryptedFeatures` never being decrypted. The property was declared, documented and cloned, but
+  nothing ever read it, so a caller who supplied an encrypted payload was left with an empty feature set and every
+  flag reading as false - with nothing to distinguish a wrong key from a working one. The payload is now decrypted in
+  the constructor and takes precedence over `Context.Features`. A payload supplied without `Context.DecryptionKey`
+  throws `ArgumentException`, and one that will not decrypt or will not parse throws `DecryptionException`, rather
+  than failing silently.
+- Fixed the async evaluation methods ignoring a locally supplied payload. `IsOnAsync`, `IsOffAsync`, `EvalFeatureAsync`
+  and `GetFeatureValueAsync` always loaded from the repository first, so a caller evaluating an offline payload hit an
+  API they never configured - with no client key that is a failing request to the default host, and a response that did
+  arrive replaced the payload they supplied. The load now happens only when there is somewhere to load from: a client
+  key, or a repository the caller provided.
 - Stopped writing the decryption key to the log. It was logged verbatim at debug level on both feature fetch paths,
   so anyone with log access could decrypt the payloads it protects. Rotate the key if debug logging has been enabled
   where those logs are retained or shipped elsewhere.
 - Stopped logging feature payload bodies, both the raw API response and the decrypted one. A payload carries saved
   groups, which are typically lists of user identifiers, so it is personal data. Character counts are logged instead.
+- Fixed deadlocks on single-threaded synchronization contexts (classic ASP.NET on .NET Framework, WPF, WinForms).
+  No await in the SDK captures the caller's context any more, across `GrowthBook`, `FeatureRepository`,
+  `FeatureRefreshWorker`, `RemoteEvaluationService`, `HttpClientExtensions` and `SSEClient`. An application that
+  blocked on an SDK task could previously hang, and the SDK did it to itself through
+  `EvalFeature(key, alwaysLoadFeatures: true)` and `GetFeatureValue(key, fallback, alwaysLoadFeatures: true)`,
+  which block internally. Those two now also start the load off the calling thread, so a feature repository
+  supplied on the `Context` cannot post a continuation back to the thread they are holding.
+- **Behaviour change:** code after an await inside the SDK now resumes on a thread pool thread. A `TrackingCallback`
+  or a callback registered via `Subscribe` that is reached through the async evaluation APIs (`EvalFeatureAsync`,
+  `GetFeatureValueAsync`, `IsOnAsync`, `IsOffAsync`) therefore runs off the caller's synchronization context.
+  Callbacks that touch context-affine state — UI controls on WPF/WinForms, `HttpContext.Current` on classic
+  ASP.NET — have to marshal back themselves. The synchronous overloads are unaffected: they still invoke callbacks
+  on the calling thread. `SubscribeAsync` was already dispatched off-context and is unchanged. No public API changed.
 
 ### Added
 - `GrowthBookClient` — new thread-safe singleton client for multiuser server-side scenarios (ASP.NET Core, Azure Functions, workers). Accepts a per-request `UserContext` for each evaluation, with no per-user object allocation.

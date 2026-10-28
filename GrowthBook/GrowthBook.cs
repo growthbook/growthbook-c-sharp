@@ -44,6 +44,11 @@ namespace GrowthBook
         private readonly bool _ownsLoggerFactory;
         private readonly bool _ownsFeatureRepository;
         private readonly Context _context;
+
+        /// <summary>
+        /// Whether there is anywhere to fetch features from at all.
+        /// </summary>
+        private readonly bool _canFetchFeatures;
         private JObject _previousAttributes;
         private IDictionary<string, int> _previousForcedVariations;
 
@@ -67,6 +72,7 @@ namespace GrowthBook
             ValidateRemoteEvaluationConfiguration(context);
 
             _context = context;
+            _canFetchFeatures = context.FeatureRepository != null || !string.IsNullOrWhiteSpace(context.ClientKey);
             Enabled = context.Enabled;
             Attributes = context.Attributes;
             Url = context.Url;
@@ -142,6 +148,8 @@ namespace GrowthBook
                 _loggerFactory.CreateLogger<FeatureEvaluationProvider>(),
                 _conditionEvaluator);
 
+            ApplyEncryptedFeatures(context);
+
             if (context.FeatureRepository != null)
             {
                 _featureRepository = context.FeatureRepository;
@@ -176,6 +184,35 @@ namespace GrowthBook
             ForcedFeatureValues = context.ForcedFeatureValues;
 
             RefreshStickyBuckets();
+        }
+
+        private void ApplyEncryptedFeatures(Context context)
+        {
+            if (string.IsNullOrWhiteSpace(context.EncryptedFeatures))
+            {
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(context.DecryptionKey))
+            {
+                throw new ArgumentException($"{nameof(Context.EncryptedFeatures)} was supplied without a {nameof(Context.DecryptionKey)} to decrypt it with", nameof(context));
+            }
+
+            _logger.LogInformation("Context contained encrypted features, decrypting them now");
+
+            var decryptedFeaturesJson = context.EncryptedFeatures.DecryptWith(context.DecryptionKey);
+
+            try
+            {
+                Features = JObject.Parse(decryptedFeaturesJson).ToObject<Dictionary<string, Feature>>()
+                    ?? new Dictionary<string, Feature>();
+            }
+            catch (Exception ex)
+            {
+                throw new DecryptionException("The decrypted value was not a valid feature payload", ex);
+            }
+
+            _logger.LogInformation("Decrypted '{FeatureCount}' feature(s) from the context", Features.Count);
         }
 
         /// <summary>
@@ -395,7 +432,7 @@ namespace GrowthBook
         /// <returns><c>true</c> if the feature is on; otherwise, <c>false</c>.</returns>
         public async Task<bool> IsOnAsync(string key, CancellationToken? cancellationToken = null)
         {
-            await LoadFeatures(cancellationToken: cancellationToken);
+            await EnsureFeaturesLoaded(cancellationToken).ConfigureAwait(false);
             var result = EvaluateFeature(key);
             var value = result.Value;
             return !value.IsNull() && value.ToObject<bool>();
@@ -409,7 +446,7 @@ namespace GrowthBook
         /// <returns><c>true</c> if the feature is off; otherwise, <c>false</c>.</returns>
         public async Task<bool> IsOffAsync(string key, CancellationToken? cancellationToken = null)
         {
-            var on = await IsOnAsync(key, cancellationToken);
+            var on = await IsOnAsync(key, cancellationToken).ConfigureAwait(false);
             return !on;
         }
 
@@ -456,12 +493,10 @@ namespace GrowthBook
         /// <inheritdoc />
         public T GetFeatureValue<T>(string key, T fallback, bool alwaysLoadFeatures = false)
         {
-            // Keep the sync API, but avoid deadlocks by doing a quick synchronous spin only if already completed.
             // Prefer callers to use the async APIs.
             if (alwaysLoadFeatures)
             {
-                // Fire-and-wait carefully to avoid deadlocks.
-                LoadFeatures().GetAwaiter().GetResult();
+                LoadFeaturesWithoutCapturingContext();
             }
 
             var result = EvaluateFeature(key);
@@ -474,7 +509,7 @@ namespace GrowthBook
         public async Task<T> GetFeatureValueAsync<T>(string key, T fallback,
             CancellationToken? cancellationToken = null)
         {
-            var result = await EvalFeatureAsync(key, cancellationToken);
+            var result = await EvalFeatureAsync(key, cancellationToken).ConfigureAwait(false);
             var value = result.Value;
 
             return value.IsNull() ? fallback : value.ToObject<T>();
@@ -494,17 +529,65 @@ namespace GrowthBook
         {
             if (alwaysLoadFeatures)
             {
-                LoadFeatures().GetAwaiter().GetResult();
+                LoadFeaturesWithoutCapturingContext();
             }
 
             return EvaluateFeature(featureId);
         }
 
+        /// <summary>
+        /// Blocks on a load without leaving it anything to post back to this thread. ConfigureAwait only
+        /// governs the SDK's own awaits; a feature repository supplied on the <see cref="Context"/> is the
+        /// application's code, and under a single-threaded synchronization context its continuation would
+        /// be queued to the thread this call is holding. Starting the load where there is no context to
+        /// capture settles it for every participant rather than only for the SDK.
+        /// </summary>
+        private void LoadFeaturesWithoutCapturingContext()
+        {
+            if (SynchronizationContext.Current is null)
+            {
+                LoadFeatures().GetAwaiter().GetResult();
+
+                return;
+            }
+
+            Task.Run(() => LoadFeatures()).GetAwaiter().GetResult();
+        }
+
         public async Task<FeatureResult> EvalFeatureAsync(string featureId, CancellationToken? cancellationToken = null)
         {
-            await LoadFeatures(cancellationToken: cancellationToken);
+            await EnsureFeaturesLoaded(cancellationToken).ConfigureAwait(false);
 
             return EvaluateFeature(featureId);
+        }
+
+        /// <summary>
+        /// Loads the features these methods evaluate against, unless there is nowhere to load them from.
+        /// A payload supplied on the <see cref="Context"/> - plaintext or encrypted - with no client key
+        /// and no repository of the caller's own is a deliberately offline setup: fetching would call an
+        /// API that was never configured, and a response that did arrive would replace the payload the
+        /// caller supplied.
+        /// </summary>
+        private async Task EnsureFeaturesLoaded(CancellationToken? cancellationToken)
+        {
+            if (!_canFetchFeatures)
+            {
+                _logger.LogDebug("No client key and no supplied repository, evaluating the features the context carried");
+
+                return;
+            }
+
+            await LoadFeaturesWithoutCapturingContextAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        private Task LoadFeaturesWithoutCapturingContextAsync(CancellationToken? cancellationToken)
+        {
+            if (SynchronizationContext.Current is null)
+            {
+                return LoadFeatures(cancellationToken: cancellationToken);
+            }
+
+            return Task.Run(() => LoadFeatures(cancellationToken: cancellationToken));
         }
 
         private FeatureResult EvaluateFeature(string featureId, ISet<string> evaluatedFeatures = default)
@@ -534,7 +617,7 @@ namespace GrowthBook
         public async Task LoadFeatures(GrowthBookRetrievalOptions options = null,
             CancellationToken? cancellationToken = null)
         {
-            var result = await LoadFeaturesWithResult(options, cancellationToken);
+            var result = await LoadFeaturesWithResult(options, cancellationToken).ConfigureAwait(false);
 
             if (!result.Success)
             {
@@ -558,11 +641,11 @@ namespace GrowthBook
                 {
                     var currentContext = CreateCurrentContext();
                     features = await _featureRepository.GetFeaturesWithContext(currentContext, options,
-                        cancellationToken);
+                        cancellationToken).ConfigureAwait(false);
                 }
                 else
                 {
-                    features = await _featureRepository.GetFeatures(options, cancellationToken);
+                    features = await _featureRepository.GetFeatures(options, cancellationToken).ConfigureAwait(false);
                 }
 
                 if (features == null)
@@ -754,7 +837,7 @@ namespace GrowthBook
                 _logger?.LogDebug("Triggering remote evaluation due to attribute changes");
 
                 var currentContext = CreateCurrentContext();
-                var features = await _featureRepository.GetFeaturesWithContext(currentContext);
+                var features = await _featureRepository.GetFeaturesWithContext(currentContext).ConfigureAwait(false);
 
                 if (features != null)
                 {
