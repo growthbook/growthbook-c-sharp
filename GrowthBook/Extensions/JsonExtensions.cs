@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using GrowthBook.Providers;
 using GrowthBook.Utilities;
 using Newtonsoft.Json.Linq;
 
@@ -30,23 +31,59 @@ namespace GrowthBook.Extensions
         public static bool IsNullOrWhitespace(this JToken token) => token.IsNull() || token.ToString().IsNullOrWhitespace();
 
         /// <summary>
-        /// Gets the value of the named attribute key within the current <see cref="JObject"/>.
+        /// Gets the attribute and value that identify a user for hashing, the way the JavaScript SDK does.
+        /// Only a non-empty string or a finite, non-zero number counts; any other value, including <c>0</c>,
+        /// <c>""</c>, booleans, arrays and objects, counts as missing. When the attribute is missing the
+        /// fallback attribute is tried with the same rule.
         /// </summary>
-        /// <param name="json">The JSON object to look up the key from.</param>
-        /// <param name="attributeKey">The key of the attribute value in the JSON object. Defaults to "id" when not provided.</param>
-        /// <returns>The value associated with the requested attribute, or null if the value is null or <see cref="JTokenType.Null"/>.</returns>
+        /// <param name="json">The attributes to look up the key from.</param>
+        /// <param name="attributeKey">The hash attribute. Defaults to "id" when null or empty.</param>
+        /// <param name="fallbackAttributeKey">The attribute to try when the hash attribute is missing, if any.</param>
+        /// <returns>
+        /// The attribute used and its value as text (numbers written like JavaScript's <c>String(number)</c>),
+        /// or the hash attribute and null when neither attribute has a usable value.
+        /// </returns>
         public static (string Attribute, string Value) GetHashAttributeAndValue(this JObject json, string attributeKey = null, string fallbackAttributeKey = null)
         {
-            var attribute = attributeKey ?? "id";
+            var attribute = string.IsNullOrEmpty(attributeKey) ? "id" : attributeKey;
 
-            var attributeValue = json[attribute];
+            var value = HashableText(json?[attribute]);
 
-            if (attributeValue.IsNull() && fallbackAttributeKey != null)
+            if (value is null && !string.IsNullOrEmpty(fallbackAttributeKey))
             {
-                return (fallbackAttributeKey, json[fallbackAttributeKey]?.ToString());
+                var fallbackValue = HashableText(json?[fallbackAttributeKey]);
+
+                if (fallbackValue != null)
+                {
+                    return (fallbackAttributeKey, fallbackValue);
+                }
             }
 
-            return (attribute, attributeValue?.ToString());
+            return (attribute, value);
+        }
+
+        /// <summary>
+        /// Gets the text to hash for an attribute value, or null if the value can't identify a user.
+        /// </summary>
+        private static string HashableText(JToken token)
+        {
+            switch (token?.Type)
+            {
+                case JTokenType.String:
+                    var text = token.ToString();
+                    return text.Length == 0 ? null : text;
+                case JTokenType.Date:
+                    // Json.NET read an ISO 8601 string as a date, but it is still a string in the payload
+                    return ConditionEvaluationProvider.StringValue(token);
+                case JTokenType.Integer:
+                case JTokenType.Float:
+                    var number = ConditionEvaluationProvider.DoubleValue(token);
+                    return number == 0 || double.IsNaN(number) || double.IsInfinity(number)
+                        ? null
+                        : ConditionEvaluationProvider.JavaScriptNumberText(number);
+                default:
+                    return null;
+            }
         }
 
         public static JArray AsArray(this JToken token) => (JArray)token;

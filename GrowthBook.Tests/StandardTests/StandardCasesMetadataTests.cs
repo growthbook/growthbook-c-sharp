@@ -42,7 +42,10 @@ public class StandardCasesMetadataTests
     {
         "urlRedirect",
         // Contextual bandits aren't implemented in this SDK yet
-        "contextualBandit"
+        "contextualBandit",
+        // Remote saved groups (the savedGroupReferencesRemote capability) aren't implemented in this SDK yet
+        "savedGroupReferencesRemote.evalCondition",
+        "savedGroupReferencesRemote.feature"
     };
 
     [Fact]
@@ -50,7 +53,7 @@ public class StandardCasesMetadataTests
     {
         var standardCases = LoadStandardCases();
 
-        standardCases["specVersion"]?.ToString().Should().Be("0.11.3");
+        standardCases["specVersion"]?.ToString().Should().Be("0.12.0");
     }
 
     [Fact]

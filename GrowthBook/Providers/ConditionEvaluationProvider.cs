@@ -446,11 +446,11 @@ namespace GrowthBook.Providers
 
             if (op == "$eq")
             {
-                return ValuesEqual(conditionValue, attributeValue);
+                return OperatorEquals(conditionValue, attributeValue);
             }
             if (op == "$ne")
             {
-                return !ValuesEqual(conditionValue, attributeValue);
+                return !OperatorEquals(conditionValue, attributeValue);
             }
 
             // Handle comparison operators with a cleaner approach
@@ -838,6 +838,12 @@ namespace GrowthBook.Providers
                 return false;
             }
 
+            // A pattern that isn't a string can't be compiled, so it fails, as in the JS SDK
+            if (!IsString(conditionValue))
+            {
+                return false;
+            }
+
             // Only strings are matched. Any other type fails the regex, so its negation matches.
             if (!IsString(attributeValue))
             {
@@ -1130,7 +1136,54 @@ namespace GrowthBook.Providers
             return meetsComparison(comparisonResult);
         }
 
-        private static JToken GetPath(JToken attributes, string key) => attributes.SelectToken(key);
+        /// <summary>
+        /// Gets the value at a dot-separated path, the way the JS SDK does: each segment is an object's own key or
+        /// an array index. Returns null when any segment is missing.
+        /// </summary>
+        private static JToken GetPath(JToken attributes, string key)
+        {
+            var current = attributes;
+
+            foreach (var segment in key.Split('.'))
+            {
+                if (current is JObject obj && obj.TryGetValue(segment, StringComparison.Ordinal, out var child))
+                {
+                    current = child;
+                }
+                else if (current is JArray array && IsArrayIndex(segment, out var index) && index < array.Count)
+                {
+                    current = array[index];
+                }
+                else
+                {
+                    return null;
+                }
+            }
+
+            return current;
+        }
+
+        /// <summary>
+        /// Whether a path segment is a canonical array index, the only form JavaScript reads as one.
+        /// </summary>
+        private static bool IsArrayIndex(string segment, out int index)
+        {
+            index = -1;
+
+            if (segment.Length == 0 || (segment.Length > 1 && segment[0] == '0') || !segment.All(c => c >= '0' && c <= '9'))
+            {
+                return false;
+            }
+
+            return int.TryParse(segment, NumberStyles.None, CultureInfo.InvariantCulture, out index);
+        }
+
+        /// <summary>
+        /// Equality for <c>$eq</c> and <c>$ne</c>. The JS SDK compares with <c>===</c>, so an array or object
+        /// is never equal to anything, even one with the same contents.
+        /// </summary>
+        private static bool OperatorEquals(JToken left, JToken right) =>
+            !(left is JContainer) && !(right is JContainer) && ValuesEqual(left, right);
 
         /// <summary>
         /// Gets a string value representing the data type of an attribute value.
@@ -1239,7 +1292,7 @@ namespace GrowthBook.Providers
             }
         }
 
-        private static double DoubleValue(JToken value) =>
+        internal static double DoubleValue(JToken value) =>
             value.Type == JTokenType.Integer
                 ? (double)IntegerValue(value)
                 : Convert.ToDouble(((JValue)value).Value, CultureInfo.InvariantCulture);
@@ -1251,7 +1304,7 @@ namespace GrowthBook.Providers
         /// <summary>
         /// Gets the text of a string value. A date read by Json.NET is written back in round-trip ISO 8601 format.
         /// </summary>
-        private static string StringValue(JToken value)
+        internal static string StringValue(JToken value)
         {
             if (value.Type == JTokenType.Date)
             {

@@ -27,7 +27,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that `$elemMatch` or a prerequisite references, or one on a reference cycle, keeps its condition as written; an auto
   experiment keeps its forced variation; a contextual bandit definition that isn't an object is kept as it is; and
   a list saved group's values are never read as references to other groups.
-- Updated the standard test cases to spec 0.11.3.
+- Updated the standard test cases to spec 0.12.0.
+- **Breaking:** only a non-empty string or a finite, non-zero number identifies a user for hashing, as in the JS SDK
+  (spec 0.12.0). `0`, `""`, booleans, arrays and objects count as missing, numbers are hashed the way JavaScript
+  writes them (`1.0` as `"1"`), and a whitespace-only string is hashed. The fallback attribute is only used along with
+  sticky bucketing, now also for percentage rollouts.
+- **Breaking:** `$eq` and `$ne` never treat an array or object as equal to anything, `$regex` and `$regexi` fail for a
+  pattern that isn't a string, a dot path can index into an array (`"tags.0"`), and `FeatureResult.On` follows
+  JavaScript truthiness (`"false"`, `"0"`, `[]` and `{}` are on).
 - Fixed `Context.EncryptedFeatures` never being decrypted. The property was declared, documented and cloned, but
   nothing ever read it, so a caller who supplied an encrypted payload was left with an empty feature set and every
   flag reading as false - with nothing to distinguish a wrong key from a working one. The payload is now decrypted in

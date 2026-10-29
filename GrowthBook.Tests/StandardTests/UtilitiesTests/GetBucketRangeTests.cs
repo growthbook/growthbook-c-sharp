@@ -39,10 +39,12 @@ public class GetBucketRangeTests : UnitTest
     {
         var config = testCase.Configuration;
 
+        // Both sides are floored to 8 places, as in the JS SDK's spec runner
         var actualResults = ExperimentUtilities.GetBucketRanges(config.NumberOfVariations, config.Coverage ?? 1.0, config.Weights)
-            .Select(x => new BucketRange(x.Start.Round(8), x.End.Round(8)));
+            .Select(x => new BucketRange(x.Start.Floor8(), x.End.Floor8()));
+        var expectedResults = testCase.ExpectedResults.Select(x => new BucketRange(x.Start.Floor8(), x.End.Floor8()));
 
-        actualResults.Should().Equal(testCase.ExpectedResults, "because the bucketing logic should be deterministic");
+        actualResults.Should().Equal(expectedResults, "because the bucketing logic should be deterministic");
     }
 
     // Exact range boundaries produced by the JS SDK (start + coverage * weight in double precision).

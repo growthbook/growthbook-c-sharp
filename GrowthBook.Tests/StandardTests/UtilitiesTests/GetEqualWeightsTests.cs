@@ -25,10 +25,10 @@ public class GetEqualWeightsTests : UnitTest
     [MemberData(nameof(GetMappedTestsInCategory), typeof(GetEqualWeightsTestCase))]
     public void GetEqualWeights(GetEqualWeightsTestCase testCase)
     {
-        // The spec rounds expected weights to 8 decimal places, so compare at exactly that precision.
+        // Both sides are floored to 8 places, as in the JS SDK's spec runner
         var actualResult = ExperimentUtilities.GetEqualWeights(testCase.NumberOfVariations);
 
-        actualResult.RoundAll(8).Should().Equal(testCase.ExpectedResults, "because the weights should be created with an equal distribution");
+        actualResult.Select(x => x.Floor8()).Should().Equal(testCase.ExpectedResults.Select(x => x.Floor8()), "because the weights should be created with an equal distribution");
     }
 
     [Theory]

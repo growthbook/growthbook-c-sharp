@@ -577,7 +577,9 @@ namespace GrowthBook
 
                     if (!rule.Force.IsNull())
                     {
-                        if (!IsIncludedInRollout(rule.Seed ?? featureId, rule.HashAttribute, rule.Range, rule.Coverage, rule.HashVersion))
+                        var rolloutFallbackAttribute = _stickyBucketService != null && !rule.DisableStickyBucketing ? rule.FallbackAttribute : null;
+
+                        if (!IsIncludedInRollout(rule.Seed ?? featureId, rule.HashAttribute, rolloutFallbackAttribute, rule.Range, rule.Coverage, rule.HashVersion))
                         {
                             _logger.LogDebug("Rule {RuleIndex}: excluded by rollout/coverage, continuing", ruleIndex);
                             continue;
@@ -834,23 +836,16 @@ namespace GrowthBook
 
             // 6. Abort if we're unable to generate a hash identifying this run.
 
-            (var hashAttribute, var hashValue) = Attributes.GetHashAttributeAndValue(experiment.HashAttribute);
+            // The fallback attribute is only used along with sticky bucketing, as in the JS SDK.
 
-            if (hashValue.IsNullOrWhitespace())
+            var fallbackAttribute = _stickyBucketService != null && !experiment.DisableStickyBucketing ? experiment.FallbackAttribute : null;
+
+            (var hashAttribute, var hashValue) = Attributes.GetHashAttributeAndValue(experiment.HashAttribute, fallbackAttribute);
+
+            if (hashValue is null)
             {
-                // Check if a fallback attribute for sticky bucketing exists and use it if possible.
-
-                var hasFallback = !experiment.FallbackAttribute.IsNullOrWhitespace();
-
-                if (hasFallback)
-                {
-                    (hashAttribute, hashValue) = Attributes.GetHashAttributeAndValue(experiment.FallbackAttribute);
-                }
-                else
-                {
-                    _logger.LogDebug("Aborting experiment, unable to locate a value for the experiment hash attribute \'{ExperimentHashAttribute}\'", experiment.HashAttribute);
-                    return GetExperimentResult(experiment, featureId: featureId);
-                }
+                _logger.LogDebug("Aborting experiment, unable to locate a value for the experiment hash attribute \'{ExperimentHashAttribute}\'", experiment.HashAttribute);
+                return GetExperimentResult(experiment, featureId: featureId);
             }
 
             // 6.5 When sticky bucketing is permitted, determine if they already have a value and use it if possible.
@@ -1023,7 +1018,7 @@ namespace GrowthBook
             {
                 (_, var hashValue) = Attributes.GetHashAttributeAndValue(filter.Attribute);
 
-                if (hashValue.IsNullOrWhitespace())
+                if (hashValue is null)
                 {
                     _logger.LogDebug("Attributes are missing a filter\'s hash attribute of \'{FilterAttribute}\', marking as filtered out", filter.Attribute);
                     return true;
@@ -1062,7 +1057,7 @@ namespace GrowthBook
             }
         }
 
-        private bool IsIncludedInRollout(string seed, string hashAttribute = null, BucketRange range = null, double? coverage = null, int? hashVersion = null)
+        private bool IsIncludedInRollout(string seed, string hashAttribute = null, string fallbackAttribute = null, BucketRange range = null, double? coverage = null, int? hashVersion = null)
         {
             if (coverage == null && range == null)
             {
@@ -1076,7 +1071,7 @@ namespace GrowthBook
                 return false;
             }
 
-            (_, var hashValue) = Attributes.GetHashAttributeAndValue(hashAttribute);
+            (_, var hashValue) = Attributes.GetHashAttributeAndValue(hashAttribute, fallbackAttribute);
 
             if (hashValue is null)
             {
@@ -1131,7 +1126,7 @@ namespace GrowthBook
                 InExperiment = inExperiment,
                 HashAttribute = hashAttribute,
                 HashUsed = hashUsed,
-                HashValue = hashValue,
+                HashValue = hashValue ?? string.Empty,
                 Value = experiment.Variations is null ? null : experiment.Variations[variationIndex],
                 VariationId = variationIndex,
                 Name = meta?.Name,
