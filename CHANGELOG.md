@@ -36,6 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Callbacks that touch context-affine state — UI controls on WPF/WinForms, `HttpContext.Current` on classic
   ASP.NET — have to marshal back themselves. The synchronous overloads are unaffected: they still invoke callbacks
   on the calling thread. `SubscribeAsync` was already dispatched off-context and is unchanged. No public API changed.
+- Fixed forced features never reaching the remote evaluation request, so the server evaluated as though nothing was
+  forced. **Breaking:** `Context.ForcedFeatures` is now `IDictionary<string, object>` and holds the values to force
+  features to, matching the TypeScript SDK's `forcedFeatureValues`. It was typed as `IDictionary<string, Feature>`,
+  which would have serialized feature definitions into a payload that expects values.
 
 ## [1.2.0]
 
