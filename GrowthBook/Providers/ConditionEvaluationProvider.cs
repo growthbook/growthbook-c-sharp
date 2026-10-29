@@ -1401,6 +1401,28 @@ namespace GrowthBook.Providers
                 : StringValue(value);
 
         /// <summary>
+        /// Writes the shortest "G" text that reads back as the same double, as in "1.5", "2E-06" or "1.23E-18".
+        /// "R" isn't always shortest on .NET Framework (3.141592653589793 becomes "3.1415926535897931"), so this
+        /// tries 1 to 16 significant digits before falling back to 17, which always round-trips. Starting low matters
+        /// for subnormal numbers: 5e-324 also reads back from "4.94065645841247E-324".
+        /// </summary>
+        /// <param name="value">A finite, positive number.</param>
+        /// <returns>The number's shortest round-trip text in "G" format.</returns>
+        private static string ShortestRoundTripText(double value)
+        {
+            for (var precision = 1; precision <= 16; precision++)
+            {
+                var text = value.ToString("G" + precision, CultureInfo.InvariantCulture);
+                if (double.Parse(text, NumberStyles.Float, CultureInfo.InvariantCulture) == value)
+                {
+                    return text;
+                }
+            }
+
+            return value.ToString("G17", CultureInfo.InvariantCulture);
+        }
+
+        /// <summary>
         /// Writes a number the way JavaScript's <c>String(number)</c> does (ECMAScript Number::toString): the
         /// shortest digits that read back as the same number, in plain decimal notation from 1e-7 up to 1e21 and in
         /// exponent notation outside it ("0.000002", "1e-7", "1e+21"), with -0 written as "0".
@@ -1429,8 +1451,7 @@ namespace GrowthBook.Providers
                 return "-" + JavaScriptNumberText(-value);
             }
 
-            // "R" gives the shortest round-trip digits, as in "1.5", "2E-06" or "1.23E-18"
-            var roundTrip = value.ToString("R", CultureInfo.InvariantCulture);
+            var roundTrip = ShortestRoundTripText(value);
             var exponentIndex = roundTrip.IndexOf('E');
             var mantissa = exponentIndex < 0 ? roundTrip : roundTrip.Substring(0, exponentIndex);
             var exponent = exponentIndex < 0 ? 0 : int.Parse(roundTrip.Substring(exponentIndex + 1), NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture);

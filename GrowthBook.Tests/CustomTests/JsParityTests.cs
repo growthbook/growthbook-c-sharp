@@ -17,6 +17,24 @@ public class JsParityTests
             .EvalCondition(JObject.Parse(attributes), JObject.Parse(condition), JObject.Parse(savedGroups));
 
     [Theory]
+    [InlineData(1.0, "1")]
+    [InlineData(1.5, "1.5")]
+    [InlineData(3.141592653589793, "3.141592653589793")]
+    [InlineData(0.30000000000000004, "0.30000000000000004")]
+    [InlineData(123456789012345680, "123456789012345680")]
+    [InlineData(1e21, "1e+21")]
+    [InlineData(0.000002, "0.000002")]
+    [InlineData(1e-7, "1e-7")]
+    [InlineData(-2.5, "-2.5")]
+    [InlineData(5e-324, "5e-324")]
+    [InlineData(1.7976931348623157e308, "1.7976931348623157e+308")]
+    public void NumbersAreWrittenLikeJavaScriptString(double value, string expected)
+    {
+        // Expected values are JS String(value)
+        ConditionEvaluationProvider.JavaScriptNumberText(value).Should().Be(expected);
+    }
+
+    [Theory]
     [InlineData(@"{ ""a"": [] }", @"{ ""a"": { ""$eq"": [] } }")]
     [InlineData(@"{ ""a"": [1] }", @"{ ""a"": { ""$eq"": [1] } }")]
     [InlineData(@"{ ""a"": {} }", @"{ ""a"": { ""$eq"": {} } }")]
