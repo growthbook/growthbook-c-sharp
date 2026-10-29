@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.ObjectModel;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
@@ -25,7 +26,20 @@ namespace GrowthBook
     /// </summary>
     public class GrowthBook : IGrowthBook, IDisposable
     {
+        private static readonly IReadOnlyDictionary<string, Feature> EmptyFeatures =
+            new ReadOnlyDictionary<string, Feature>(new Dictionary<string, Feature>());
+        private static readonly IReadOnlyList<Experiment> EmptyExperiments =
+            new ReadOnlyCollection<Experiment>(new List<Experiment>());
+
         private readonly bool _qaMode;
+        private static readonly JsonSerializer StateSerializer = JsonSerializer.Create(new JsonSerializerSettings
+        {
+            DefaultValueHandling = DefaultValueHandling.Include,
+            NullValueHandling = NullValueHandling.Include,
+            ObjectCreationHandling = ObjectCreationHandling.Replace,
+            ReferenceLoopHandling = ReferenceLoopHandling.Ignore,
+            TypeNameHandling = TypeNameHandling.None
+        });
         private readonly Dictionary<string, ExperimentAssignment> _assigned;
         private readonly ConcurrentDictionary<string, byte> _tracked;
         private Action<Experiment, ExperimentResult> _trackingCallback;
@@ -449,6 +463,70 @@ namespace GrowthBook
             var value = result.Value;
 
             return value.IsNull() ? fallback : value.ToObject<T>();
+        }
+
+        /// <summary>
+        /// Returns the feature definitions currently loaded, keyed by feature key. Empty before the first
+        /// load, never null. The result is a read-only snapshot: it cannot be mutated and does not observe
+        /// a later refresh. Safe to call on a shared instance.
+        /// </summary>
+        /// <remarks>
+        /// Declared on the class rather than on <see cref="IGrowthBook"/>. This library targets
+        /// netstandard2.0, which has no default interface members, so a new member on that interface stops
+        /// every hand-written implementation compiling - a test double or a decorator in a consumer's own
+        /// code. A consumer that needs this reaches for the concrete type.
+        /// </remarks>
+        public IReadOnlyDictionary<string, Feature> GetFeatures()
+        {
+            var features = Features;
+
+            if (features is null)
+            {
+                return EmptyFeatures;
+            }
+
+            var comparer = (features as Dictionary<string, Feature>)?.Comparer ?? EqualityComparer<string>.Default;
+            var snapshot = new Dictionary<string, Feature>(features.Count, comparer);
+
+            foreach (var feature in features)
+            {
+                snapshot[feature.Key] = CopyState(feature.Value);
+            }
+
+            return new ReadOnlyDictionary<string, Feature>(snapshot);
+        }
+
+        /// <summary>
+        /// Returns the experiments currently loaded. Empty before the first load, never null. The result
+        /// is a read-only snapshot: it cannot be mutated and does not observe a later refresh.
+        /// </summary>
+        public IReadOnlyList<Experiment> GetExperiments()
+        {
+            var experiments = Experiments;
+
+            if (experiments is null)
+            {
+                return EmptyExperiments;
+            }
+
+            var snapshot = new List<Experiment>(experiments.Count);
+
+            foreach (var experiment in experiments)
+            {
+                snapshot.Add(CopyState(experiment));
+            }
+
+            return new ReadOnlyCollection<Experiment>(snapshot);
+        }
+
+        private static T CopyState<T>(T value) where T : class
+        {
+            if (value is null)
+            {
+                return null;
+            }
+
+            return JToken.FromObject(value, StateSerializer).ToObject<T>(StateSerializer);
         }
 
         /// <inheritdoc />
