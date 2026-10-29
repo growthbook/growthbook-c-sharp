@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Moved feature and experiment evaluation out of `GrowthBook` into stateless providers. Nothing public changed, but
+  three behaviours now match the JavaScript SDK where they previously did not:
+  - A forced rule's `tracks` entries are deduplicated along with everything else, instead of calling the tracking
+    callback on every evaluation. Applications that count exposures will see fewer events for features that force a
+    value and carry tracks.
+  - A sticky bucket assignment is written back into the documents held in memory once it has been saved, so a second
+    evaluation in the same process finds it instead of re-hashing. Those documents are now held in a concurrent
+    dictionary, copied from the one supplied on the `Context`: evaluation writes to them now, and concurrent
+    evaluations were losing documents - a lost document means the user is re-hashed, which is what sticky bucketing
+    exists to prevent.
+  - An experiment's prerequisites are evaluated against a snapshot of the features already being evaluated rather
+    than an empty set, so a cycle reached through an experiment is detected.
+
 - Fixed `Context.EncryptedFeatures` never being decrypted. The property was declared, documented and cloned, but
   nothing ever read it, so a caller who supplied an encrypted payload was left with an empty feature set and every
   flag reading as false - with nothing to distinguish a wrong key from a working one. The payload is now decrypted in
