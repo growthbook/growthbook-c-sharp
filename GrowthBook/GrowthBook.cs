@@ -12,6 +12,7 @@ using GrowthBook.Providers;
 using GrowthBook.Services;
 using GrowthBook.Utilities;
 using GrowthBook.Exceptions;
+using GrowthBook.Plugin;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -35,6 +36,7 @@ namespace GrowthBook
         private readonly IStickyBucketService _stickyBucketService;
         private readonly IDictionary<string, StickyAssignmentsDocument> _stickyBucketAssignmentDocs;
         private readonly ILogger<GrowthBook> _logger;
+        private readonly PluginRegistry _pluginRegistry;
         private readonly JObject _savedGroups;
         private readonly ILoggerFactory _loggerFactory;
         private readonly bool _ownsLoggerFactory;
@@ -105,6 +107,9 @@ namespace GrowthBook
 
             _logger = _loggerFactory.CreateLogger<GrowthBook>();
             var conditionEvaluatorLogger = _loggerFactory.CreateLogger<ConditionEvaluationProvider>();
+
+            _pluginRegistry = new PluginRegistry(context.Plugins, ownsPlugins: !context.PluginsAreShared, logger: _logger);
+            _pluginRegistry.InitAll();
 
             _conditionEvaluator = new ConditionEvaluationProvider(conditionEvaluatorLogger);
 
@@ -213,6 +218,7 @@ namespace GrowthBook
                     _subscribers.Clear();
                     _asyncSubscribers.Clear();
                     _featureRepository.Cancel();
+                    _pluginRegistry.CloseAll();
 
                     if (_ownsLoggerFactory && _loggerFactory is IDisposable disposableFactory)
                     {
@@ -368,7 +374,7 @@ namespace GrowthBook
         public async Task<bool> IsOnAsync(string key, CancellationToken? cancellationToken = null)
         {
             await EnsureFeaturesLoaded(cancellationToken).ConfigureAwait(false);
-            var result = EvaluateFeature(key);
+            var result = EvaluateFeatureForCaller(key);
             var value = result.Value;
             return !value.IsNull() && value.ToObject<bool>();
         }
@@ -436,7 +442,7 @@ namespace GrowthBook
                 LoadFeaturesWithoutCapturingContext();
             }
 
-            var result = EvaluateFeature(key);
+            var result = EvaluateFeatureForCaller(key);
             var value = result.Value;
 
             return value.IsNull() ? fallback : value.ToObject<T>();
@@ -464,8 +470,7 @@ namespace GrowthBook
             {
                 LoadFeaturesWithoutCapturingContext();
             }
-
-            return EvaluateFeature(featureId);
+            return EvaluateFeatureForCaller(featureId);
         }
 
         /// <summary>
@@ -491,7 +496,7 @@ namespace GrowthBook
         {
             await EnsureFeaturesLoaded(cancellationToken).ConfigureAwait(false);
 
-            return EvaluateFeature(featureId);
+            return EvaluateFeatureForCaller(featureId);
         }
 
         /// <summary>
@@ -521,6 +526,24 @@ namespace GrowthBook
             }
 
             return Task.Run(() => LoadFeatures(cancellationToken: cancellationToken));
+        }
+
+        /// <summary>
+        /// Evaluates a feature a caller asked about, and tells the plugins once.
+        /// </summary>
+        /// <remarks>
+        /// Every public way of checking a flag goes through here, so what a plugin sees does not depend
+        /// on whether the caller reached for <see cref="EvalFeature"/>, <see cref="GetFeatureValue{T}"/>
+        /// or <see cref="IsOnAsync"/>. Prerequisites are evaluated by the recursive
+        /// <see cref="EvaluateFeature"/> below and raise nothing: the caller asked about one feature.
+        /// </remarks>
+        private FeatureResult EvaluateFeatureForCaller(string featureId)
+        {
+            var result = EvaluateFeature(featureId);
+
+            _pluginRegistry.FireFeatureEvaluated(featureId, result, Attributes);
+
+            return result;
         }
 
         private FeatureResult EvaluateFeature(string featureId, ISet<string> evaluatedFeatures = default)
@@ -610,10 +633,12 @@ namespace GrowthBook
                             continue;
                         }
 
-                        if (_trackingCallback != null && rule.Tracks?.Any() == true)
+                        if (rule.Tracks?.Any() == true)
                         {
                             foreach (var trackData in rule.Tracks)
                             {
+                                // Separate blocks on purpose: a consumer's callback throwing is not a
+                                // reason for the plugins never to hear about the same assignment.
                                 try
                                 {
                                     _trackingCallback?.Invoke(trackData.Experiment, trackData.Result);
@@ -622,6 +647,8 @@ namespace GrowthBook
                                 {
                                     _logger.LogError(ex, $"Encountered unhandled exception in tracking callback for feature ID '{featureId}'");
                                 }
+
+                                _pluginRegistry.FireExperimentViewed(trackData.Experiment, trackData.Result, Attributes);
                             }
                         }
 
@@ -1161,8 +1188,12 @@ namespace GrowthBook
         /// <param name="result">The result of the assignment.</param>
         private void TryToTrack(Experiment experiment, ExperimentResult result)
         {
-            if (_trackingCallback == null)
+            if (_trackingCallback == null && !_pluginRegistry.HasExperimentViewedListener)
             {
+                // Nothing would be reported, so the assignment must not be marked as tracked either.
+                // The mark can be shared through the feature repository, and a later instance that does
+                // have a callback would find the key already there and stay silent about an assignment
+                // nobody ever heard.
                 return;
             }
 
@@ -1184,14 +1215,19 @@ namespace GrowthBook
 
             if (shouldTrack)
             {
-                try
+                if (_trackingCallback != null)
                 {
-                    _trackingCallback(experiment, result);
+                    try
+                    {
+                        _trackingCallback(experiment, result);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Encountered unhandled exception during tracking callback for experiment with combined key \'{Key}\'", key);
+                    }
                 }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Encountered unhandled exception during tracking callback for experiment with combined key \'{Key}\'", key);
-                }
+                _pluginRegistry.FireExperimentViewed(experiment, result, Attributes);
+
             }
         }
 

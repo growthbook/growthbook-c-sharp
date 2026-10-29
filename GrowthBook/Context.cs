@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using GrowthBook.Plugin;
 using GrowthBook.Services;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
@@ -129,6 +130,28 @@ namespace GrowthBook
         public IGrowthBookFeatureRepository FeatureRepository { get; set; }
 
         /// <summary>
+        /// Optional list of plugins to receive experiment and feature evaluation events.
+        /// </summary>
+        /// <remarks>
+        /// A plugin holds state - a tracking plugin holds a buffer of events not yet sent - so it belongs
+        /// to the context it was put on. The instance built from that context closes its plugins when it
+        /// is disposed. An instance built from a <see cref="Clone"/> does not, because the same plugin
+        /// objects are still serving the original and every other clone.
+        /// </remarks>
+        public List<IGrowthBookPlugin> Plugins { get; set; }
+
+        /// <summary>
+        /// Whether <see cref="Plugins"/> arrived here by cloning another context, and so are shared.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="GrowthBookFactory.CreateForUser"/> clones its base context once per user, which
+        /// copies the list but not the plugin objects in it. Without this, the first user disposed would
+        /// close plugins that every other user is still sending events through, and their tracking would
+        /// stop with nothing said.
+        /// </remarks>
+        internal bool PluginsAreShared { get; private set; }
+
+        /// <summary>
         /// A logger factory implementation that will enable logging throughout the SDK. Optional.
         /// </summary>
         public ILoggerFactory LoggerFactory { get; set; }
@@ -195,6 +218,7 @@ namespace GrowthBook
                 SavedGroups = this.SavedGroups?.DeepClone() as JObject,
                 QaMode = this.QaMode,
                 TrackingCallback = this.TrackingCallback,
+                Plugins = this.Plugins?.ToList(),
                 FeatureRepository = this.FeatureRepository,
                 LoggerFactory = this.LoggerFactory,
                 CachePath = this.CachePath,
@@ -202,6 +226,10 @@ namespace GrowthBook
                 CacheKeyAttributes = this.CacheKeyAttributes?.ToArray(),
                 ForcedFeatures = this.ForcedFeatures
             };
+
+            // The list is copied, the plugins in it are not - they stay shared with this context.
+            cloned.PluginsAreShared = cloned.Plugins?.Count > 0;
+
             return cloned;
         }
     }

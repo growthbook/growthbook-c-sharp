@@ -13,6 +13,7 @@ Powerful feature flagging and A/B testing for C# apps using [GrowthBook](https:/
 - [Integration](#integration)
 - [Usage Guide](#usage-guide)
 - [Sticky Bucketing](#sticky-bucketing)
+- [Plugins](#plugins)
 - [Models](#models)
 - [Streaming Updates](#streaming-updates)
 - [Remote Evaluation](#remote-evaluation)
@@ -220,6 +221,134 @@ Sticky bucketing ensures that users see the same experiment variant, even when u
 
 ---
 
+## Plugins
+
+A plugin observes evaluation without taking part in it. Attach one through `Context.Plugins`:
+
+```csharp
+var context = new Context
+{
+    ClientKey = "sdk-abc123",
+    Plugins = new List<IGrowthBookPlugin> { myPlugin }
+};
+```
+
+Every plugin implements `IGrowthBookPlugin`, which is the lifetime only:
+
+```csharp
+public interface IGrowthBookPlugin
+{
+    void Init();   // once, while the instance is being constructed
+    void Close();  // once, when the instance is disposed
+}
+```
+
+Events are opted into by also implementing the interface for the ones you want. A plugin that wants
+neither still gets `Init` and `Close`:
+
+| Interface | Called |
+|---|---|
+| `IExperimentViewedPlugin` | once per distinct experiment assignment |
+| `IFeatureEvaluatedPlugin` | once per feature evaluation a caller asked for |
+
+They are separate so that a hook added in a later release does not break plugins written against
+this one. This library targets `netstandard2.0`, which has no default interface members, so anything
+declared on `IGrowthBookPlugin` would have to be implemented by every plugin that already exists.
+
+A feature evaluation is reported once per call whichever method you used - `EvalFeature`,
+`GetFeatureValue`, `IsOn`, `IsOnAsync` and the rest all report the same thing. Prerequisite features
+evaluated on the way to an answer are not reported: you asked about one feature.
+
+The attributes handed to a plugin are a copy. Anything a plugin throws is logged and swallowed, so a
+broken plugin cannot change what an evaluation returns.
+
+### Plugin lifetime
+
+A plugin belongs to the context it was put on. The instance built from that context closes its
+plugins when it is disposed. An instance built from `Context.Clone()` does not, because
+`GrowthBookFactory` clones once per user and those instances share the same plugin objects - closing
+them when the first user is disposed would stop tracking for everyone else.
+
+### Built-in tracking plugin
+
+`GrowthBookTrackingPlugin` batches events and posts them to the GrowthBook ingestor:
+
+```csharp
+var tracking = new GrowthBookTrackingPlugin(new TrackingPluginConfig
+{
+    ClientKey = "sdk-abc123"
+});
+
+var context = new Context
+{
+    ClientKey = "sdk-abc123",
+    Plugins = new List<IGrowthBookPlugin> { tracking }
+};
+```
+
+Leaving `ClientKey` null or empty disables it: no HTTP calls are made at all.
+
+### What the tracking plugin sends, and where
+
+This plugin sends data out of your process. Read this before enabling it.
+
+Each event is posted to `{IngestorHost}/track?client_key={ClientKey}` as JSON:
+
+| Field | Contents |
+|---|---|
+| `event_name` | `"Experiment Viewed"` or `"Feature Evaluated"` |
+| `properties` | for an experiment, its key and the assigned variation id; for a feature, its key, the resolved value and the source |
+| `attributes` | **the user attributes you set on `Context.Attributes`**, plus `sdk_language` and `sdk_version` |
+
+The attributes field is the one to think about. Whatever your application put in
+`Context.Attributes` - an account id, an email address, a country, a plan - is sent to the ingestor
+with every event. If any of it identifies a person, enabling this plugin is a transfer of personal
+data to a third party, and whether that is lawful where you operate is a question for whoever owns
+data protection in your organisation. The SDK does not filter or redact attributes.
+
+If you only need targeting on an opaque identifier, set only that on `Context.Attributes`.
+
+The default host is `https://us-east-1.gb-ingest.com`. If your Managed Warehouse data region is
+`eu-west-1`, set `IngestorHost` to `https://eu-west-1.gb-ingest.com`, otherwise the events are
+accepted and discarded:
+
+```csharp
+new TrackingPluginConfig
+{
+    ClientKey = "sdk-abc123",
+    IngestorHost = "https://eu-west-1.gb-ingest.com"
+}
+```
+
+### Tracking plugin configuration
+
+| Option | Default | Meaning |
+|---|---|---|
+| `ClientKey` | - | Required to send anything. Null or empty disables the plugin. |
+| `IngestorHost` | `https://us-east-1.gb-ingest.com` | Where events are posted. |
+| `BatchSize` | 100 | Events accumulated before a batch is sent. |
+| `BatchTimeout` | 10s | How long a partial batch waits. |
+| `DedupeCacheSize` | 1000 | How many recently sent events are remembered, so repeats are not sent again. |
+| `DedupeKeyAttributes` | none | Attributes that make two otherwise identical events distinct. |
+| `MaxPendingBatches` | 10 | Batches allowed to queue before further ones are dropped with a warning. |
+| `CloseTimeout` | 5s | How long `Close` waits for sends already under way. |
+| `HttpClient` | - | Your own client. When not supplied the plugin creates and owns one. |
+
+Repeats are not sent twice. A feature is evaluated wherever it is checked, so in a hot path the same
+fact would otherwise reach the ingestor on every request. Events are identified by name and
+properties; attributes are deliberately left out of that identity, because one instance belongs to
+one user. If a single instance serves more than one identity, name the attributes that separate them
+in `DedupeKeyAttributes`.
+
+Batches are sent one at a time, so a slow ingestor costs one request in flight rather than a thread
+per batch. Once `MaxPendingBatches` are waiting, further batches are dropped and a warning logged
+rather than queued without limit.
+
+Disposing the GrowthBook instance closes the plugin, which flushes what is buffered and waits for
+batches already on their way before releasing its HTTP client.
+
+---
+
 ## Models
 
 The GrowthBook C# SDK uses a set of core models to define the context, features, experiments, and results. These models are essential for configuring the SDK, evaluating feature flags, and running experiments. Below is the documentation for the key models used in the SDK.
@@ -280,6 +409,9 @@ public class Context
 
     /// A repository implementation for retrieving and caching features. Optional.
     public IGrowthBookFeatureRepository FeatureRepository { get; set; }
+
+    /// Plugins that observe experiment assignments and feature evaluations. Optional.
+    public List<IGrowthBookPlugin> Plugins { get; set; }
 
     /// A logger factory implementation that will enable logging throughout the SDK. Optional.
     public ILoggerFactory LoggerFactory { get; set; }
