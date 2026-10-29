@@ -24,15 +24,28 @@ namespace GrowthBook.Api
         private readonly object _cacheLock = new object();
         private IDictionary<string, Feature> _cachedFeatures = new Dictionary<string, Feature>();
         private readonly int _cacheExpirationInSeconds;
+        private readonly Func<DateTime> _utcNow;
         private DateTime _nextCacheExpiration;
 
         public InMemoryFeatureCache(int cacheExpirationInSeconds)
+            : this(cacheExpirationInSeconds, () => DateTime.UtcNow)
+        {
+        }
+
+        /// <summary>
+        /// Creates a cache that reads the current time from <paramref name="utcNow"/> instead of the system
+        /// clock, so that expiry can be tested without waiting out the TTL in real seconds.
+        /// </summary>
+        /// <param name="cacheExpirationInSeconds">How long a refreshed cache stays fresh.</param>
+        /// <param name="utcNow">Source of the current UTC time.</param>
+        internal InMemoryFeatureCache(int cacheExpirationInSeconds, Func<DateTime> utcNow)
         {
             // The cache should start out in an expired state so that any exterior logic
             // based off of that can feel free to retrieve things to cache as soon as it needs to.
 
             _cacheExpirationInSeconds = cacheExpirationInSeconds;
-            _nextCacheExpiration = DateTime.UtcNow;
+            _utcNow = utcNow ?? throw new ArgumentNullException(nameof(utcNow));
+            _nextCacheExpiration = _utcNow();
         }
 
         public int FeatureCount
@@ -52,7 +65,7 @@ namespace GrowthBook.Api
             {
                 lock(_cacheLock)
                 {
-                    return _nextCacheExpiration <= DateTime.UtcNow;
+                    return _nextCacheExpiration <= _utcNow();
                 }
             }
         }
@@ -70,7 +83,7 @@ namespace GrowthBook.Api
             lock(_cacheLock)
             {
                 _cachedFeatures = new Dictionary<string, Feature>(features);
-                _nextCacheExpiration = DateTime.UtcNow.AddSeconds(_cacheExpirationInSeconds);
+                _nextCacheExpiration = _utcNow().AddSeconds(_cacheExpirationInSeconds);
 
                 return Task.CompletedTask;
             }
@@ -80,7 +93,7 @@ namespace GrowthBook.Api
         {
             lock(_cacheLock)
             {
-                _nextCacheExpiration = DateTime.UtcNow.AddSeconds(_cacheExpirationInSeconds);
+                _nextCacheExpiration = _utcNow().AddSeconds(_cacheExpirationInSeconds);
                 return Task.CompletedTask;
             }
         }
