@@ -8,6 +8,14 @@ namespace GrowthBook
     /// <summary>
     /// Factory for creating GrowthBook instances with shared configuration and repository.
     /// </summary>
+    /// <remarks>
+    /// Superseded by <see cref="MultiUser.GrowthBookClient"/>, which answers for a user passed to each
+    /// call instead of building an instance per user. This factory still works and is not going away in
+    /// this release, but it carries the problems that come with one instance per user: a context cloned
+    /// for each of them, their plugins and repository shared without that being stated anywhere, and
+    /// teardown that has to decide what it owns.
+    /// </remarks>
+    [Obsolete("Use GrowthBookClient instead. GrowthBookFactory creates one instance per user; GrowthBookClient evaluates for a user passed to each call.")]
     public class GrowthBookFactory : IDisposable
     {
         private readonly Context _baseContext;
