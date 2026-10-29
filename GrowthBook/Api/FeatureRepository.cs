@@ -55,7 +55,7 @@ namespace GrowthBook.Api
         /// <inheritdoc/>
         public async Task<FeaturePayload> GetPayloadWithContext(Context context, GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null)
         {
-            return await EvaluateRemotely(context, options, cancellationToken);
+            return await EvaluateRemotely(context, options, cancellationToken).ConfigureAwait(false);
         }
 
         /// <inheritdoc/>
@@ -169,7 +169,7 @@ namespace GrowthBook.Api
  /// <inheritdoc/>
         public async Task<IDictionary<string, Feature>> GetFeaturesWithContext(Context context, GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null)
         {
-            var payload = await EvaluateRemotely(context, options, cancellationToken);
+            var payload = await EvaluateRemotely(context, options, cancellationToken).ConfigureAwait(false);
 
             return payload.Features;
         }

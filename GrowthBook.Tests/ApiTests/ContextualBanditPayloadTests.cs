@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using GrowthBook.Api;
+using GrowthBook.Services;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -61,6 +62,85 @@ public class ContextualBanditPayloadTests
         // its own marginal weights.
         features.Should().ContainKey("a");
         ((IFeaturePayloadSource)worker).Payload.ContextualBandits.Should().BeNull();
+    }
+
+    /// <summary>
+    /// The same rule, but carrying explicit ranges as well. The ranges put every user in the second variation,
+    /// the leaf's weights allow only the first, so whichever of the two actually decides is visible in the value.
+    /// </summary>
+    private const string PayloadWithBanditAndRanges = @"{
+        ""features"": { ""bandit-feature"": { ""defaultValue"": ""default"", ""rules"": [ {
+            ""key"": ""bandit-exp"", ""seed"": ""bandit-exp"", ""hashAttribute"": ""id"", ""hashVersion"": 2,
+            ""coverage"": 1, ""contextualVariations"": [ ""control"", ""treatment"" ],
+            ""weights"": [ 0.5, 0.5 ], ""ranges"": [ [ 0, 0 ], [ 0, 1 ] ],
+            ""meta"": [ { ""key"": ""0"" }, { ""key"": ""1"" } ],
+            ""contextualBanditRef"": ""cb-bandit"" } ] } },
+        ""contextualBandits"": { ""cb-bandit"": { ""banditVersion"": 7,
+            ""contexts"": [ { ""leafId"": 1, ""condition"": {}, ""weights"": [ 1, 0 ] } ] } }
+    }";
+
+    [Fact]
+    public async Task TheLeafsWeightsDecideTheAssignmentEvenWhenTheRuleCarriesRanges()
+    {
+        var payload = JsonConvert.DeserializeObject<PayloadShape>(PayloadWithBanditAndRanges);
+        var repository = Substitute.For<IGrowthBookFeatureRepository, IGrowthBookContextualBanditSource>();
+
+        repository.GetFeatures(Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken?>())
+            .Returns(Task.FromResult(payload.Features));
+        ((IGrowthBookContextualBanditSource)repository)
+            .GetPayload(Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken?>())
+            .Returns(Task.FromResult(new FeaturePayload(payload.Features, payload.ContextualBandits)));
+
+        using var growthBook = new GrowthBook(new Context(new { id = "1" }) { FeatureRepository = repository });
+
+        await growthBook.LoadFeatures();
+
+        var result = growthBook.EvalFeature("bandit-feature");
+
+        result.Value.ToString().Should().Be("control",
+            "the leaf's weights allow only the first variation, so ranges left over from the rule must not be the ones that select it");
+        result.ExperimentResult.VariationWeights.Should().BeEquivalentTo(new[] { 1d, 0d },
+            "tracking has to report the weights that actually produced the assignment");
+    }
+
+    /// <summary>
+    /// A variation restored from a sticky bucket was chosen by whatever leaf applied at the time, which is not
+    /// recorded anywhere. Reporting the leaf selected now would claim weights of [1, 0] produced a treatment.
+    /// </summary>
+    [Fact]
+    public async Task AReusedStickyAssignmentCarriesNoBanditDetails()
+    {
+        var payload = JsonConvert.DeserializeObject<PayloadShape>(PayloadWithBandits);
+        var repository = Substitute.For<IGrowthBookFeatureRepository, IGrowthBookContextualBanditSource>();
+
+        repository.GetFeatures(Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken?>())
+            .Returns(Task.FromResult(payload.Features));
+        ((IGrowthBookContextualBanditSource)repository)
+            .GetPayload(Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken?>())
+            .Returns(Task.FromResult(new FeaturePayload(payload.Features, payload.ContextualBandits)));
+
+        var saved = new StickyAssignmentsDocument("id", "1",
+            new Dictionary<string, string> { ["bandit-exp__0"] = "1" });
+
+        var stickyBucketService = new InMemoryStickyBucketService();
+        stickyBucketService.SaveAssignments(saved);
+
+        using var growthBook = new GrowthBook(new Context(new { id = "1" })
+        {
+            FeatureRepository = repository,
+            StickyBucketService = stickyBucketService,
+            StickyBucketAssignmentDocs = new Dictionary<string, StickyAssignmentsDocument> { [saved.FormattedAttribute] = saved }
+        });
+
+        await growthBook.LoadFeatures();
+
+        var result = growthBook.EvalFeature("bandit-feature");
+
+        result.Value.ToString().Should().Be("treatment", "the saved assignment is what a sticky bucket is for");
+        result.ExperimentResult.VariationWeights.Should().BeNull(
+            "weights of [1, 0] could never have selected treatment, so naming them would misreport how this exposure came about");
+        result.ExperimentResult.LeafId.Should().BeNull();
+        result.ExperimentResult.BanditVersion.Should().BeNull();
     }
 
     [Fact]

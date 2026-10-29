@@ -737,10 +737,10 @@ namespace GrowthBook
         {
             if (_featureRepository is IGrowthBookContextualBanditSource source)
             {
-                return await fromSource(source);
+                return await fromSource(source).ConfigureAwait(false);
             }
 
-            var features = await fromRepository();
+            var features = await fromRepository().ConfigureAwait(false);
 
             if (features is null)
             {
@@ -875,7 +875,7 @@ namespace GrowthBook
 
                 var payload = await RetrievePayload(
                     source => source.GetPayloadWithContext(currentContext),
-                    () => _featureRepository.GetFeaturesWithContext(currentContext));
+                    () => _featureRepository.GetFeaturesWithContext(currentContext)).ConfigureAwait(false);
 
                 if (payload?.Features != null)
                 {

@@ -104,6 +104,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Callbacks that touch context-affine state — UI controls on WPF/WinForms, `HttpContext.Current` on classic
   ASP.NET — have to marshal back themselves. The synchronous overloads are unaffected: they still invoke callbacks
   on the calling thread. `SubscribeAsync` was already dispatched off-context and is unchanged. No public API changed.
+- Fixed a contextual bandit rule that also carries `ranges` bucketing on those ranges rather than on the leaf's
+  weights. Bucketing prefers explicit ranges, so the weights the leaf supplied decided nothing while tracking
+  reported them as the ones that had - equal ranges could hand out a variation the leaf's weights excluded.
+  Applying a leaf now drops the rule's ranges so its weights are what select the variation.
+- Fixed a variation restored from a sticky bucket being reported with the bandit details of the leaf selected now.
+  The leaf that originally chose it is not stored, so a saved treatment could be tracked as having come from
+  weights of `[1, 0]`, which could never have produced it. A reused assignment now carries no bandit details.
+- Restored the guarantee that no await inside the SDK captures the caller's synchronization context, which the
+  contextual bandit work had broken in five places across `GrowthBook` and `FeatureRepository`.
 - Added `IGrowthBookPayloadCache`, which stores a payload's features and its contextual bandit definitions
   together. `InMemoryFeatureCache` implements it alongside `IGrowthBookFeatureCache`, which is unchanged: a cache
   written before bandits existed keeps compiling and simply serves no definitions, and bandit rules fall back to

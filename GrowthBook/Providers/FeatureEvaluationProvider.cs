@@ -250,6 +250,11 @@ namespace GrowthBook.Providers
             if (leaf?.Weights != null)
             {
                 experiment.Weights = leaf.Weights;
+
+                // Bucketing prefers explicit ranges over weights, so ranges carried by the rule would decide the
+                // assignment while tracking reported the leaf's weights. Dropping them lets the leaf's weights be
+                // turned into the ranges that actually select the variation.
+                experiment.Ranges = null;
                 experiment.ContextualBandit = new ContextualBandit
                 {
                     LeafId = leaf.LeafId,

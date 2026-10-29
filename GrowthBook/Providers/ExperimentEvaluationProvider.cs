@@ -317,9 +317,15 @@ namespace GrowthBook.Providers
         /// <summary>
         /// Records which bandit leaf an exposure was bucketed on, so that tracking carries it.
         /// </summary>
+        /// <remarks>
+        /// A variation restored from a sticky bucket was not chosen by the leaf selected now, and the leaf that did
+        /// choose it is not stored anywhere. Naming the current one would report weights that could not have produced
+        /// the saved variation - weights of [1, 0] beside a recorded treatment - so a reused assignment carries no
+        /// bandit details rather than borrowed ones.
+        /// </remarks>
         private static void AttributeContextualBandit(Experiment experiment, ExperimentResult result)
         {
-            if (experiment.ContextualBandit is null || !result.HashUsed || !result.InExperiment)
+            if (experiment.ContextualBandit is null || !result.HashUsed || !result.InExperiment || result.StickyBucketUsed)
             {
                 return;
             }
