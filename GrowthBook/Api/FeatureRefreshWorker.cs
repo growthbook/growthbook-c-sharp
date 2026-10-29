@@ -36,6 +36,15 @@ namespace GrowthBook.Api
         private bool _isServerSentEventsEnabled;
         private SSEClient _sseClient;
         private CancellationTokenSource _refreshWorkerCancellation = new CancellationTokenSource();
+        private int _storedFeatureCount = -1;
+
+        /// <summary>
+        /// Held while the cache and <see cref="_storedFeatureCount"/> are written, and while they
+        /// are read together. They describe one fact: updating them in separate steps let an
+        /// overlapping refresh pair one payload's count with another payload's features, after which
+        /// a cleared cache is indistinguishable from an empty one and the flags never come back.
+        /// </summary>
+        private readonly SemaphoreSlim _storeLock = new SemaphoreSlim(1, 1);
 
         public FeatureRefreshWorker(ILogger<FeatureRefreshWorker> logger, IHttpClientFactory httpClientFactory, GrowthBookConfigurationOptions config, IGrowthBookFeatureCache cache)
         {
@@ -71,12 +80,36 @@ namespace GrowthBook.Api
 
             if (response.IsNotModified)
             {
-                if (_cache is InMemoryFeatureCache inMemoryCache)
+                bool cacheNoLongerHoldsThePayload;
+
+                await _storeLock.WaitAsync(cancellationToken ?? _refreshWorkerCancellation.Token).ConfigureAwait(false);
+
+                try
                 {
-                    await inMemoryCache.RefreshExpiration(cancellationToken).ConfigureAwait(false);
+                    cacheNoLongerHoldsThePayload = _cache.FeatureCount == 0 && _storedFeatureCount != 0;
+                }
+                finally
+                {
+                    _storeLock.Release();
                 }
 
-                return await _cache.GetFeatures(cancellationToken).ConfigureAwait(false);
+                if (cacheNoLongerHoldsThePayload)
+                {
+                    _logger.LogInformation("Server reported no change but the cache no longer holds the payload, discarding the stored ETag and asking for the whole payload");
+
+                    _etagCache.Remove(_featuresApiEndpoint);
+
+                    response = await httpClient.GetFeaturesFrom(_featuresApiEndpoint, _logger, _config, cancellationToken ?? _refreshWorkerCancellation.Token, _etagCache).ConfigureAwait(false);
+                }
+                else
+                {
+                    if (_cache is IFeatureCacheExpiration expiringCache)
+                    {
+                        await expiringCache.RefreshExpiration(cancellationToken).ConfigureAwait(false);
+                    }
+
+                    return await _cache.GetFeatures(cancellationToken).ConfigureAwait(false);
+                }
             }
 
             if (response.Features is null)
@@ -84,7 +117,18 @@ namespace GrowthBook.Api
                 return null;
             }
 
-            await _cache.RefreshWith(response.Features, cancellationToken).ConfigureAwait(false);
+            await _storeLock.WaitAsync(cancellationToken ?? _refreshWorkerCancellation.Token).ConfigureAwait(false);
+
+            try
+            {
+                await _cache.RefreshWith(response.Features, cancellationToken).ConfigureAwait(false);
+
+                _storedFeatureCount = response.Features.Count;
+            }
+            finally
+            {
+                _storeLock.Release();
+            }
 
             // Now that the cache has been populated at least once, we need to see if we're allowed
             // to kick off the server sent events listener and make sure we're in the intended mode
@@ -200,6 +244,7 @@ namespace GrowthBook.Api
         {
             Cancel();
             _sseClient?.Dispose();
+            _storeLock?.Dispose();
             _refreshWorkerCancellation?.Dispose();
         }
     }

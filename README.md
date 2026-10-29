@@ -12,6 +12,7 @@ Powerful feature flagging and A/B testing for C# apps using [GrowthBook](https:/
 - [Installation](#installation)
 - [Integration](#integration)
 - [Usage Guide](#usage-guide)
+- [Feature Caching](#feature-caching)
 - [Sticky Bucketing](#sticky-bucketing)
 - [Models](#models)
 - [Streaming Updates](#streaming-updates)
@@ -200,6 +201,60 @@ or create it when initializing
 
 ---
 
+## Feature Caching
+
+By default, GrowthBook uses an in-memory cache (`InMemoryFeatureCache`). You can replace it via `Context.FeatureCache`.
+
+### File-based cache (survives app restarts)
+
+```csharp
+const string clientKey = "YOUR_CLIENT_KEY";
+
+// The key is required: without it every instance sharing a path reads and writes one file, and
+// one client's features would be served to another.
+//
+// cachePath is optional. Left out, the cache lives under the per-user application data directory.
+// If you do pass one, pick a directory this process controls: a shared location lets another local
+// account precreate the file and have it loaded as if the API had returned it.
+var cache = new FileBasedFeatureCache(
+    cacheKey: clientKey,
+    cacheExpirationInSeconds: 60,
+    cachePath: "/var/cache/myapp"
+);
+
+var growthBook = new GrowthBook.GrowthBook(new Context
+{
+    ClientKey = clientKey,
+    FeatureCache = cache
+});
+```
+
+### Custom cache (e.g. Redis)
+
+```csharp
+public class RedisFeatureCache : IGrowthBookFeatureCache
+{
+    public bool IsCacheExpired => /* check Redis TTL */;
+
+    // The repository reads this to decide whether a first load has to wait for the API or can be
+    // served from what is already cached, so it is not optional.
+    public int FeatureCount => /* number of features currently cached */;
+
+    public Task<IDictionary<string, Feature>> GetFeatures(CancellationToken? cancellationToken = null) => /* read from Redis */;
+    public Task RefreshWith(IDictionary<string, Feature> features, CancellationToken? cancellationToken = null) => /* write to Redis */;
+}
+```
+
+```csharp
+var context = new Context
+{
+    ClientKey = "YOUR_CLIENT_KEY",
+    FeatureCache = new RedisFeatureCache()
+};
+```
+
+---
+
 ## Sticky Bucketing
 Implement a `StickyBucketService`:
 
@@ -284,8 +339,9 @@ public class Context
     /// A logger factory implementation that will enable logging throughout the SDK. Optional.
     public ILoggerFactory LoggerFactory { get; set; }
 
-    /// Custom cache directory path for the cache manager. Uses system temp directory if not specified.
-    public string CachePath { get; set; }
+    /// A cache implementation that overrides the default InMemoryFeatureCache. Optional.
+    /// Use this to provide FileBasedFeatureCache or a custom Redis-backed implementation.
+    public IGrowthBookFeatureCache FeatureCache { get; set; }
 }
 ```
 
