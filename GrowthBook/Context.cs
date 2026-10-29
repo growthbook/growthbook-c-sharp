@@ -113,6 +113,16 @@ namespace GrowthBook
         public JObject SavedGroups { get; set; }
 
         /// <summary>
+        /// Contextual bandit definitions, keyed by the reference a feature rule points at.
+        /// </summary>
+        /// <remarks>
+        /// A rule carrying a <see cref="FeatureRule.ContextualBanditRef"/> is bucketed with the weights of whichever
+        /// leaf matches the user, instead of the rule's own marginal weights. Like <see cref="SavedGroups"/>, these
+        /// are supplied here rather than read from the feature payload.
+        /// </remarks>
+        public IDictionary<string, ContextualBanditDefinition> ContextualBandits { get; set; }
+
+        /// <summary>
         /// If true, random assignment is disabled and only explicitly forced variations are used.
         /// </summary>
         public bool QaMode { get; set; } = false;
@@ -193,6 +203,9 @@ namespace GrowthBook
                 EncryptedFeatures = this.EncryptedFeatures,
                 ForcedVariations = new Dictionary<string, int>(this.ForcedVariations ?? new Dictionary<string, int>()),
                 SavedGroups = this.SavedGroups?.DeepClone() as JObject,
+                ContextualBandits = this.ContextualBandits == null
+                    ? null
+                    : new Dictionary<string, ContextualBanditDefinition>(this.ContextualBandits),
                 QaMode = this.QaMode,
                 TrackingCallback = this.TrackingCallback,
                 FeatureRepository = this.FeatureRepository,

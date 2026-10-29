@@ -250,9 +250,9 @@ public class ContextEncryptedFeaturesTests
     [Fact]
     public void TheDecryptionKeyIsNeverWrittenToTheLogOnTheStreamingPathEither()
     {
-        // RefreshCacheFromApi decrypts through HttpClientExtensions, while server-sent events go through
-        // the worker's own private GetFeaturesFrom. Both used to log the key and the plaintext, so both
-        // need pinning - reached by reflection here rather than by standing up an SSE stream.
+        // Server-sent events parse through HttpClientExtensions.ParsePayloadFrom, the same entry point the
+        // polling path uses - the worker no longer has a parser of its own. That method used to log the key
+        // and the plaintext, so it needs pinning; called directly here rather than by standing up a stream.
         var log = new StringWriter();
 
         using var loggerFactory = LoggerFactory.Create(builder =>
@@ -275,13 +275,10 @@ public class ContextEncryptedFeaturesTests
             config,
             Substitute.For<IGrowthBookFeatureCache>());
 
-        var getFeaturesFrom = typeof(FeatureRefreshWorker)
-            .GetMethod("GetFeaturesFrom", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
-
-        getFeaturesFrom.Should().NotBeNull("because this test pins the logging inside that method");
-
         var streamedJson = "{\"encryptedFeatures\":\"" + Encrypt(FeaturePayload) + "\"}";
-        var features = (IDictionary<string, Feature>)getFeaturesFrom.Invoke(worker, new object[] { streamedJson });
+        var features = global::GrowthBook.Api.Extensions.HttpClientExtensions
+            .ParsePayloadFrom(streamedJson, loggerFactory.CreateLogger<FeatureRefreshWorker>(), config)
+            .Features;
 
         features.Should().ContainKey("encrypted-flag", "because the streaming path still has to decrypt correctly");
 

@@ -21,6 +21,13 @@ namespace GrowthBook
         public IDictionary<string, Feature> Features { get; set; } = new Dictionary<string, Feature>();
 
         /// <summary>
+        /// Contextual bandit definitions the evaluation was made against, keyed by the reference a feature rule
+        /// points at. Present only when the payload carried any.
+        /// </summary>
+        [JsonProperty("contextualBandits")]
+        public IDictionary<string, ContextualBanditDefinition> ContextualBandits { get; set; }
+
+        /// <summary>
         /// Timestamp indicating when the features were last updated.
         /// Used for cache invalidation and freshness checks.
         /// </summary>
@@ -59,14 +66,36 @@ namespace GrowthBook
         /// <param name="features">The evaluated features</param>
         /// <param name="dateUpdated">When the features were last updated</param>
         /// <returns>A successful response</returns>
+        /// <remarks>
+        /// Kept as its own overload rather than gaining an optional parameter. Adding one changes the
+        /// signature callers were compiled against, so an assembly built against an earlier version would
+        /// fail with <see cref="MissingMethodException"/> at the call rather than at build time.
+        /// </remarks>
         public static RemoteEvaluationResponse CreateSuccess(
             IDictionary<string, Feature> features,
             DateTimeOffset? dateUpdated = null)
+        {
+            return CreateSuccess(features, dateUpdated, null);
+        }
+
+        /// <summary>
+        /// Creates a successful RemoteEvaluationResponse with the provided features and the contextual
+        /// bandit definitions they were evaluated against.
+        /// </summary>
+        /// <param name="features">The evaluated features</param>
+        /// <param name="dateUpdated">When the features were last updated</param>
+        /// <param name="contextualBandits">The bandit definitions the payload carried, if any</param>
+        /// <returns>A successful response</returns>
+        public static RemoteEvaluationResponse CreateSuccess(
+            IDictionary<string, Feature> features,
+            DateTimeOffset? dateUpdated,
+            IDictionary<string, ContextualBanditDefinition> contextualBandits)
         {
             return new RemoteEvaluationResponse
             {
                 Features = features ?? new Dictionary<string, Feature>(),
                 DateUpdated = dateUpdated ?? DateTimeOffset.UtcNow,
+                ContextualBandits = contextualBandits,
                 StatusCode = HttpStatusCode.OK
             };
         }
