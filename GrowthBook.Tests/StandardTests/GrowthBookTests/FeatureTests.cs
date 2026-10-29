@@ -64,16 +64,8 @@ public class FeatureTests : UnitTest
     {
         Converters = { new JsonTextStringConverter() }
     });
-
-    /// <summary>
-    /// Gets the feature cases, leaving out those that need contextual bandits, which this SDK doesn't implement yet.
-    /// </summary>
-    public static IEnumerable<object[]> GetSupportedFeatureTests() =>
-        GetMappedTestsInCategory(typeof(FeatureTestCase))
-            .Where(data => ((FeatureTestCase)data[0]).RawContext?["contextualBandits"] is null);
-
     [Theory]
-    [MemberData(nameof(GetSupportedFeatureTests))]
+    [MemberData(nameof(GetMappedTestsInCategory), typeof(FeatureTestCase))]
     public void EvalFeature(FeatureTestCase testCase)
     {
         var gb = new GrowthBook(testCase.Context);
