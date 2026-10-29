@@ -33,11 +33,23 @@ namespace GrowthBook.Api
         }
 
         /// <inheritdoc/>
+        /// <remarks>
+        /// The pair comes out of the cache in one read rather than being assembled here from a feature read and a
+        /// definition read, which would leave a window for a refresh to land between the two and hand back this
+        /// payload's features beside the previous one's weights.
+        /// </remarks>
         public async Task<FeaturePayload> GetPayload(GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null)
         {
-            var features = await GetFeatures(options, cancellationToken);
+            await EnsureCacheIsFresh(options, cancellationToken).ConfigureAwait(false);
 
-            return Pair(features);
+            if (_cache is IGrowthBookPayloadCache payloadCache)
+            {
+                return await payloadCache.GetPayload(cancellationToken).ConfigureAwait(false);
+            }
+
+            // A cache written before bandits existed holds features alone. It cannot say which payload they came
+            // from, so there is nothing here that could honestly be paired with them.
+            return new FeaturePayload(await _cache.GetFeatures(cancellationToken).ConfigureAwait(false), null);
         }
 
         /// <inheritdoc/>
@@ -46,52 +58,32 @@ namespace GrowthBook.Api
             return await EvaluateRemotely(context, options, cancellationToken);
         }
 
-        /// <summary>
-        /// Pairs features with the worker's definitions, and only when the worker is the one that
-        /// published those features.
-        /// </summary>
-        /// <remarks>
-        /// A cache supplied by the caller can be shared with other processes, which refresh it with
-        /// payloads this worker never saw and whose definitions it therefore does not have. Handing back
-        /// the worker's own definitions beside somebody else's features would bucket users on weights
-        /// belonging to a variation list that is not the one being served, so the pair is dropped and the
-        /// rules fall back to their own marginal weights.
-        /// </remarks>
-        private FeaturePayload Pair(IDictionary<string, Feature> features)
-        {
-            var workerPayload = (_backgroundRefreshWorker as IFeaturePayloadSource)?.Payload;
-
-            if (workerPayload?.ContextualBandits is null || !DescribeTheSameFeatures(workerPayload.Features, features))
-            {
-                return new FeaturePayload(features, null);
-            }
-
-            return new FeaturePayload(features, workerPayload.ContextualBandits);
-        }
-
-        private static bool DescribeTheSameFeatures(IDictionary<string, Feature> published, IDictionary<string, Feature> served)
-        {
-            if (published is null || served is null || published.Count != served.Count)
-            {
-                return false;
-            }
-
-            foreach (var key in served.Keys)
-            {
-                if (!published.ContainsKey(key))
-                {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-
         /// <inheritdoc/>
         public void Cancel() => _backgroundRefreshWorker.Cancel();
 
         /// <inheritdoc/>
         public async Task<IDictionary<string, Feature>> GetFeatures(GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null)
+        {
+            var refreshed = await EnsureCacheIsFresh(options, cancellationToken).ConfigureAwait(false);
+
+            if (refreshed != null)
+            {
+                return refreshed;
+            }
+
+            _logger.LogInformation("Cache is not expired and the option to force refresh was not set, retrieving features from cache");
+
+            return await _cache.GetFeatures(cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Refreshes the cache from the API when it has expired or the caller asked for it.
+        /// </summary>
+        /// <returns>
+        /// The features the refresh produced when this call waited for one, and null when it did not - either
+        /// because no refresh was needed or because it was left to run in the background.
+        /// </returns>
+        private async Task<IDictionary<string, Feature>> EnsureCacheIsFresh(GrowthBookRetrievalOptions options, CancellationToken? cancellationToken)
         {
             _logger.LogInformation("Getting features from repository, verifying cache expiration and option to force refresh");
 
@@ -136,9 +128,7 @@ namespace GrowthBook.Api
                 }
             }
 
-            _logger.LogInformation("Cache is not expired and the option to force refresh was not set, retrieving features from cache");
-
-            return await _cache.GetFeatures(cancellationToken).ConfigureAwait(false);
+            return null;
         }
 
         /// <inheritdoc/>
@@ -197,14 +187,14 @@ namespace GrowthBook.Api
             if (!context.RemoteEval)
             {
                 _logger.LogDebug("Remote evaluation is disabled, using regular feature retrieval");
-                return Pair(await GetFeatures(options, cancellationToken).ConfigureAwait(false));
+                return await GetPayload(options, cancellationToken).ConfigureAwait(false);
             }
 
             // Validate remote evaluation configuration
             if (_remoteEvaluationService == null)
             {
                 _logger.LogWarning("Remote evaluation is enabled but IRemoteEvaluationService is not available, falling back to regular feature retrieval");
-                return Pair(await GetFeatures(options, cancellationToken).ConfigureAwait(false));
+                return await GetPayload(options, cancellationToken).ConfigureAwait(false);
             }
 
             try

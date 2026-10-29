@@ -336,6 +336,58 @@ public class ContextualBanditPayloadTests
     }
 
     /// <summary>
+    /// The same shared cache, but the newer payload keeps the feature keys and changes what they contain - a
+    /// revision that edits a bandit's variation list rather than adding or removing flags. That is the ordinary
+    /// shape of a change, and matching keys say nothing about whether these are the features those weights were
+    /// published with.
+    /// </summary>
+    [Fact]
+    public async Task CachedFeaturesFromAnotherPayloadDoNotBorrowTheWorkersWeights()
+    {
+        var payload = JsonConvert.DeserializeObject<PayloadShape>(PayloadWithBandits);
+        var sameKeysDifferentPayload = payload.Features.Keys.ToDictionary(
+            key => key,
+            _ => new Feature { DefaultValue = "from a payload this worker never saw" });
+
+        var worker = Substitute.For<IGrowthBookFeatureRefreshWorker, IFeaturePayloadSource>();
+        ((IFeaturePayloadSource)worker).Payload.Returns(new FeaturePayload(payload.Features, payload.ContextualBandits));
+
+        var cache = Substitute.For<IGrowthBookFeatureCache>();
+        cache.IsCacheExpired.Returns(false);
+        cache.FeatureCount.Returns(sameKeysDifferentPayload.Count);
+        cache.GetFeatures(Arg.Any<CancellationToken?>()).Returns(sameKeysDifferentPayload);
+
+        var repository = new FeatureRepository(Substitute.For<ILogger<FeatureRepository>>(), cache, worker);
+
+        var result = await ((IGrowthBookContextualBanditSource)repository).GetPayload();
+
+        result.ContextualBandits.Should().BeNull(
+            "a cache holding features alone cannot say which payload they came from, and matching keys are not evidence that it was this one");
+    }
+
+    /// <summary>
+    /// The built-in cache can hold a payload whole, so it is the one place the pair is known rather than inferred.
+    /// A refresh carrying features alone has to retire the definitions stored beside them.
+    /// </summary>
+    [Fact]
+    public async Task AFeaturesOnlyRefreshRetiresTheDefinitionsStoredBeforeIt()
+    {
+        var payload = JsonConvert.DeserializeObject<PayloadShape>(PayloadWithBandits);
+        var cache = new InMemoryFeatureCache(60);
+
+        await ((IGrowthBookPayloadCache)cache).RefreshWith(new FeaturePayload(payload.Features, payload.ContextualBandits));
+
+        var stored = await ((IGrowthBookPayloadCache)cache).GetPayload();
+        stored.ContextualBandits.Should().ContainKey("cb-bandit", "the payload was stored whole");
+
+        await cache.RefreshWith(payload.Features);
+
+        var afterFeaturesOnly = await ((IGrowthBookPayloadCache)cache).GetPayload();
+        afterFeaturesOnly.ContextualBandits.Should().BeNull(
+            "a refresh that carries no definitions leaves none that can be claimed to belong to these features");
+    }
+
+    /// <summary>
     /// A repository is shared, but a remote evaluation answers for one user. Reading the definitions off
     /// the repository after the call lets a second user's response arrive in between, so the first caller
     /// adopts features evaluated for somebody else.

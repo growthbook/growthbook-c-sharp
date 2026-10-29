@@ -104,6 +104,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Callbacks that touch context-affine state — UI controls on WPF/WinForms, `HttpContext.Current` on classic
   ASP.NET — have to marshal back themselves. The synchronous overloads are unaffected: they still invoke callbacks
   on the calling thread. `SubscribeAsync` was already dispatched off-context and is unchanged. No public API changed.
+- Added `IGrowthBookPayloadCache`, which stores a payload's features and its contextual bandit definitions
+  together. `InMemoryFeatureCache` implements it alongside `IGrowthBookFeatureCache`, which is unchanged: a cache
+  written before bandits existed keeps compiling and simply serves no definitions, and bandit rules fall back to
+  their own marginal weights. Previously the two halves were held apart and paired afterwards by comparing feature
+  keys, so a payload revision that kept the keys and changed a bandit's variation list - the ordinary shape of a
+  change - passed as a match and bucketed users against weights belonging to a list that was no longer being served.
 - Added consumption of the contextual bandit payload, so a feature rule referencing a contextual bandit is bucketed
   with the backend-computed weights of whichever segment the user falls into, instead of being skipped.
   `contextualBandits` is read from the feature payload on all three delivery paths (polling, server-sent events and

@@ -133,7 +133,7 @@ namespace GrowthBook.Api
                 // already available, and only by the write that wins, so an overtaken response can't replace either.
                 Volatile.Write(ref _payload, payload);
 
-                await _cache.RefreshWith(payload.Features, cancellationToken).ConfigureAwait(false);
+                await StoreInCache(payload, cancellationToken).ConfigureAwait(false);
                 _cachedSequence = sequence;
 
                 if (etag != null)
@@ -274,6 +274,19 @@ namespace GrowthBook.Api
             {
                 _logger.LogError(ex, "Error initializing SSE client");
             }
+        }
+
+        /// <summary>
+        /// Stores the payload whole when the cache can hold one, and its features alone when it cannot.
+        /// </summary>
+        private Task StoreInCache(FeaturePayload payload, CancellationToken? cancellationToken)
+        {
+            if (_cache is IGrowthBookPayloadCache payloadCache)
+            {
+                return payloadCache.RefreshWith(payload, cancellationToken);
+            }
+
+            return _cache.RefreshWith(payload.Features, cancellationToken);
         }
 
         public void Dispose()
