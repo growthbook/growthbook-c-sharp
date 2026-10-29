@@ -81,10 +81,14 @@ namespace GrowthBook.Api
 
             if (response.Features is null)
             {
+                NotifyFeaturesRefreshed(false);
+
                 return null;
             }
 
             await _cache.RefreshWith(response.Features, cancellationToken);
+
+            NotifyFeaturesRefreshed(true);
 
             // Now that the cache has been populated at least once, we need to see if we're allowed
             // to kick off the server sent events listener and make sure we're in the intended mode
@@ -97,6 +101,33 @@ namespace GrowthBook.Api
             }
 
             return response.Features;
+        }
+
+        /// <summary>
+        /// Tells whoever configured this worker that a refresh happened, and whether it worked.
+        /// </summary>
+        /// <remarks>
+        /// Guarded: the refresh is already finished and the cache already written by the time this
+        /// runs, so a handler that throws must not be able to change either. Only the ordinary
+        /// refresh reports here - the streaming paths belong to the pull requests that own them.
+        /// </remarks>
+        private void NotifyFeaturesRefreshed(bool succeeded)
+        {
+            var callback = _config?.OnFeaturesRefreshed;
+
+            if (callback is null)
+            {
+                return;
+            }
+
+            try
+            {
+                callback(succeeded);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "The OnFeaturesRefreshed callback threw while being told the refresh {Outcome}", succeeded ? "succeeded" : "failed");
+            }
         }
 
         private void EnsureCorrectRefreshModeIsActive()

@@ -5,8 +5,14 @@ using Newtonsoft.Json.Linq;
 
 namespace GrowthBook.Evaluation
 {
-    /// <summary>Per-request context containing user-specific data passed to each evaluation call.</summary>
-    internal class UserContext
+    /// <summary>
+    /// Per-request context carrying one user's data into an evaluation.
+    /// </summary>
+    /// <remarks>
+    /// Public because <see cref="MultiUser.GrowthBookClient"/> takes one per call: a client serving
+    /// many users is handed the user with the question rather than holding them.
+    /// </remarks>
+    public class UserContext
     {
         /// <summary>User attributes used for targeting and experiment assignment (e.g. id, country, plan).</summary>
         public JObject Attributes { get; set; } = new JObject();
