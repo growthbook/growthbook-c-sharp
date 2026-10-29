@@ -25,6 +25,8 @@ namespace GrowthBook
     /// </summary>
     public class GrowthBook : IGrowthBook, IDisposable
     {
+        /// <inheritdoc/>
+        public event EventHandler<FeaturesRefreshedEventArgs> FeaturesRefreshed;
         private readonly bool _qaMode;
         private readonly Dictionary<string, ExperimentAssignment> _assigned;
         private readonly ConcurrentDictionary<string, byte> _tracked;
@@ -50,6 +52,9 @@ namespace GrowthBook
             = new List<Action<Experiment, ExperimentResult>>();
         private readonly List<Func<Experiment, ExperimentResult, Task>> _asyncSubscribers
             = new List<Func<Experiment, ExperimentResult, Task>>();
+        private readonly object _featuresLock = new object();
+        private long _installedRefreshVersion;
+        private long _installedRefreshSequence;
 
         /// <summary>
         /// Creates a new GrowthBook instance from the passed context.
@@ -113,6 +118,7 @@ namespace GrowthBook
             if (context.FeatureRepository != null)
             {
                 _featureRepository = context.FeatureRepository;
+                _featureRepository.FeaturesRefreshed += OnRepositoryFeaturesRefreshed;
             }
             else
             {
@@ -132,6 +138,7 @@ namespace GrowthBook
                 }
 
                 _featureRepository = new FeatureRepository(featureRepositoryLogger, featureCache, featureRefreshWorker, remoteEvaluationService);
+                _featureRepository.FeaturesRefreshed += OnRepositoryFeaturesRefreshed;
             }
         }
 
@@ -218,6 +225,7 @@ namespace GrowthBook
                     {
                         disposableFactory.Dispose();
                     }
+                    _featureRepository.FeaturesRefreshed -= OnRepositoryFeaturesRefreshed;
                 }
                 _disposedValue = true;
             }
@@ -523,11 +531,12 @@ namespace GrowthBook
             return Task.Run(() => LoadFeatures(cancellationToken: cancellationToken));
         }
 
-        private FeatureResult EvaluateFeature(string featureId, ISet<string> evaluatedFeatures = default)
+        private FeatureResult EvaluateFeature(string featureId, ISet<string> evaluatedFeatures = default, IDictionary<string, Feature> features = null)
         {
             try
             {
                 evaluatedFeatures = evaluatedFeatures ?? new HashSet<string>();
+                features = features ?? Features ?? new Dictionary<string, Feature>();
 
                 if (evaluatedFeatures.Contains(featureId))
                 {
@@ -536,7 +545,7 @@ namespace GrowthBook
 
                 evaluatedFeatures.Add(featureId);
 
-                if (!Features.TryGetValue(featureId, out Feature feature))
+                if (!features.TryGetValue(featureId, out Feature feature))
                 {
                     return GetFeatureResult(null, FeatureResult.SourceId.UnknownFeature);
                 }
@@ -556,7 +565,7 @@ namespace GrowthBook
                         {
                             // Use a fresh copy of the evaluated feature ids to avoid
                             // incorrectly flagging repeated prerequisite evaluations as cycles
-                            var parentResult = EvaluateFeature(parentCondition.Id, new HashSet<string>(evaluatedFeatures));
+                            var parentResult = EvaluateFeature(parentCondition.Id, new HashSet<string>(evaluatedFeatures), features);
 
                             // Don't continue evaluating if the prerequisite conditions have cycles.
                             if (parentResult.Source == FeatureResult.SourceId.CyclicPrerequisite)
@@ -657,7 +666,7 @@ namespace GrowthBook
                         Condition = rule.Condition
                     };
 
-                    var result = RunExperiment(experiment, featureId);
+                    var result = RunExperiment(experiment, featureId, features);
 
                     TryAssignExperimentResult(experiment, result);
 
@@ -727,15 +736,40 @@ namespace GrowthBook
                 _logger.LogInformation("Loading features from the repository");
                 IDictionary<string, Feature> features;
 
-                // Use remote evaluation if enabled and configured
-                if (_context.RemoteEval && RemoteEvaluationUtilities.IsValidForRemoteEvaluation(_context))
+                var wasModified = false;
+                var observedResponse = false;
+
+                void RecordResponse(object sender, FeaturesRefreshedEventArgs e)
                 {
-                    var currentContext = CreateCurrentContext();
-                    features = await _featureRepository.GetFeaturesWithContext(currentContext, options, cancellationToken).ConfigureAwait(false);
+                    if (e.Source != FeatureRefreshSource.Http || observedResponse)
+                    {
+                        return;
+                    }
+
+                    observedResponse = true;
+                    wasModified = e.WasModified;
                 }
-                else
+
+                var startedAtVersion = CurrentRefreshVersion();
+
+                _featureRepository.FeaturesRefreshed += RecordResponse;
+
+                try
                 {
-                    features = await _featureRepository.GetFeatures(options, cancellationToken).ConfigureAwait(false);
+                    // Use remote evaluation if enabled and configured
+                    if (_context.RemoteEval && RemoteEvaluationUtilities.IsValidForRemoteEvaluation(_context))
+                    {
+                        var currentContext = CreateCurrentContext();
+                        features = await _featureRepository.GetFeaturesWithContext(currentContext, options, cancellationToken).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        features = await _featureRepository.GetFeatures(options, cancellationToken).ConfigureAwait(false);
+                    }
+                }
+                finally
+                {
+                    _featureRepository.FeaturesRefreshed -= RecordResponse;
                 }
 
                 if (features == null)
@@ -745,12 +779,18 @@ namespace GrowthBook
                     return FeatureLoadResult.CreateFailure(errorMessage);
                 }
 
-                Features = features;
+                if (!TryInstallLoadedFeatures(features, startedAtVersion))
+                {
+                    _logger.LogInformation("Loading features has completed, but a refresh arrived while it was in flight and was kept");
+
+                    return FeatureLoadResult.CreateSuccess(Features?.Count ?? 0, wasModified);
+                }
+
                 var featureCount = Features.Count;
 
                 _logger.LogInformation($"Loading features has completed, retrieved '{featureCount}' features");
 
-                return FeatureLoadResult.CreateSuccess(featureCount);
+                return FeatureLoadResult.CreateSuccess(featureCount, wasModified);
             }
             catch (FeatureLoadException ex)
             {
@@ -800,7 +840,7 @@ namespace GrowthBook
             }
         }
 
-        private ExperimentResult RunExperiment(Experiment experiment, string featureId)
+        private ExperimentResult RunExperiment(Experiment experiment, string featureId, IDictionary<string, Feature> features = null)
         {
             // 1. Abort if there aren't enough variations present.
 
@@ -941,7 +981,7 @@ namespace GrowthBook
                     {
                         // Use a fresh copy of the evaluated feature ids to avoid
                         // incorrectly flagging repeated prerequisite evaluations as cycles
-                        var parentResult = EvaluateFeature(parentCondition.Id, new HashSet<string>());
+                        var parentResult = EvaluateFeature(parentCondition.Id, new HashSet<string>(), features ?? Features);
 
                         if (parentResult.Source == FeatureResult.SourceId.CyclicPrerequisite)
                         {
@@ -1318,6 +1358,70 @@ namespace GrowthBook
                         _logger.LogError(ex, "Encountered unhandled exception in asynchronous subscriber.");
                     }
                 });
+            }
+        }
+
+        private void OnRepositoryFeaturesRefreshed(object sender, FeaturesRefreshedEventArgs e)
+        {
+            if (e.WasModified)
+            {
+                AdoptRefreshedFeatures(e.Features, e.Sequence);
+            }
+
+            // One consumer's handler must not stop the next one hearing about the refresh.
+            FeaturesRefreshedNotifier.Raise(FeaturesRefreshed, this, e,
+                ex => _logger.LogError(ex, "A FeaturesRefreshed subscriber threw an exception"));
+        }
+
+        private long CurrentRefreshVersion()
+        {
+            lock (_featuresLock)
+            {
+                return _installedRefreshVersion;
+            }
+        }
+
+        private bool TryInstallLoadedFeatures(IDictionary<string, Feature> features, long startedAtVersion)
+        {
+            lock (_featuresLock)
+            {
+                if (_installedRefreshVersion != startedAtVersion)
+                {
+                    return false;
+                }
+
+                Features = features;
+
+                return true;
+            }
+        }
+
+        private void AdoptRefreshedFeatures(IReadOnlyDictionary<string, Feature> features, long sequence)
+        {
+            if (_context.RemoteEval && RemoteEvaluationUtilities.IsValidForRemoteEvaluation(_context))
+            {
+                _logger.LogDebug("Ignored a shared refresh: this instance is evaluated remotely and has its own result");
+
+                return;
+            }
+
+            lock (_featuresLock)
+            {
+                if (sequence > 0 && sequence <= _installedRefreshSequence)
+                {
+                    _logger.LogDebug("Discarded a refresh at sequence '{Sequence}', already at '{InstalledSequence}'", sequence, _installedRefreshSequence);
+
+                    return;
+                }
+
+                if (sequence > _installedRefreshSequence)
+                {
+                    _installedRefreshSequence = sequence;
+                }
+
+                _installedRefreshVersion++;
+
+                Features = features.ToDictionary(k => k.Key, v => v.Value);
             }
         }
     }

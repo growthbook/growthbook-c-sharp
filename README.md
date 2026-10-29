@@ -181,7 +181,31 @@ Update or merge user attributes dynamically to reflect changes in targeting or e
 
 ---
 
-### 4. **Lifecycle Management**
+### 4. **Reacting to Feature Refreshes**
+Subscribe to the `FeaturesRefreshed` event to be notified whenever the server confirms feature definitions — on an HTTP `200`, an HTTP `304 Not Modified`, or a server-sent event (SSE) update.
+
+- **Subscribe to refreshes**:
+  ```csharp
+  growthBook.FeaturesRefreshed += (sender, e) =>
+  {
+      if (e.WasModified)
+          UpdateUi();            // features actually changed (HTTP 200 or SSE)
+
+      ResolveLoadingIndicator(); // server confirmed — this also fires on a 304
+  };
+  ```
+
+- `e.WasModified` — `true` when features changed (`200`/SSE), `false` when the server confirmed the cache is still valid (`304 Not Modified`).
+- `e.Source` — `Http` or `ServerSentEvent`.
+- `e.Features` / `e.FeatureCount` / `e.RefreshedAt` — snapshot and timestamp of the refresh.
+
+> SSE updates are raised on a background thread — marshal to the UI thread if you touch UI state.
+
+On the pull path, `LoadFeaturesWithResult(...).WasModified` carries the same `200`-vs-`304` distinction (reliable when `WaitForCompletion = true`).
+
+---
+
+### 5. **Lifecycle Management**
 Manage the lifecycle of the `GrowthBook` instance, including cleanup and resource disposal.
 
 - **Dispose of Resources**:
@@ -191,7 +215,7 @@ Manage the lifecycle of the `GrowthBook` instance, including cleanup and resourc
 
 ---
 
-### 5. **Sticky Bucketing**
+### 6. **Sticky Bucketing**
 
 ```csharp
 context.StickyBucketService = new StickyBucketService();

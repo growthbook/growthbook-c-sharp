@@ -15,6 +15,7 @@ namespace GrowthBook.Api
 {
     public class FeatureRepository : IGrowthBookFeatureRepository
     {
+        public event EventHandler<FeaturesRefreshedEventArgs> FeaturesRefreshed;
         private readonly ILogger<FeatureRepository> _logger;
         private readonly IGrowthBookFeatureCache _cache;
         private readonly IGrowthBookFeatureRefreshWorker _backgroundRefreshWorker;
@@ -30,6 +31,7 @@ namespace GrowthBook.Api
             _assigned = new ConcurrentDictionary<string, ExperimentAssignment>();
             _tracked = new ConcurrentDictionary<string, byte>();
             _remoteEvaluationService = remoteEvaluationService;
+            _backgroundRefreshWorker.FeaturesRefreshed += OnWorkerFeaturesRefreshed;
         }
 
         /// <inheritdoc/>
@@ -192,6 +194,11 @@ namespace GrowthBook.Api
             // For now, return empty headers. This can be extended later to support custom headers
             // from context or configuration
             return new Dictionary<string, string>();
+        }
+        private void OnWorkerFeaturesRefreshed(object sender, FeaturesRefreshedEventArgs e)
+        {
+            FeaturesRefreshedNotifier.Raise(FeaturesRefreshed, sender, e,
+                ex => _logger.LogError(ex, "A FeaturesRefreshed subscriber threw an exception"));
         }
     }
 }
