@@ -1413,7 +1413,8 @@ namespace GrowthBook.Providers
             for (var precision = 1; precision <= 16; precision++)
             {
                 var text = value.ToString("G" + precision, CultureInfo.InvariantCulture);
-                if (double.Parse(text, NumberStyles.Float, CultureInfo.InvariantCulture) == value)
+                // .NET Framework fails to parse a candidate that rounds past double.MaxValue, such as "2E+308"
+                if (double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed) && parsed == value)
                 {
                     return text;
                 }
