@@ -34,13 +34,25 @@ namespace GrowthBook
         {
             get
             {
-                if (Value == null || Value.Type == JTokenType.Null)
+                // JavaScript truthiness: only null, false, 0, NaN and "" are off
+                switch (Value?.Type)
                 {
-                    return false;
+                    case null:
+                    case JTokenType.Null:
+                    case JTokenType.Undefined:
+                        return false;
+                    case JTokenType.Boolean:
+                        return Value.Value<bool>();
+                    case JTokenType.Integer:
+                        return Value.ToString() != "0";
+                    case JTokenType.Float:
+                        var number = Value.Value<double>();
+                        return number != 0 && !double.IsNaN(number);
+                    case JTokenType.String:
+                        return Value.ToString().Length > 0;
+                    default:
+                        return true;
                 }
-
-                string strValue = Value.ToString();
-                return !string.IsNullOrEmpty(strValue) && strValue != "0" && strValue.ToLower() != "false";
             }
         }
 

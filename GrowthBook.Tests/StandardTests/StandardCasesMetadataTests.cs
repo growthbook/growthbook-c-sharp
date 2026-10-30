@@ -22,13 +22,30 @@ public class StandardCasesMetadataTests
         "getQueryStringOverride",
         "hash",
         "inNamespace",
+        "pruneCondition",
+        "reducePayload",
         "run",
         "stickyBucket"
     };
 
+    /// <summary>
+    /// Categories nested inside an object rather than listed at the top level.
+    /// </summary>
+    private static readonly HashSet<string> TestedNestedCategories = new HashSet<string>
+    {
+        "savedGroupReferencesV2.evalCondition",
+        "savedGroupReferencesV2.feature",
+        "savedGroupReferencesV2.run"
+    };
+
     private static readonly HashSet<string> IntentionallyUntestedCategories = new HashSet<string>
     {
-        "urlRedirect"
+        "urlRedirect",
+        // Contextual bandits aren't implemented in this SDK yet
+        "contextualBandit",
+        // Remote saved groups (the savedGroupReferencesRemote capability) aren't implemented in this SDK yet
+        "savedGroupReferencesRemote.evalCondition",
+        "savedGroupReferencesRemote.feature"
     };
 
     [Fact]
@@ -36,7 +53,7 @@ public class StandardCasesMetadataTests
     {
         var standardCases = LoadStandardCases();
 
-        standardCases["specVersion"]?.ToString().Should().Be("0.7.1");
+        standardCases["specVersion"]?.ToString().Should().Be("0.12.0");
     }
 
     [Fact]
@@ -46,9 +63,17 @@ public class StandardCasesMetadataTests
         var categories = standardCases.Properties()
             .Where(property => property.Value.Type == JTokenType.Array)
             .Select(property => property.Name)
+            .Concat(standardCases.Properties()
+                .Where(property => property.Value.Type == JTokenType.Object)
+                .SelectMany(property => ((JObject)property.Value).Properties()
+                    .Where(nested => nested.Value.Type == JTokenType.Array)
+                    .Select(nested => $"{property.Name}.{nested.Name}")))
             .ToList();
 
-        var handledCategories = TestedCategories.Concat(IntentionallyUntestedCategories).ToHashSet();
+        var handledCategories = TestedCategories
+            .Concat(TestedNestedCategories)
+            .Concat(IntentionallyUntestedCategories)
+            .ToHashSet();
 
         categories.Should().OnlyContain(
             category => handledCategories.Contains(category),

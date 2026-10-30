@@ -26,7 +26,7 @@ public class EvalConditionTests : UnitTest
         [TestPropertyIndex(3)]
         public bool ExpectedValue { get; set; }
         [TestPropertyIndex(4, isOptional: true)]
-        public Dictionary<string, object[]> Groups { get; set; } = new Dictionary<string, object[]>();
+        public JObject Groups { get; set; } = new JObject();
     }
 
     [Theory]
@@ -34,7 +34,7 @@ public class EvalConditionTests : UnitTest
     public void EvalCondition(EvalConditionTestCase testCase)
     {
         var logger = new NullLogger<ConditionEvaluationProvider>();
-        var actualResult = new ConditionEvaluationProvider(logger).EvalCondition(testCase.Attributes, testCase.Condition, JObject.FromObject(testCase.Groups));
+        var actualResult = new ConditionEvaluationProvider(logger).EvalCondition(testCase.Attributes, testCase.Condition, testCase.Groups);
 
         actualResult.Should().Be(testCase.ExpectedValue, "because the condition should evaluate correctly");
     }

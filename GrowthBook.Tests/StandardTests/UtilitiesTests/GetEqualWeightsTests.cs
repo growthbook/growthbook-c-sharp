@@ -25,14 +25,21 @@ public class GetEqualWeightsTests : UnitTest
     [MemberData(nameof(GetMappedTestsInCategory), typeof(GetEqualWeightsTestCase))]
     public void GetEqualWeights(GetEqualWeightsTestCase testCase)
     {
-        // SPEC DIFFERENCE: The 0.5.2 spec version calls out that these tests are expecting weights rounded to 8 decimal places,
-        //                  but in .Net that will cause a rounding difference of 0.00000001 for one of these tests
-        //                  and cause the test to fail. Comparing floating point values for direct equality is difficult
-        //                  and not generally a recommended activity in any case and so we're backing down to 7 points of
-        //                  precision to get as close of an approximation that works for .Net specifically.
+        // Both sides are floored to 8 places, as in the JS SDK's spec runner
+        var actualResult = ExperimentUtilities.GetEqualWeights(testCase.NumberOfVariations);
 
-        var actualResult = ExperimentUtilities.GetEqualWeights(testCase.NumberOfVariations).RoundAll(7);
+        actualResult.Select(x => x.Floor8()).Should().Equal(testCase.ExpectedResults.Select(x => x.Floor8()), "because the weights should be created with an equal distribution");
+    }
 
-        actualResult.Should().BeEquivalentTo(testCase.ExpectedResults.RoundAll(7), "because the weights should be created with an equal distribution");
+    [Theory]
+    [InlineData(2)]
+    [InlineData(3)]
+    [InlineData(5)]
+    [InlineData(7)]
+    public void GetEqualWeightsMatchesDoublePrecisionDivision(int numberOfVariations)
+    {
+        var actualResult = ExperimentUtilities.GetEqualWeights(numberOfVariations);
+
+        actualResult.Should().AllSatisfy(x => x.Should().Be(1.0 / numberOfVariations), "because JS computes equal weights as 1/n in double precision");
     }
 }
