@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using GrowthBook.Api;
 using GrowthBook.Evaluation;
+using GrowthBook.Extensions;
 using GrowthBook.MultiUser.Configuration;
 using GrowthBook.Providers;
 using GrowthBook.Utilities;
@@ -81,33 +82,14 @@ namespace GrowthBook.MultiUser
             {
                 _repository = CreateRepository(options, _loggerFactory, success =>
                 {
+                    // Only a failure is reported from here. A success is installed and reported by the call
+                    // that started the refresh: it holds the sequence taken when the refresh began, so an older
+                    // response landing late cannot replace a newer one, and it reads nothing back from the
+                    // repository, which with an expired cache would start another refresh and call this again.
                     if (!success)
                     {
                         options.OnFeaturesRefreshed?.Invoke(false);
-
-                        return;
                     }
-
-                    // The refreshed features are installed before anyone is told the refresh happened,
-                    // so a handler that evaluates does not see the previous set.
-                    _ = Task.Run(async () =>
-                    {
-                        try
-                        {
-                            var sequence = Interlocked.Increment(ref _refreshSequence);
-                            var features = await _repository.GetFeatures(null);
-
-                            if (PublishFeatures(features, sequence))
-                            {
-                                NotifyFeaturesRefreshed();
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            // Nobody awaits this task, so an exception here would be lost entirely.
-                            _logger.LogError(ex, "Encountered unhandled exception while applying a background feature refresh");
-                        }
-                    });
                 });
                 _ownsRepository = true;
             }
@@ -120,14 +102,16 @@ namespace GrowthBook.MultiUser
         public async Task InitializeAsync(CancellationToken ct = default)
         {
             var sequence = Interlocked.Increment(ref _refreshSequence);
-            var features = await _repository.GetFeatures(null, ct);
+
+            // The default repository's refresh callback installs nothing, so a refresh started here is waited
+            // for, or its response would never be installed. A repository of the caller's own is asked as before.
+            var retrievalOptions = _ownsRepository ? new GrowthBookRetrievalOptions { WaitForCompletion = true } : null;
+            var features = await _repository.GetFeatures(retrievalOptions, ct);
             if (features != null)
             {
-                // With a custom repository the internal callback is not registered, so report the
-                // refresh here. With the default repository the internal callback already does.
-                // Either way, only when this load is the one that ended up in effect - overlapping
-                // loads can finish out of order, and the one that was overtaken has nothing to report.
-                if (PublishFeatures(features, sequence) && !_ownsRepository)
+                // Only when this load is the one that ended up in effect - overlapping loads can finish
+                // out of order, and the one that was overtaken has nothing to report.
+                if (PublishFeatures(features, sequence))
                 {
                     NotifyFeaturesRefreshed();
                 }
@@ -146,7 +130,7 @@ namespace GrowthBook.MultiUser
 
             if (features != null)
             {
-                if (PublishFeatures(features, sequence) && !_ownsRepository)
+                if (PublishFeatures(features, sequence))
                 {
                     NotifyFeaturesRefreshed();
                 }
@@ -245,7 +229,7 @@ namespace GrowthBook.MultiUser
         public T GetFeature<T>(string key, T fallback, UserContext userContext)
         {
             var result = EvalFeature(key, userContext);
-            if (result.Value == null)
+            if (result.Value.IsNull())
             {
                 return fallback;
             }
@@ -369,7 +353,7 @@ namespace GrowthBook.MultiUser
             };
 
             var cache = new InMemoryFeatureCache(cacheExpirationInSeconds: options.CacheExpirationInSeconds);
-            var httpClientFactory = new HttpClientFactory(requestTimeoutInSeconds: options.HttpRequestTimeoutInSeconds);
+            var httpClientFactory = options.HttpClientFactory ?? new HttpClientFactory(requestTimeoutInSeconds: options.HttpRequestTimeoutInSeconds);
             var workLogger = loggerFactory.CreateLogger<FeatureRefreshWorker>();
             var repoLogger = loggerFactory.CreateLogger<FeatureRepository>();
             var worker = new FeatureRefreshWorker(workLogger, httpClientFactory, config, cache);

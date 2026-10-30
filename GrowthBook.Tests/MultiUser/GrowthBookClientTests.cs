@@ -339,6 +339,28 @@ public class GrowthBookClientTests
             "older definitions however late it comes back");
     }
 
+    [Fact]
+    public async Task GetFeature_WithAJsonNullValue_ReturnsTheFallback()
+    {
+        var mockRepo = Substitute.For<IGrowthBookFeatureRepository>();
+        mockRepo
+            .GetFeatures(Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IDictionary<string, Feature>>(new Dictionary<string, Feature>
+            {
+                ["nullable"] = new Feature { DefaultValue = JValue.CreateNull() }
+            }));
+
+        using var client = new GrowthBookClient(new Options
+        {
+            ClientKey = "sdk-test", LoggerFactory = NullLoggerFactory.Instance, FeatureRepository = mockRepo
+        });
+
+        await client.InitializeAsync();
+
+        client.GetFeature("nullable", "fallback", new UserContext { Attributes = JObject.Parse("{\"id\": \"user-1\"}") })
+            .Should().Be("fallback", "a JSON null is no value, just as a missing one is");
+    }
+
     private static IDictionary<string, Feature> SavedGroupFeature() => new Dictionary<string, Feature>
     {
         ["beta-only"] = new Feature

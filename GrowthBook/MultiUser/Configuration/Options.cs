@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Net.Http;
 using GrowthBook.Services;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json.Linq;
@@ -77,6 +78,12 @@ namespace GrowthBook.MultiUser.Configuration
         /// Defaults to 60.
         /// </summary>
         public int HttpRequestTimeoutInSeconds { get; set; } = 60;
+
+        /// <summary>
+        /// Creates the HTTP clients the default repository fetches with, so tests can answer its requests without a
+        /// network. Unset, the repository creates its own.
+        /// </summary>
+        internal IHttpClientFactory HttpClientFactory { get; set; }
 
         /// <summary>
         /// Invoked when a user is assigned to an experiment variation. Use to report to your analytics system.
