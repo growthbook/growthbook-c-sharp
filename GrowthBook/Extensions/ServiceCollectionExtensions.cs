@@ -43,7 +43,8 @@ namespace GrowthBook.Extensions
         /// </summary>
         /// <remarks>
         /// The options are copied, so registration does not write back into the instance the caller
-        /// passed in and the client is not left sharing it.
+        /// passed in and the client is not left sharing it. Each container built from the collection
+        /// gets a copy of its own as well.
         /// </remarks>
         public static IServiceCollection AddGrowthBookClient(this IServiceCollection services, Options options)
         {
@@ -52,7 +53,9 @@ namespace GrowthBook.Extensions
 
             var copy = options.Clone();
 
-            services.TryAddSingleton(provider => CreateInitializedClient(copy, provider));
+            // Copied again for each container: each builds its own client, and a client changes its options
+            // in place, so one shared copy would let SetGlobalAttributes on one client retarget another.
+            services.TryAddSingleton(provider => CreateInitializedClient(copy.Clone(), provider));
 
             return services;
         }

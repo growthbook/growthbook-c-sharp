@@ -117,6 +117,7 @@ namespace GrowthBook.MultiUser.Configuration
             Enabled = Enabled,
             QaMode = QaMode,
             GlobalAttributes = GlobalAttributes?.DeepClone() as JObject,
+            SavedGroups = SavedGroups?.DeepClone() as JObject,
             GlobalForcedVariations = GlobalForcedVariations is null
                 ? null
                 : new Dictionary<string, int>(GlobalForcedVariations),

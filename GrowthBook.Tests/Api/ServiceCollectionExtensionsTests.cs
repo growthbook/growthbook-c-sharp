@@ -242,6 +242,80 @@ public class ServiceCollectionExtensionsTests
             "the client was given a copy, so changing its state leaves the caller's options alone");
     }
 
+    /// <summary>
+    /// Two containers built from one collection each build a client. A client changes its options in
+    /// place, so the two must not hold the same instance.
+    /// </summary>
+    [Fact]
+    public void ClientsFromSeparateContainersDoNotShareOptions()
+    {
+        var services = new ServiceCollection();
+
+        services.AddSingleton<ILoggerFactory>(NullLoggerFactory.Instance);
+        services.AddGrowthBookClient(new Options
+        {
+            ClientKey = "sdk-test",
+            FeatureRepository = RepositoryWith(new Feature
+            {
+                DefaultValue = JToken.FromObject(false),
+                Rules = new List<FeatureRule>
+                {
+                    new FeatureRule { Condition = JObject.Parse("{\"tier\":\"gold\"}"), Force = JToken.FromObject(true) }
+                }
+            }),
+            GlobalAttributes = new JObject { ["tier"] = "gold" }
+        });
+
+        using var firstProvider = services.BuildServiceProvider();
+        using var secondProvider = services.BuildServiceProvider();
+
+        var first = firstProvider.GetRequiredService<GrowthBookClient>();
+        var second = secondProvider.GetRequiredService<GrowthBookClient>();
+
+        first.SetGlobalAttributes(new JObject { ["tier"] = "platinum" });
+
+        second.IsOn("flag", new UserContext { Attributes = new JObject { ["id"] = "user-1" } }).Should().BeTrue(
+            "the second client still targets the gold tier it was registered with");
+    }
+
+    [Fact]
+    public void SavedGroupsSurviveRegistrationFromPreparedOptions()
+    {
+        var services = new ServiceCollection();
+
+        services.AddSingleton<ILoggerFactory>(NullLoggerFactory.Instance);
+        services.AddGrowthBookClient(new Options
+        {
+            ClientKey = "sdk-test",
+            FeatureRepository = RepositoryWith(new Feature
+            {
+                DefaultValue = JToken.FromObject(false),
+                Rules = new List<FeatureRule>
+                {
+                    new FeatureRule { Condition = JObject.Parse("{\"id\":{\"$inGroup\":\"beta\"}}"), Force = JToken.FromObject(true) }
+                }
+            }),
+            SavedGroups = new JObject { ["beta"] = new JArray("user-1") }
+        });
+
+        using var provider = services.BuildServiceProvider();
+
+        provider.GetRequiredService<GrowthBookClient>()
+            .IsOn("flag", new UserContext { Attributes = new JObject { ["id"] = "user-1" } })
+            .Should().BeTrue("the saved groups were part of the options handed to registration");
+    }
+
+    private static IGrowthBookFeatureRepository RepositoryWith(Feature flag)
+    {
+        var repository = Substitute.For<IGrowthBookFeatureRepository>();
+
+        repository
+            .GetFeatures(Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult<IDictionary<string, Feature>>(new Dictionary<string, Feature> { ["flag"] = flag }));
+
+        return repository;
+    }
+
     [Fact]
     public void RegisteringWithoutServicesOrOptionsIsRejected()
     {
