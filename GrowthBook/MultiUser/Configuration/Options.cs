@@ -126,6 +126,7 @@ namespace GrowthBook.MultiUser.Configuration
             BackgroundSync = BackgroundSync,
             CacheExpirationInSeconds = CacheExpirationInSeconds,
             HttpRequestTimeoutInSeconds = HttpRequestTimeoutInSeconds,
+            HttpClientFactory = HttpClientFactory,
             TrackingCallback = TrackingCallback,
             StickyBucketService = StickyBucketService,
             ThrowOnInitializationFailure = ThrowOnInitializationFailure

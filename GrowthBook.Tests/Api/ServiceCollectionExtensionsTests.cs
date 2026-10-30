@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
+using GrowthBook.Api;
 using GrowthBook.Evaluation;
 using GrowthBook.Exceptions;
 using GrowthBook.Extensions;
@@ -303,6 +304,15 @@ public class ServiceCollectionExtensionsTests
         provider.GetRequiredService<GrowthBookClient>()
             .IsOn("flag", new UserContext { Attributes = new JObject { ["id"] = "user-1" } })
             .Should().BeTrue("the saved groups were part of the options handed to registration");
+    }
+
+    [Fact]
+    public void CloningKeepsTheHttpClientFactory()
+    {
+        var factory = new HttpClientFactory();
+
+        new Options { HttpClientFactory = factory }.Clone().HttpClientFactory.Should().BeSameAs(factory,
+            "a property Clone leaves out is lost to every client registered from prepared options");
     }
 
     private static IGrowthBookFeatureRepository RepositoryWith(Feature flag)
