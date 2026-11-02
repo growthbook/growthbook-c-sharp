@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-10-30
+
 - **Breaking:** condition evaluation is strict about types, matching SDK spec 0.10.0 (growthbook/growthbook#7379).
   When an attribute's type differs from the condition's, the operator fails and its negation (`$ne`, `$nin`, `$vne`,
   `$not`, `$nregex`) matches. Numeric strings are no longer compared as numbers (`"10" < "9"`), date strings are no
