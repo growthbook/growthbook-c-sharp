@@ -396,7 +396,7 @@ namespace GrowthBook.Utilities
             {
                 (_, var hashValue) = attributes.GetHashAttributeAndValue(filter.Attribute);
 
-                if (hashValue.IsNullOrWhitespace())
+                if (hashValue is null)
                 {
                     logger?.LogDebug("Attributes are missing a filter's hash attribute of '{FilterAttribute}', marking as filtered out", filter.Attribute);
                     return true;
@@ -423,7 +423,7 @@ namespace GrowthBook.Utilities
         /// Moved here from <see cref="GrowthBook"/> unchanged, for the same reason as
         /// <see cref="IsFilteredOut"/>.
         /// </remarks>
-        public static bool IsIncludedInRollout(string seed, JObject attributes, string hashAttribute = null, BucketRange range = null, double? coverage = null, int? hashVersion = null, ILogger logger = null)
+        public static bool IsIncludedInRollout(string seed, JObject attributes, string hashAttribute = null, string fallbackAttribute = null, BucketRange range = null, double? coverage = null, int? hashVersion = null, ILogger logger = null)
         {
             if (coverage == null && range == null)
             {
@@ -437,7 +437,7 @@ namespace GrowthBook.Utilities
                 return false;
             }
 
-            (_, var hashValue) = attributes.GetHashAttributeAndValue(hashAttribute);
+            (_, var hashValue) = attributes.GetHashAttributeAndValue(hashAttribute, fallbackAttribute);
 
             if (hashValue is null)
             {
@@ -454,7 +454,8 @@ namespace GrowthBook.Utilities
 
             if (coverage != null)
             {
-                return bucket <= coverage;
+                // Half-open like InRange, so a coverage of k/10000 includes exactly k hash buckets
+                return bucket < coverage;
             }
 
             return true;

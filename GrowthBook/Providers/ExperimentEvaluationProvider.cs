@@ -85,23 +85,16 @@ namespace GrowthBook.Providers
 
             // 6. Abort if we're unable to generate a hash identifying this run.
 
-            (var hashAttribute, var hashValue) = context.GetAttributes().GetHashAttributeAndValue(experiment.HashAttribute);
+            // The fallback attribute is only used along with sticky bucketing, as in the JS SDK.
 
-            if (hashValue.IsNullOrWhitespace())
+            var fallbackAttribute = context.Global.StickyBucketService != null && !experiment.DisableStickyBucketing ? experiment.FallbackAttribute : null;
+
+            (var hashAttribute, var hashValue) = context.GetAttributes().GetHashAttributeAndValue(experiment.HashAttribute, fallbackAttribute);
+
+            if (hashValue is null)
             {
-                // Check if a fallback attribute for sticky bucketing exists and use it if possible.
-
-                var hasFallback = !experiment.FallbackAttribute.IsNullOrWhitespace();
-
-                if (hasFallback)
-                {
-                    (hashAttribute, hashValue) = context.GetAttributes().GetHashAttributeAndValue(experiment.FallbackAttribute);
-                }
-                else
-                {
-                    _logger.LogDebug("Aborting experiment, unable to locate a value for the experiment hash attribute \'{ExperimentHashAttribute}\'", experiment.HashAttribute);
-                    return GetExperimentResult(experiment, context, featureId: featureId);
-                }
+                _logger.LogDebug("Aborting experiment, unable to locate a value for the experiment hash attribute \'{ExperimentHashAttribute}\'", experiment.HashAttribute);
+                return GetExperimentResult(experiment, context, featureId: featureId);
             }
 
             // 6.5 When sticky bucketing is permitted, determine if they already have a value and use it if possible.
@@ -152,7 +145,7 @@ namespace GrowthBook.Providers
 
                 if (!experiment.Condition.IsNull())
                 {
-                    if (!_conditionEvaluator.EvalCondition(context.GetAttributes(), experiment.Condition, context.Global.SavedGroups))
+                    if (!EvalConditionSafely(context.GetAttributes(), experiment.Condition, context.Global.SavedGroups))
                     {
                         _logger.LogDebug("Aborting experiment, associated conditions have prohibited participation");
                         return GetExperimentResult(experiment, context, featureId: featureId);
@@ -177,7 +170,7 @@ namespace GrowthBook.Providers
 
                         var evaluationObject = new JObject { ["value"] = parentResult.Value };
 
-                        if (!_conditionEvaluator.EvalCondition(evaluationObject, parentCondition.Condition ?? new JObject(), context.Global.SavedGroups))
+                        if (!EvalConditionSafely(evaluationObject, parentCondition.Condition ?? new JObject(), context.Global.SavedGroups))
                         {
                             return GetExperimentResult(experiment, context, featureId: featureId);
                         }
@@ -308,6 +301,22 @@ namespace GrowthBook.Providers
         }
 
         /// <summary>
+        /// Evaluates a condition, failing it instead of throwing when it is malformed.
+        /// </summary>
+        private bool EvalConditionSafely(JToken attributes, JObject condition, JObject savedGroups)
+        {
+            try
+            {
+                return _conditionEvaluator.EvalCondition(attributes, condition, savedGroups);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Condition evaluation failed, treating the condition as not matching");
+                return false;
+            }
+        }
+
+        /// <summary>
         /// Generates an experiment result from an experiment.
         /// </summary>
         /// <param name="experiment">The experiment to get the result from.</param>
@@ -338,7 +347,7 @@ namespace GrowthBook.Providers
                 InExperiment = inExperiment,
                 HashAttribute = hashAttribute,
                 HashUsed = hashUsed,
-                HashValue = hashValue,
+                HashValue = hashValue ?? string.Empty,
                 Value = experiment.Variations is null ? null : experiment.Variations[variationIndex],
                 VariationId = variationIndex,
                 Name = meta?.Name,

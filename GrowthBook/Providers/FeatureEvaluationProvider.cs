@@ -73,7 +73,7 @@ namespace GrowthBook.Providers
 
                             var evaluationObject = new JObject { ["value"] = parentResult.Value };
 
-                            var isSuccess = _conditionEvaluator.EvalCondition(evaluationObject,
+                            var isSuccess = EvalConditionSafely(evaluationObject,
                                 parentCondition.Condition ?? new JObject(), context.Global.SavedGroups);
 
                             if (!isSuccess)
@@ -108,7 +108,7 @@ namespace GrowthBook.Providers
                     }
 
                     if (!rule.Condition.IsNull() &&
-                        !_conditionEvaluator.EvalCondition(context.GetAttributes(), rule.Condition, context.Global.SavedGroups))
+                        !EvalConditionSafely(context.GetAttributes(), rule.Condition, context.Global.SavedGroups))
                     {
                         _logger.LogDebug("Rule {RuleIndex}: attribute condition did not match, continuing", ruleIndex);
                         continue;
@@ -116,8 +116,11 @@ namespace GrowthBook.Providers
 
                     if (!rule.Force.IsNull())
                     {
-                        if (!ExperimentUtilities.IsIncludedInRollout(rule.Seed ?? featureId, context.GetAttributes(), rule.HashAttribute, rule.Range, rule.Coverage,
-                                rule.HashVersion, _logger))
+                        // The fallback attribute is only used along with sticky bucketing, as in the JS SDK
+                        var rolloutFallbackAttribute = context.Global.StickyBucketService != null && !rule.DisableStickyBucketing ? rule.FallbackAttribute : null;
+
+                        if (!ExperimentUtilities.IsIncludedInRollout(rule.Seed ?? featureId, context.GetAttributes(), rule.HashAttribute, rolloutFallbackAttribute,
+                                rule.Range, rule.Coverage, rule.HashVersion, _logger))
                         {
                             _logger.LogDebug("Rule {RuleIndex}: excluded by rollout/coverage, continuing", ruleIndex);
                             continue;
@@ -194,6 +197,22 @@ namespace GrowthBook.Providers
                 }
 
                 return GetFeatureResult(feature.DefaultValue ?? null, FeatureResult.SourceId.DefaultValue);
+            }
+        }
+
+        /// <summary>
+        /// Evaluates a condition, failing it instead of throwing when it is malformed.
+        /// </summary>
+        private bool EvalConditionSafely(JToken attributes, JObject condition, JObject savedGroups)
+        {
+            try
+            {
+                return _conditionEvaluator.EvalCondition(attributes, condition, savedGroups);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Condition evaluation failed, treating the condition as not matching");
+                return false;
             }
         }
 
