@@ -77,7 +77,8 @@ jobs:
         id: login
         uses: NuGet/login@v1
         with:
-          user: GrowthBook
+          # nuget.org looks the policy up by the username of whoever created it, not the owning org
+          user: ${{ secrets.NUGET_USER }}
 
       # Publish all NuGet packages to NuGet.org
       # Use --skip-duplicate to prevent errors if a package with the same version already exists.
