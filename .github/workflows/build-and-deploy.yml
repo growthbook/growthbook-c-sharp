@@ -77,7 +77,8 @@ jobs:
         id: login
         uses: NuGet/login@v1
         with:
-          # nuget.org looks the policy up by the username of whoever created it, not the owning org
+          # The GrowthBook org owns the policy, but nuget.org looks it up by the username of the
+          # person who created it, so this is that user's nuget.org username, not the org name
           user: ${{ secrets.NUGET_USER }}
 
       # Publish all NuGet packages to NuGet.org
