@@ -160,6 +160,41 @@ namespace GrowthBook.Tests.CustomTests
                 .HasExperimentViewedListener.Should().BeTrue();
         }
 
+        /// <summary>
+        /// Each plugin gets its own copy of the attributes. One that writes to what it was given must not
+        /// change what the plugins after it are told - a tracking plugin behind it would report someone else.
+        /// </summary>
+        [Fact]
+        public void APluginCannotChangeWhatTheNextPluginIsTold()
+        {
+            var seen = new List<string>();
+
+            var registry = new PluginRegistry(new List<IGrowthBookPlugin>
+            {
+                new AttributesPlugin(attributes => attributes["id"] = "someone-else"),
+                new AttributesPlugin(attributes => seen.Add(attributes["id"]?.ToString())),
+            });
+
+            var attributes = new JObject { ["id"] = "u1" };
+
+            registry.FireFeatureEvaluated("f", MakeFeatureResult(), attributes);
+            registry.FireExperimentViewed(MakeExperiment(), MakeExperimentResult(), attributes);
+
+            seen.Should().Equal(new[] { "u1", "u1" }, "both hooks hand every plugin the attributes that were evaluated");
+        }
+
+        private class AttributesPlugin : IGrowthBookPlugin, IExperimentViewedPlugin, IFeatureEvaluatedPlugin
+        {
+            private readonly Action<JObject> _onEvent;
+
+            public AttributesPlugin(Action<JObject> onEvent) => _onEvent = onEvent;
+
+            public void Init() { }
+            public void Close() { }
+            public void OnExperimentViewed(Experiment e, ExperimentResult r, JObject a) => _onEvent(a);
+            public void OnFeatureEvaluated(string k, FeatureResult r, JObject a) => _onEvent(a);
+        }
+
         private class LifecycleOnlyPlugin : IGrowthBookPlugin
         {
             public int InitCount;

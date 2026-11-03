@@ -285,7 +285,8 @@ broken plugin cannot change what an evaluation returns.
 A plugin belongs to the context it was put on. The instance built from that context closes its
 plugins when it is disposed. An instance built from `Context.Clone()` does not, because
 `GrowthBookFactory` clones once per user and those instances share the same plugin objects - closing
-them when the first user is disposed would stop tracking for everyone else.
+them when the first user is disposed would stop tracking for everyone else. The factory closes them
+instead, when it is disposed, so dispose it after the instances it created.
 
 ### Built-in tracking plugin
 
@@ -356,14 +357,20 @@ Repeats are not sent twice. A feature is evaluated wherever it is checked, so in
 fact would otherwise reach the ingestor on every request. Events are identified by name and
 properties; attributes are deliberately left out of that identity, because one instance belongs to
 one user. If a single instance serves more than one identity, name the attributes that separate them
-in `DedupeKeyAttributes`.
+in `DedupeKeyAttributes`. A plugin shared between instances - `GrowthBookFactory` shares it between
+users - takes every attribute into account when none are named, so one user's events are not taken
+for another's repeats.
+
+A batch dropped because the queue is full is forgotten by that cache as well, so the events in it are
+sent the next time they happen rather than treated as repeats of something that never left.
 
 Batches are sent one at a time, so a slow ingestor costs one request in flight rather than a thread
 per batch. Once `MaxPendingBatches` are waiting, further batches are dropped and a warning logged
 rather than queued without limit.
 
 Disposing the GrowthBook instance closes the plugin, which flushes what is buffered and waits for
-batches already on their way before releasing its HTTP client.
+batches already on their way before releasing its HTTP client. The final batch is sent from the
+thread pool like the others, and the whole wait is bounded by `CloseTimeout`.
 
 ---
 

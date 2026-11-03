@@ -32,7 +32,7 @@ namespace GrowthBook.Plugin
         /// <param name="ownsPlugins">
         /// Whether disposing the owning instance should close these plugins. False when the context was
         /// cloned, because the plugins belong to whoever built the original and other instances are still
-        /// using them.
+        /// using them. A plugin that implements <see cref="IMultiUserAwarePlugin"/> is told so on init.
         /// </param>
         internal PluginRegistry(List<IGrowthBookPlugin> plugins, bool ownsPlugins = true, ILogger logger = null)
         {
@@ -50,6 +50,11 @@ namespace GrowthBook.Plugin
             {
                 try
                 {
+                    if (!_ownsPlugins && plugin is IMultiUserAwarePlugin multiUserAware)
+                    {
+                        multiUserAware.MarkShared();
+                    }
+
                     plugin.Init();
                 }
                 catch (Exception ex)
@@ -66,14 +71,13 @@ namespace GrowthBook.Plugin
                 return;
             }
 
-            // A copy, so a plugin cannot alter the attributes the instance goes on evaluating against.
-            var snapshot = attributes?.DeepClone() as JObject;
-
             foreach (var plugin in _experimentViewed)
             {
                 try
                 {
-                    plugin.OnExperimentViewed(experiment, result, snapshot);
+                    // A copy each, so a plugin can alter neither the attributes the instance goes on
+                    // evaluating against nor what the plugins after it are told.
+                    plugin.OnExperimentViewed(experiment, result, attributes?.DeepClone() as JObject);
                 }
                 catch (Exception ex)
                 {
@@ -89,13 +93,11 @@ namespace GrowthBook.Plugin
                 return;
             }
 
-            var snapshot = attributes?.DeepClone() as JObject;
-
             foreach (var plugin in _featureEvaluated)
             {
                 try
                 {
-                    plugin.OnFeatureEvaluated(featureKey, result, snapshot);
+                    plugin.OnFeatureEvaluated(featureKey, result, attributes?.DeepClone() as JObject);
                 }
                 catch (Exception ex)
                 {
@@ -109,7 +111,8 @@ namespace GrowthBook.Plugin
             if (!_ownsPlugins)
             {
                 // The context was cloned, so these plugins are shared with instances that are still
-                // running. Closing them here would stop their tracking too.
+                // running. Closing them here would stop their tracking too. Whoever made the clones
+                // closes them: the original context's instance, or GrowthBookFactory.Dispose.
                 return;
             }
 

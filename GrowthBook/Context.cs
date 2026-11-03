@@ -136,7 +136,8 @@ namespace GrowthBook
         /// A plugin holds state - a tracking plugin holds a buffer of events not yet sent - so it belongs
         /// to the context it was put on. The instance built from that context closes its plugins when it
         /// is disposed. An instance built from a <see cref="Clone"/> does not, because the same plugin
-        /// objects are still serving the original and every other clone.
+        /// objects are still serving the original and every other clone. A <see cref="GrowthBookFactory"/>
+        /// builds every instance from a clone, so it closes the plugins itself when it is disposed.
         /// </remarks>
         public List<IGrowthBookPlugin> Plugins { get; set; }
 

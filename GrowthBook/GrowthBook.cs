@@ -114,7 +114,6 @@ namespace GrowthBook
             var conditionEvaluatorLogger = _loggerFactory.CreateLogger<ConditionEvaluationProvider>();
 
             _pluginRegistry = new PluginRegistry(context.Plugins, ownsPlugins: !context.PluginsAreShared, logger: _logger);
-            _pluginRegistry.InitAll();
 
             _conditionEvaluator = new ConditionEvaluationProvider(conditionEvaluatorLogger);
             _experimentEvaluator = new ExperimentEvaluationProvider(
@@ -152,6 +151,10 @@ namespace GrowthBook
 
                 _featureRepository = new FeatureRepository(featureRepositoryLogger, featureCache, featureRefreshWorker, remoteEvaluationService);
             }
+
+            // Last, once nothing above can throw. A constructor that fails returns no instance to
+            // dispose, so plugins started before the failure would never be closed.
+            _pluginRegistry.InitAll();
         }
 
         private void ApplyEncryptedFeatures(Context context)

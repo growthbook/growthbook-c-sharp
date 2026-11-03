@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using GrowthBook.Plugin;
+using Microsoft.Extensions.Logging.Abstractions;
 using Newtonsoft.Json.Linq;
 using Xunit;
 
@@ -590,6 +591,111 @@ namespace GrowthBook.Tests.CustomTests
                 "a, b and c the first time, then b again once it had been evicted - but not a, which was kept alive by being seen");
         }
 
+        /// <summary>
+        /// A batch dropped because the queue was full never reached the ingestor, so what it held is not
+        /// a repeat. An event that keeps recurring keeps its cache entry fresh, so without forgetting it a
+        /// hot flag first seen while the queue was full would never be sent at all.
+        /// </summary>
+        [Fact]
+        public void AnEventInADroppedBatchIsSentTheNextTimeItHappens()
+        {
+            using var gate = new ManualResetEventSlim(false);
+
+            var handler = new RecordingGatedHandler(gate);
+
+            var plugin = NewPlugin(handler, c =>
+            {
+                c.BatchSize = 1;
+                c.MaxPendingBatches = 1;
+            });
+
+            plugin.OnFeatureEvaluated("first", MakeFeatureResult(), null);
+            plugin.OnFeatureEvaluated("hot", MakeFeatureResult(), null);
+
+            gate.Set();
+
+            // The queue frees up once the first send has finished, which a test cannot observe
+            // directly; each attempt before that is dropped and forgotten again.
+            var sent = false;
+
+            for (var attempt = 0; attempt < 250 && !sent; attempt++)
+            {
+                plugin.OnFeatureEvaluated("hot", MakeFeatureResult(), null);
+
+                sent = SpinWait.SpinUntil(() => handler.Sent("hot"), TimeSpan.FromMilliseconds(20));
+            }
+
+            plugin.Close();
+
+            sent.Should().BeTrue("the first \"hot\" was dropped, not sent, so the next one is not a repeat");
+        }
+
+        /// <summary>
+        /// A factory shares one plugin between its users. Two of them seeing the same value are two facts,
+        /// not one fact and a repeat.
+        /// </summary>
+        [Fact]
+        public void UsersOfOneFactoryAreNotTakenForEachOthersRepeats()
+        {
+            var handler = new CapturingHandler(expectedPosts: 1);
+            var plugin = NewPlugin(handler);
+
+            var factory = new GrowthBookFactory(new Context
+            {
+                Features = new Dictionary<string, Feature>
+                {
+                    ["flag"] = new Feature { DefaultValue = JToken.FromObject(true) },
+                },
+                LoggerFactory = NullLoggerFactory.Instance,
+                Plugins = new List<IGrowthBookPlugin> { plugin },
+            });
+
+            using (var first = factory.CreateForUser(new { id = "user-1" }))
+            {
+                first.IsOn("flag");
+                first.IsOn("flag");
+            }
+
+            using (var second = factory.CreateForUser(new { id = "user-2" }))
+            {
+                second.IsOn("flag");
+            }
+
+            factory.Dispose();
+
+            SentEvents(handler).Should().Be(2, "one per user - and the first user's second check is still a repeat");
+        }
+
+        /// <summary>
+        /// Disposing on a UI thread must not wait on a send that needs that same thread to finish. The
+        /// final batch goes out from the thread pool like every other, inside the close timeout.
+        /// </summary>
+        [Fact]
+        public void ClosingOnAThreadNothingElseCanRunOnDoesNotHang()
+        {
+            var handler = new ResumesOnCallerHandler();
+            var plugin = NewPlugin(handler);
+
+            plugin.OnFeatureEvaluated("flag", MakeFeatureResult(), null);
+
+            var closing = new Thread(() =>
+            {
+                // Work posted here never runs, as on a UI thread that is blocked waiting.
+                SynchronizationContext.SetSynchronizationContext(new NeverRunsSynchronizationContext());
+
+                plugin.Close();
+            })
+            {
+                IsBackground = true
+            };
+
+            closing.Start();
+
+            closing.Join(TimeSpan.FromSeconds(15)).Should().BeTrue("Close is bounded by CloseTimeout whatever the handler does");
+
+            handler.CompletedSends.Should().Be(1, "and the final batch was still delivered, from the thread pool");
+        }
+
         private static GrowthBookTrackingPlugin NewPlugin(HttpMessageHandler handler, Action<TrackingPluginConfig> configure = null)
         {
             var config = new TrackingPluginConfig
@@ -652,6 +758,57 @@ namespace GrowthBook.Tests.CustomTests
 
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK));
             }
+        }
+
+        /// <summary>
+        /// Holds every send until the gate opens, and records which features each one carried.
+        /// </summary>
+        private sealed class RecordingGatedHandler : HttpMessageHandler
+        {
+            private readonly ManualResetEventSlim _gate;
+            private readonly List<string> _features = new List<string>();
+
+            public RecordingGatedHandler(ManualResetEventSlim gate) => _gate = gate;
+
+            public bool Sent(string feature)
+            {
+                lock (_features) return _features.Contains(feature);
+            }
+
+            protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                var events = JArray.Parse(await request.Content.ReadAsStringAsync());
+
+                _gate.Wait(TimeSpan.FromSeconds(10));
+
+                lock (_features) _features.AddRange(events.Select(e => e["properties"]?["feature"]?.Value<string>()));
+
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            }
+        }
+
+        /// <summary>
+        /// Resumes on whatever context it was called from, as a handler written for a UI app might.
+        /// </summary>
+        private sealed class ResumesOnCallerHandler : HttpMessageHandler
+        {
+            private int _completed;
+
+            public int CompletedSends => Volatile.Read(ref _completed);
+
+            protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                await Task.Yield();
+
+                Interlocked.Increment(ref _completed);
+
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            }
+        }
+
+        private sealed class NeverRunsSynchronizationContext : SynchronizationContext
+        {
+            public override void Post(SendOrPostCallback d, object state) { }
         }
 
         private sealed class DisposalTrackingHandler : HttpMessageHandler
