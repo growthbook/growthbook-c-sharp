@@ -28,6 +28,13 @@ namespace GrowthBook.Plugin
         [JsonProperty("attributes")]
         public JObject Attributes { get; private set; }
 
+        /// <summary>
+        /// The key the tracking plugin deduplicated this event under, so a batch that is never sent can
+        /// be forgotten again. Not sent.
+        /// </summary>
+        [JsonIgnore]
+        internal string DedupeKey { get; set; }
+
         private TrackingEvent() {}
 
         /// <summary>

@@ -151,7 +151,7 @@ namespace GrowthBook.Tests.CustomTests
                 },
                 LoggerFactory = NullLoggerFactory.Instance,
                 Plugins = new List<IGrowthBookPlugin> { plugin },
-                // TrackingCallback = null навмисно
+                // No TrackingCallback, deliberately
             });
 
             gb.EvalFeature("flag-a");
@@ -321,28 +321,7 @@ namespace GrowthBook.Tests.CustomTests
                 Enabled = true,
                 Attributes = new JObject { ["id"] = "u1" },
                 TrackingCallback = (e, r) => throw new System.InvalidOperationException("the consumer's callback is broken"),
-                Features = new Dictionary<string, Feature>
-                {
-                    ["flag-a"] = new Feature
-                    {
-                        DefaultValue = JToken.FromObject(false),
-                        Rules = new List<FeatureRule>
-                        {
-                            new FeatureRule
-                            {
-                                Force = JToken.FromObject(true),
-                                Tracks = new List<TrackData>
-                                {
-                                    new TrackData
-                                    {
-                                        Experiment = new Experiment { Key = "exp-1" },
-                                        Result = new ExperimentResult { VariationId = 1, HashAttribute = "id", HashValue = "u1" }
-                                    }
-                                }
-                            }
-                        }
-                    },
-                },
+                Features = ForcedRuleWithTrack(),
                 LoggerFactory = NullLoggerFactory.Instance,
                 Plugins = new List<IGrowthBookPlugin> { plugin },
             });
@@ -351,6 +330,110 @@ namespace GrowthBook.Tests.CustomTests
 
             plugin.Experiments.Should().ContainSingle(e => e.Experiment.Key == "exp-1",
                 "the plugin event is dispatched whatever the legacy callback did");
+        }
+
+        /// <summary>
+        /// A forced rule matches on every evaluation, but the assignment it carries is one assignment,
+        /// and a plugin is promised one call per distinct assignment.
+        /// </summary>
+        [Fact]
+        public void AForcedRuleTrackIsReportedOnceHoweverOftenTheFlagIsChecked()
+        {
+            var plugin = new RecordingPlugin();
+            var callbacks = 0;
+
+            using var gb = new GrowthBookSdk.GrowthBook(new Context
+            {
+                Enabled = true,
+                Attributes = new JObject { ["id"] = "u1" },
+                TrackingCallback = (e, r) => callbacks++,
+                Features = ForcedRuleWithTrack(),
+                LoggerFactory = NullLoggerFactory.Instance,
+                Plugins = new List<IGrowthBookPlugin> { plugin },
+            });
+
+            for (var i = 0; i < 3; i++)
+            {
+                gb.EvalFeature("flag-a").Value.Value<bool>().Should().BeTrue("the forced value is still returned every time");
+            }
+
+            plugin.Experiments.Should().ContainSingle(e => e.Experiment.Key == "exp-1", "three checks, one assignment");
+            callbacks.Should().Be(1, "the callback gets the same guard, as in the JavaScript SDK");
+        }
+
+        private static Dictionary<string, Feature> ForcedRuleWithTrack() => new Dictionary<string, Feature>
+        {
+            ["flag-a"] = new Feature
+            {
+                DefaultValue = JToken.FromObject(false),
+                Rules = new List<FeatureRule>
+                {
+                    new FeatureRule
+                    {
+                        Force = JToken.FromObject(true),
+                        Tracks = new List<TrackData>
+                        {
+                            new TrackData
+                            {
+                                Experiment = new Experiment { Key = "exp-1" },
+                                Result = new ExperimentResult { VariationId = 1, HashAttribute = "id", HashValue = "u1" }
+                            }
+                        }
+                    }
+                }
+            },
+        };
+
+        /// <summary>
+        /// A constructor that throws returns nothing to dispose. Plugins started before the failure would
+        /// keep running with nobody left to close them.
+        /// </summary>
+        [Fact]
+        public void AConstructorThatFailsStartsNoPlugins()
+        {
+            var plugin = new RecordingPlugin();
+
+            var build = () => new GrowthBookSdk.GrowthBook(new Context
+            {
+                // Encrypted features without a key to decrypt them with: the constructor refuses them.
+                EncryptedFeatures = "encrypted-payload",
+                LoggerFactory = NullLoggerFactory.Instance,
+                Plugins = new List<IGrowthBookPlugin> { plugin },
+            });
+
+            build.Should().Throw<System.ArgumentException>();
+
+            plugin.InitCount.Should().Be(0, "nothing was started that nothing could close");
+        }
+
+        /// <summary>
+        /// Every instance a factory creates is built from a clone, and none of them closes the plugins
+        /// they share. The factory does, once, when it is disposed.
+        /// </summary>
+        [Fact]
+        public void DisposingTheFactoryClosesThePluginsItsUsersShared()
+        {
+            var plugin = new RecordingPlugin();
+
+            var factory = new GrowthBookFactory(new Context
+            {
+                Features = new Dictionary<string, Feature>
+                {
+                    ["flag-a"] = new Feature { DefaultValue = JToken.FromObject(true) },
+                },
+                LoggerFactory = NullLoggerFactory.Instance,
+                Plugins = new List<IGrowthBookPlugin> { plugin },
+            });
+
+            using (factory.CreateForUser(new { id = "u1" })) { }
+            using (factory.CreateForUser(new { id = "u2" })) { }
+
+            plugin.CloseCount.Should().Be(0, "users come and go; the plugin outlives them");
+
+            factory.Dispose();
+            factory.Dispose();
+
+            plugin.CloseCount.Should().Be(1, "the factory closes what it was given, and only once");
         }
 
         /// <summary>

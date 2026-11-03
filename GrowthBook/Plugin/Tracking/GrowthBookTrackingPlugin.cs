@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http;
 using System.Text;
 using System.Threading;
@@ -24,7 +25,7 @@ namespace GrowthBook.Plugin
     /// is null or empty.
     /// </para>
     /// </summary>
-    public sealed class GrowthBookTrackingPlugin : IGrowthBookPlugin, IExperimentViewedPlugin, IFeatureEvaluatedPlugin
+    public sealed class GrowthBookTrackingPlugin : IGrowthBookPlugin, IExperimentViewedPlugin, IFeatureEvaluatedPlugin, IMultiUserAwarePlugin
     {
         private readonly TrackingPluginConfig _config;
         private readonly HttpClient _httpClient;
@@ -43,6 +44,11 @@ namespace GrowthBook.Plugin
 
         private Timer _timer;
         private bool _closed;
+
+        /// <summary>
+        /// Whether instances that may belong to different users are sending events through this plugin.
+        /// </summary>
+        private volatile bool _sharedAcrossUsers;
 
         /// <summary>
         /// The batches handed over for sending, one after another.
@@ -81,6 +87,8 @@ namespace GrowthBook.Plugin
             }
         }
 
+        void IMultiUserAwarePlugin.MarkShared() => _sharedAcrossUsers = true;
+
         public void OnExperimentViewed(Experiment experiment, ExperimentResult result, JObject attributes)
         {
             if (_disabled) return;
@@ -97,8 +105,7 @@ namespace GrowthBook.Plugin
 
         public void Close()
         {
-            List<TrackingEvent> toFlush;
-            Task inFlight;
+            Task pending;
 
             lock (_lock)
             {
@@ -108,15 +115,25 @@ namespace GrowthBook.Plugin
                 _timer?.Dispose();
                 _timer = null;
 
-                toFlush = DrainBuffer();
-                inFlight = _flushChain;
+                var toFlush = DrainBuffer();
+
+                // The last batch joins the chain instead of being sent from here. Sent from here it would
+                // start on the caller's thread, and a caller blocking a UI thread on a handler that resumes
+                // on that same thread never wakes up. It is the last batch there will be, so the pending
+                // limit does not apply to it.
+                if (toFlush.Count > 0)
+                {
+                    ChainFlush(toFlush);
+                }
+
+                pending = _flushChain;
             }
 
             // Batches already taken out of the buffer are the ones most easily lost: the buffer looks
             // empty, so without waiting here the client below would be disposed out from under them.
             try
             {
-                if (!inFlight.Wait(_config.ResolvedCloseTimeout()))
+                if (!pending.Wait(_config.ResolvedCloseTimeout()))
                 {
                     _logger?.LogWarning("Tracking flushes did not finish within {Timeout}; closing anyway", _config.ResolvedCloseTimeout());
                 }
@@ -124,18 +141,6 @@ namespace GrowthBook.Plugin
             catch (Exception ex)
             {
                 _logger?.LogWarning(ex, "A tracking flush failed while closing: {Message}", ex.Message);
-            }
-
-            if (toFlush.Count > 0)
-            {
-                try
-                {
-                    FlushBatchAsync(toFlush).GetAwaiter().GetResult();
-                }
-                catch (Exception ex)
-                {
-                    _logger?.LogWarning(ex, "Final tracking flush failed: {Message}", ex.Message);
-                }
             }
 
             if (_ownsHttpClient)
@@ -147,7 +152,7 @@ namespace GrowthBook.Plugin
         private void Enqueue(TrackingEvent trackingEvent)
         {
             // Built outside the lock: it is only serialisation, and it is the expensive part.
-            var dedupeKey = BuildDedupeKey(trackingEvent);
+            trackingEvent.DedupeKey = BuildDedupeKey(trackingEvent);
 
             lock (_lock)
             {
@@ -161,7 +166,7 @@ namespace GrowthBook.Plugin
                     return;
                 }
 
-                if (IsRecentlySeen(dedupeKey))
+                if (IsRecentlySeen(trackingEvent.DedupeKey))
                 {
                     return;
                 }
@@ -218,9 +223,24 @@ namespace GrowthBook.Plugin
                     "Dropping a tracking batch of {Count} event(s): {Pending} batches are already waiting to be sent",
                     batch.Count, _pendingBatches);
 
+                // Enqueue remembered these as sent. They were not, and an event that keeps recurring keeps
+                // its entry fresh, so a hot flag first seen while the queue was full would never be sent.
+                foreach (var dropped in batch)
+                {
+                    Forget(dropped.DedupeKey);
+                }
+
                 return;
             }
 
+            ChainFlush(batch);
+        }
+
+        /// <summary>
+        /// Appends a batch to the send chain, to run on the thread pool. Must be called while holding <see cref="_lock"/>.
+        /// </summary>
+        private void ChainFlush(List<TrackingEvent> batch)
+        {
             _pendingBatches++;
 
             _flushChain = _flushChain.ContinueWith(
@@ -255,6 +275,13 @@ namespace GrowthBook.Plugin
         /// unless <see cref="TrackingPluginConfig.DedupeKeyAttributes"/> names some, because an
         /// instance already belongs to one user - including them would only make every event unique
         /// again the moment anything unrelated about that user changed.
+        /// <para>
+        /// A plugin shared by instances for different users - <see cref="GrowthBookFactory"/> builds one
+        /// per user from the same context - takes every attribute into account instead, as the
+        /// JavaScript SDK does on a multi-user client. Otherwise the second user to see a value would be
+        /// taken for a repeat of the first. That covers experiment events too, because their properties
+        /// here do not carry the unit's hash value.
+        /// </para>
         /// </remarks>
         private string BuildDedupeKey(TrackingEvent trackingEvent)
         {
@@ -264,7 +291,13 @@ namespace GrowthBook.Plugin
                 ["properties"] = trackingEvent.Properties
             };
 
-            foreach (var attribute in _config.DedupeKeyAttributes ?? Array.Empty<string>())
+            var identity = _config.DedupeKeyAttributes?.Count > 0
+                ? _config.DedupeKeyAttributes
+                : _sharedAcrossUsers && trackingEvent.Attributes != null
+                    ? trackingEvent.Attributes.Properties().Select(property => property.Name).ToList()
+                    : (IList<string>)Array.Empty<string>();
+
+            foreach (var attribute in identity)
             {
                 key["attr:" + attribute] = trackingEvent.Attributes?[attribute];
             }
@@ -305,6 +338,18 @@ namespace GrowthBook.Plugin
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// Removes an event from the recently-seen cache. Must be called while holding <see cref="_lock"/>.
+        /// </summary>
+        private void Forget(string dedupeKey)
+        {
+            if (dedupeKey != null && _recentEvents.TryGetValue(dedupeKey, out var node))
+            {
+                _recentEventOrder.Remove(node);
+                _recentEvents.Remove(dedupeKey);
+            }
         }
 
         private List<TrackingEvent> DrainBuffer()

@@ -89,7 +89,8 @@ namespace GrowthBook.Plugin
         /// <remarks>
         /// Empty by default, because an instance already belongs to one user. Name attributes here
         /// when one instance serves more than one identity and the same evaluation for two of them
-        /// has to be reported twice.
+        /// has to be reported twice. A plugin shared by several instances, as <see cref="GrowthBookFactory"/>
+        /// shares it between users, already takes every attribute into account when none are named.
         /// </remarks>
         public IList<string> DedupeKeyAttributes { get; set; }
 

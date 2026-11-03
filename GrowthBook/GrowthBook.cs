@@ -109,7 +109,6 @@ namespace GrowthBook
             var conditionEvaluatorLogger = _loggerFactory.CreateLogger<ConditionEvaluationProvider>();
 
             _pluginRegistry = new PluginRegistry(context.Plugins, ownsPlugins: !context.PluginsAreShared, logger: _logger);
-            _pluginRegistry.InitAll();
 
             _conditionEvaluator = new ConditionEvaluationProvider(conditionEvaluatorLogger);
 
@@ -138,6 +137,10 @@ namespace GrowthBook
 
                 _featureRepository = new FeatureRepository(featureRepositoryLogger, featureCache, featureRefreshWorker, remoteEvaluationService);
             }
+
+            // Last, once nothing above can throw. A constructor that fails returns no instance to
+            // dispose, so plugins started before the failure would never be closed.
+            _pluginRegistry.InitAll();
         }
 
         private void ApplyEncryptedFeatures(Context context)
@@ -639,18 +642,14 @@ namespace GrowthBook
                         {
                             foreach (var trackData in rule.Tracks)
                             {
-                                // Separate blocks on purpose: a consumer's callback throwing is not a
-                                // reason for the plugins never to hear about the same assignment.
-                                try
+                                if (trackData?.Experiment == null || trackData.Result == null)
                                 {
-                                    _trackingCallback?.Invoke(trackData.Experiment, trackData.Result);
-                                }
-                                catch (Exception ex)
-                                {
-                                    _logger.LogError(ex, $"Encountered unhandled exception in tracking callback for feature ID '{featureId}'");
+                                    continue;
                                 }
 
-                                _pluginRegistry.FireExperimentViewed(trackData.Experiment, trackData.Result, Attributes);
+                                // The same guard as any other assignment, as in the JavaScript SDK: a forced
+                                // rule matches on every evaluation, and each one would report it again.
+                                TryToTrack(trackData.Experiment, trackData.Result);
                             }
                         }
 

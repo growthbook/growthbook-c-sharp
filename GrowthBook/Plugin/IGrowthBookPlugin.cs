@@ -31,6 +31,7 @@ namespace GrowthBook.Plugin
         /// <remarks>
         /// The place to flush buffered data and release resources. A plugin reached through a cloned
         /// context is shared with other instances and is not closed by them; see <see cref="Context.Clone"/>.
+        /// Plugins given to a <see cref="GrowthBookFactory"/> are closed when the factory is disposed.
         /// </remarks>
         void Close();
     }
