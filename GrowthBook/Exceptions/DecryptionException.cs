@@ -13,5 +13,10 @@ namespace GrowthBook.Exceptions
             : base(message, innerException)
         {
         }
+
+        public DecryptionException(string message)
+            : base(message)
+        {
+        }
     }
 }
