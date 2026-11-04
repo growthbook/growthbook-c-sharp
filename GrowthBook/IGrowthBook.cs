@@ -58,6 +58,16 @@ namespace GrowthBook
         IDisposable SubscribeAsync(Func<Experiment, ExperimentResult, Task> callback);
 
         /// <summary>
+        /// Replaces the feature usage callback set on <see cref="Context.OnFeatureUsage"/>, so it can be
+        /// changed after construction. Pass <c>null</c> to stop reporting feature usage.
+        /// </summary>
+        /// <param name="callback">
+        /// Invoked with the feature key and its result. Deduped per key: fires the first time a feature is
+        /// seen and again only when its resolved value changes.
+        /// </param>
+        void SetFeatureUsageCallback(Action<string, FeatureResult> callback);
+
+        /// <summary>
         /// Gets the value of a feature cast to the specified type. This is a blocking operation and should not be used from a UI thread.
         /// </summary>
         /// <typeparam name="T"></typeparam>
