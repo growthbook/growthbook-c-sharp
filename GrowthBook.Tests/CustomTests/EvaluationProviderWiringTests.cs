@@ -35,7 +35,7 @@ public class EvaluationProviderWiringTests
         }
     }
 
-    private static (FeatureEvaluationProvider Features, List<string> Messages) BuildEvaluators()
+    private static (FeatureEvaluationProvider Features, ExperimentEvaluationProvider Experiments, List<string> Messages) BuildEvaluators()
     {
         var messages = new List<string>();
         var logger = new CapturingLogger(messages);
@@ -47,7 +47,7 @@ public class EvaluationProviderWiringTests
         features.ExperimentEvaluator = experiments;
         experiments.FeatureEvaluator = features;
 
-        return (features, messages);
+        return (features, experiments, messages);
     }
 
     private static EvaluationContext ContextFor(IDictionary<string, Feature> features, ISet<string> tracked = null, Action<Experiment, ExperimentResult> onTracked = null) =>
@@ -66,7 +66,7 @@ public class EvaluationProviderWiringTests
     [Fact]
     public void ARuleSkippedByItsFilterSaysWhy()
     {
-        var (features, messages) = BuildEvaluators();
+        var (features, _, messages) = BuildEvaluators();
 
         var context = ContextFor(new Dictionary<string, Feature>
         {
@@ -101,7 +101,7 @@ public class EvaluationProviderWiringTests
     [Fact]
     public void ThePrerequisiteIsEvaluatedByTheWiredPeer()
     {
-        var (features, _) = BuildEvaluators();
+        var (features, _, _) = BuildEvaluators();
 
         var context = ContextFor(new Dictionary<string, Feature>
         {
@@ -133,7 +133,7 @@ public class EvaluationProviderWiringTests
     [Fact]
     public void AForcedRulesTracksAreReportedOncePerRequest()
     {
-        var (features, _) = BuildEvaluators();
+        var (features, _, _) = BuildEvaluators();
 
         var reported = new List<string>();
         var tracked = new HashSet<string>();
@@ -172,5 +172,68 @@ public class EvaluationProviderWiringTests
 
         reported.Should().Equal(new[] { "exp-1" },
             "the same exposure reported twice is a duplicate the caller has to pay for and then undo");
+    }
+
+    /// <summary>
+    /// A feature's experiment rule is run by the experiment evaluator, so this only works through the
+    /// feature evaluator's link to its peer.
+    /// </summary>
+    [Fact]
+    public void AFeaturesExperimentRuleIsRunByTheWiredExperimentEvaluator()
+    {
+        var (features, _, _) = BuildEvaluators();
+
+        var context = ContextFor(new Dictionary<string, Feature>
+        {
+            ["flag"] = new Feature
+            {
+                DefaultValue = JToken.FromObject(false),
+                Rules = new List<FeatureRule>
+                {
+                    new FeatureRule
+                    {
+                        Key = "exp",
+                        Variations = JArray.FromObject(new[] { false, true }),
+                        Weights = new List<double> { 0, 1 },
+                        Coverage = 1
+                    }
+                }
+            }
+        });
+
+        var result = features.EvaluateFeature("flag", context);
+
+        result.Source.Should().Be(FeatureResult.SourceId.Experiment);
+        result.Value.Value<bool>().Should().BeTrue();
+    }
+
+    /// <summary>
+    /// An experiment's prerequisite is a feature, evaluated by the feature evaluator, so this only works
+    /// through the experiment evaluator's link to its peer.
+    /// </summary>
+    [Theory]
+    [InlineData(true, true)]
+    [InlineData(false, false)]
+    public void AnExperimentsPrerequisiteIsEvaluatedByTheWiredFeatureEvaluator(bool parentValue, bool expectedInExperiment)
+    {
+        var (_, experiments, _) = BuildEvaluators();
+
+        var context = ContextFor(new Dictionary<string, Feature>
+        {
+            ["parent"] = new Feature { DefaultValue = JToken.FromObject(parentValue) }
+        });
+
+        var experiment = new Experiment
+        {
+            Key = "exp",
+            Variations = JArray.FromObject(new[] { 0, 1 }),
+            Coverage = 1,
+            ParentConditions = new List<ParentCondition>
+            {
+                new ParentCondition { Id = "parent", Condition = JObject.Parse("{\"value\":true}") }
+            }
+        };
+
+        experiments.RunExperiment(experiment, null, context).InExperiment.Should().Be(expectedInExperiment);
     }
 }
