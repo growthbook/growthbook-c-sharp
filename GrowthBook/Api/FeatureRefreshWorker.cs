@@ -38,6 +38,7 @@ namespace GrowthBook.Api
         private readonly object _sseClientLock = new object();
         private SSEClient _sseClient;
         private bool _isDisposed;
+        private readonly Func<Func<Task>, Task> _startConnection = work => Task.Run(work);
         private CancellationTokenSource _refreshWorkerCancellation = new CancellationTokenSource();
 
         public FeatureRefreshWorker(ILogger<FeatureRefreshWorker> logger, IHttpClientFactory httpClientFactory, GrowthBookConfigurationOptions config, IGrowthBookFeatureCache cache)
@@ -174,11 +175,23 @@ namespace GrowthBook.Api
                 };
 
                 // Start the connection
-                _ = Task.Run(async () =>
+                _ = _startConnection(async () =>
                 {
+                    Task connecting;
+
+                    lock (_sseClientLock)
+                    {
+                        if (_isDisposed || !ReferenceEquals(_sseClient, client))
+                        {
+                            return;
+                        }
+
+                        connecting = client.ConnectAsync(token);
+                    }
+
                     try
                     {
-                        await client.ConnectAsync(token).ConfigureAwait(false);
+                        await connecting.ConfigureAwait(false);
                     }
                     catch (Exception ex)
                     {

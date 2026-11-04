@@ -1,7 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http;
 using System.Reflection;
+using System.Threading;
+using System.Threading.Tasks;
 using FluentAssertions;
 using GrowthBook.Api;
 using GrowthBook.Api.SSE;
@@ -20,11 +23,12 @@ public class RefreshWorkerSseLifetimeTests
 {
     private const BindingFlags Private = BindingFlags.Instance | BindingFlags.NonPublic;
 
-    private static FeatureRefreshWorker NewWorker(ILogger<FeatureRefreshWorker> logger = null)
+    private static FeatureRefreshWorker NewWorker(ILogger<FeatureRefreshWorker> logger = null, HttpMessageHandler handler = null)
     {
         var httpClientFactory = Substitute.For<IHttpClientFactory>();
 
-        httpClientFactory.CreateClient(Arg.Any<string>()).Returns(_ => new HttpClient());
+        httpClientFactory.CreateClient(Arg.Any<string>())
+            .Returns(_ => handler is null ? new HttpClient() : new HttpClient(handler, disposeHandler: false));
 
         return new FeatureRefreshWorker(
             logger ?? NullLogger<FeatureRefreshWorker>.Instance,
@@ -106,6 +110,79 @@ public class RefreshWorkerSseLifetimeTests
         // disposed cancellation source and is logged. Nothing is attempted at all now.
         messages.Should().NotContain(m => m.Contains("Error initializing SSE client"));
         messages.Should().NotContain(m => m.Contains("starting SSE client now"));
+    }
+
+    /// <summary>
+    /// Refreshes are not serialized, so two can finish before the connection the first one started
+    /// gets to run. The second finds the first client idle and replaces it. If the first connection
+    /// still went ahead, two streams would be open, and a response that disables SSE would only stop
+    /// the replacement - the discarded client would go on receiving updates.
+    /// </summary>
+    [Fact]
+    public void AClientReplacedBeforeItsConnectionStartsNeverConnects()
+    {
+        var handler = new HeldOpenSseHandler();
+        var worker = NewWorker(handler: handler);
+        var queued = new List<Func<Task>>();
+
+        // Hold the connections back, as a busy thread pool would.
+        typeof(FeatureRefreshWorker).GetField("_startConnection", Private)
+            .SetValue(worker, (Func<Func<Task>, Task>)(work =>
+            {
+                queued.Add(work);
+
+                return Task.CompletedTask;
+            }));
+
+        var ensureMode = typeof(FeatureRefreshWorker).GetMethod("EnsureCorrectRefreshModeIsActive", Private);
+        var sseEnabled = typeof(FeatureRefreshWorker).GetField("_isServerSentEventsEnabled", Private);
+
+        sseEnabled.SetValue(worker, true);
+
+        ensureMode.Invoke(worker, null);
+        var replaced = (SSEClient)CurrentClient(worker);
+
+        ensureMode.Invoke(worker, null);
+        var current = (SSEClient)CurrentClient(worker);
+
+        current.Should().NotBeSameAs(replaced, "the second refresh found the first client not yet connected and replaced it");
+        queued.Should().HaveCount(2);
+
+        var connections = queued.Select(work => work()).ToArray();
+
+        handler.Connections.Should().Be(1, "only the client the worker still holds may open a stream");
+        current.ConnectionStatus.Should().Be(SSEConnectionStatus.Connecting);
+
+        // A later response disables SSE: nothing may be left streaming.
+        sseEnabled.SetValue(worker, false);
+        ensureMode.Invoke(worker, null);
+
+        current.ConnectionStatus.Should().Be(SSEConnectionStatus.Disconnected);
+        replaced.ConnectionStatus.Should().Be(SSEConnectionStatus.Disconnected,
+            "a client the worker let go of is out of reach of the switch that turns SSE off");
+
+        worker.Dispose();
+
+        Task.WaitAll(connections, TimeSpan.FromSeconds(10)).Should().BeTrue("disposing the worker ends every connection it started");
+    }
+
+    /// <summary>
+    /// Counts the streams opened and holds each one open until it is cancelled, as a live SSE endpoint does.
+    /// </summary>
+    private sealed class HeldOpenSseHandler : HttpMessageHandler
+    {
+        private int _connections;
+
+        public int Connections => Volatile.Read(ref _connections);
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _connections);
+
+            await Task.Delay(Timeout.Infinite, cancellationToken);
+
+            throw new OperationCanceledException(cancellationToken);
+        }
     }
 
     private sealed class CapturingLogger : ILogger<FeatureRefreshWorker>
