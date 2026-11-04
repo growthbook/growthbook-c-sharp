@@ -393,6 +393,31 @@ public class GrowthBookClientTests
         }
     }
 
+    /// <summary>
+    /// A repository that answers without features is a failed load, not an empty one, and the caller has to be
+    /// able to tell the two apart.
+    /// </summary>
+    [Fact]
+    public async Task InitializeAsyncReportsWhetherAnythingWasLoaded()
+    {
+        var empty = Substitute.For<IGrowthBookFeatureRepository>();
+        empty.GetFeatures(Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IDictionary<string, Feature>>(null));
+
+        using (var client = new GrowthBookClient(new Options { LoggerFactory = NullLoggerFactory.Instance, FeatureRepository = empty }))
+        {
+            (await client.InitializeAsync()).Success.Should().BeFalse("the repository returned no features");
+        }
+
+        using (var client = CreateClient())
+        {
+            var result = await client.InitializeAsync();
+
+            result.Success.Should().BeTrue();
+            result.FeatureCount.Should().Be(CreateFeatures().Count);
+        }
+    }
+
     [Fact]
     public async Task GetFeatures_ReturnsLoadedFeatures()
     {

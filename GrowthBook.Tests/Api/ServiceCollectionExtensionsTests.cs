@@ -189,6 +189,98 @@ public class ServiceCollectionExtensionsTests
     }
 
     /// <summary>
+    /// The API can answer 200 with no features at all. That is a failed load like any other, so failing
+    /// fast has to apply to it too, not only to a load that throws.
+    /// </summary>
+    [Fact]
+    public void ANoFeaturesResponseFailsStartupWhenAskedTo()
+    {
+        var services = new ServiceCollection();
+
+        services.AddGrowthBookClient(NoFeaturesOptions(throwOnFailure: true, NullLoggerFactory.Instance));
+
+        using var provider = services.BuildServiceProvider();
+
+        provider.Invoking(p => p.GetRequiredService<GrowthBookClient>())
+            .Should().Throw<FeatureLoadException>();
+    }
+
+    /// <summary>
+    /// Without failing fast the client still starts, but a load that brought nothing back is logged as the
+    /// failure it is rather than passing in silence.
+    /// </summary>
+    [Fact]
+    public void ANoFeaturesResponseIsLoggedWhenStartupGoesOn()
+    {
+        var logged = new List<(LogLevel Level, string Message)>();
+        var services = new ServiceCollection();
+
+        services.AddGrowthBookClient(NoFeaturesOptions(throwOnFailure: false, new CapturingLoggerFactory(logged)));
+
+        using var provider = services.BuildServiceProvider();
+
+        provider.Invoking(p => p.GetRequiredService<GrowthBookClient>()).Should().NotThrow();
+
+        lock (logged)
+        {
+            logged.Should().Contain(entry => entry.Level == LogLevel.Error && entry.Message.Contains("could not load its features"));
+        }
+    }
+
+    private static Options NoFeaturesOptions(bool throwOnFailure, ILoggerFactory loggerFactory) => new Options
+    {
+        ClientKey = "sdk-test",
+        ApiHost = "https://growthbook.test",
+        LoggerFactory = loggerFactory,
+        ThrowOnInitializationFailure = throwOnFailure,
+        HttpClientFactory = new StaticResponseHttpClientFactory("{}")
+    };
+
+    private sealed class StaticResponseHttpClientFactory : HttpClientFactory
+    {
+        private readonly string _body;
+
+        public StaticResponseHttpClientFactory(string body) => _body = body;
+
+        protected internal override System.Net.Http.HttpClient CreateClient(Func<System.Net.Http.HttpClient, System.Net.Http.HttpClient> configure) =>
+            configure(new System.Net.Http.HttpClient(new StaticResponseHandler(_body)));
+    }
+
+    private sealed class StaticResponseHandler : System.Net.Http.HttpMessageHandler
+    {
+        private readonly string _body;
+
+        public StaticResponseHandler(string body) => _body = body;
+
+        protected override Task<System.Net.Http.HttpResponseMessage> SendAsync(System.Net.Http.HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new System.Net.Http.StringContent(_body, System.Text.Encoding.UTF8, "application/json")
+            });
+    }
+
+    private sealed class CapturingLoggerFactory : ILoggerFactory, ILogger
+    {
+        private readonly List<(LogLevel Level, string Message)> _logged;
+
+        public CapturingLoggerFactory(List<(LogLevel Level, string Message)> logged) => _logged = logged;
+
+        public ILogger CreateLogger(string categoryName) => this;
+        public void AddProvider(ILoggerProvider provider) { }
+        public void Dispose() { }
+        public IDisposable BeginScope<TState>(TState state) => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception exception, Func<TState, Exception, string> formatter)
+        {
+            lock (_logged)
+            {
+                _logged.Add((logLevel, formatter(state, exception)));
+            }
+        }
+    }
+
+    /// <summary>
     /// An application and a library it depends on can both register the client. AddSingleton would
     /// leave two descriptors, and two clients each polling the API.
     /// </summary>

@@ -1,5 +1,6 @@
 using System;
 using System.Threading.Tasks;
+using GrowthBook.Exceptions;
 using GrowthBook.MultiUser;
 using GrowthBook.MultiUser.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -76,10 +77,11 @@ namespace GrowthBook.Extensions
         /// refresh worker and HTTP client, and block for another request timeout while doing it.
         /// </para>
         /// <para>
-        /// The client then serves default values, and nothing brings it back on its own: streaming
-        /// only starts once a load has succeeded, and no polling runs in between. The failure is
-        /// logged as an error for that reason, and an application that cannot usefully run on default
-        /// values should either call <see cref="GrowthBookClient.RefreshFeaturesAsync"/> itself or set
+        /// A load fails whether the repository throws or answers without features. The client then serves
+        /// default values, and nothing brings it back on its own: no polling runs, and streaming only starts
+        /// once a load has succeeded. The failure is logged as an error for that reason. An application that
+        /// cannot usefully run on default values should call <see cref="GrowthBookClient.RefreshFeaturesAsync"/>
+        /// itself - once that succeeds, <see cref="Options.BackgroundSync"/> keeps the features current - or set
         /// <see cref="Options.ThrowOnInitializationFailure"/>.
         /// </para>
         /// </remarks>
@@ -94,7 +96,12 @@ namespace GrowthBook.Extensions
 
             try
             {
-                Task.Run(() => client.InitializeAsync()).GetAwaiter().GetResult();
+                var result = Task.Run(() => client.InitializeAsync()).GetAwaiter().GetResult();
+
+                if (!result.Success)
+                {
+                    throw new FeatureLoadException(result.ErrorMessage);
+                }
             }
             catch (Exception ex)
             {
@@ -106,7 +113,7 @@ namespace GrowthBook.Extensions
                 }
 
                 options.LoggerFactory?.CreateLogger(typeof(ServiceCollectionExtensions))
-                    .LogError(ex, "GrowthBook could not load its features at startup. Every feature will evaluate to its default value until a refresh succeeds, and none is scheduled - call RefreshFeaturesAsync, or set Options.ThrowOnInitializationFailure to fail startup instead.");
+                    .LogError(ex, "GrowthBook could not load its features at startup. Every feature will evaluate to its default value until RefreshFeaturesAsync succeeds - with BackgroundSync, streaming starts only after that. Set Options.ThrowOnInitializationFailure to fail startup instead.");
             }
 
             return client;

@@ -88,7 +88,11 @@ namespace GrowthBook.MultiUser
         /// <summary>
         /// Loads features from the repository. Call once at application startup before serving requests.
         /// </summary>
-        public async Task InitializeAsync(CancellationToken ct = default)
+        /// <returns>
+        /// Whether features were loaded. A repository that answers without any - such as an API response with no
+        /// <c>features</c> - is a failed load, not an empty one.
+        /// </returns>
+        public async Task<FeatureLoadResult> InitializeAsync(CancellationToken ct = default)
         {
             var sequence = Interlocked.Increment(ref _refreshSequence);
 
@@ -97,7 +101,14 @@ namespace GrowthBook.MultiUser
             var retrievalOptions = _ownsRepository ? new GrowthBookRetrievalOptions { WaitForCompletion = true } : null;
             var features = await _repository.GetFeatures(retrievalOptions, ct);
 
+            if (features == null)
+            {
+                return FeatureLoadResult.CreateFailure("The feature repository returned no features");
+            }
+
             PublishFeatures(features, sequence);
+
+            return FeatureLoadResult.CreateSuccess(features.Count);
         }
 
         /// <summary>
