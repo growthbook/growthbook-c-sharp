@@ -29,7 +29,7 @@ namespace GrowthBook
 
         public override bool Equals(object obj)
         {
-            if (obj.GetType() == typeof(BucketRange))
+            if (obj?.GetType() == typeof(BucketRange))
             {
                 BucketRange objRange = (BucketRange)obj;
                 return Start == objRange.Start && End == objRange.End;
@@ -37,9 +37,20 @@ namespace GrowthBook
             return false;
         }
 
+        /// <summary>
+        /// A hash over exactly the fields Equals compares, so equal instances hash equally.
+        /// </summary>
         public override int GetHashCode()
         {
-            throw new NotImplementedException();
+            unchecked
+            {
+                var hash = 17;
+
+                hash = hash * 31 + Start.GetHashCode();
+                hash = hash * 31 + End.GetHashCode();
+
+                return hash;
+            }
         }
     }
 }
