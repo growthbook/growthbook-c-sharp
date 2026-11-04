@@ -94,14 +94,15 @@ namespace GrowthBook.MultiUser.Configuration
         /// Whether a failed first load should stop the client being created.
         /// </summary>
         /// <remarks>
-        /// False by default: a feature API that is down or rejecting the key at startup should not
-        /// take the application down with it, so the client is created and serves default values.
-        /// It does not recover on its own - nothing refreshes until something calls
-        /// <see cref="MultiUser.GrowthBookClient.RefreshFeaturesAsync"/>, and streaming only starts
-        /// after a load has succeeded - so the failure is logged as an error rather than a warning.
+        /// False by default: a feature API that is down, rejecting the key or answering without features at
+        /// startup should not take the application down with it, so the client is created and serves default
+        /// values. It does not recover on its own - nothing refreshes until something calls
+        /// <see cref="MultiUser.GrowthBookClient.RefreshFeaturesAsync"/>, and streaming only starts after a load
+        /// has succeeded - so the failure is logged as an error rather than a warning. Once a refresh succeeds,
+        /// <see cref="BackgroundSync"/> keeps the features current from then on.
         /// <para>
-        /// Set to true where starting without features is worse than not starting: the client is
-        /// disposed and the exception is rethrown.
+        /// Set to true where starting without features is worse than not starting: the client is disposed and a
+        /// <see cref="Exceptions.FeatureLoadException"/>, or the exception the load threw, is rethrown.
         /// </para>
         /// </remarks>
         public bool ThrowOnInitializationFailure { get; set; }
