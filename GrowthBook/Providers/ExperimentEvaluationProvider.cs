@@ -240,13 +240,7 @@ namespace GrowthBook.Providers
                     [experimentKey] = result.Key
                 };
 
-                (var document, var isChanged) = ExperimentUtilities.GenerateStickyBucketAssignment(context.Global.StickyBucketService, hashAttribute, hashValue, assignments);
-
-                if (isChanged)
-                {
-                    context.Global.StickyBucketService.SaveAssignments(document);
-                    context.User.StickyBucketAssignmentDocs[document.FormattedAttribute] = document;
-                }
+                SaveStickyAssignment(context, hashAttribute, hashValue, assignments);
             }
 
             TrackExposure(experiment, result, context);
@@ -260,6 +254,39 @@ namespace GrowthBook.Providers
         /// assignment is already decided and may already be saved, so neither a throwing callback nor another
         /// callback having thrown may change what the user is shown.
         /// </summary>
+        /// <summary>
+        /// Saves a new sticky assignment. Locked on the user's documents, so two evaluations for the same
+        /// user cannot each write a document that is missing the other's assignment.
+        /// </summary>
+        private static void SaveStickyAssignment(EvaluationContext context, string hashAttribute, string hashValue, IDictionary<string, string> assignments)
+        {
+            var service = context.Global.StickyBucketService;
+            var documents = context.User.StickyBucketAssignmentDocs;
+
+            if (documents is null)
+            {
+                (var document, var isChanged) = ExperimentUtilities.GenerateStickyBucketAssignment(service, null, hashAttribute, hashValue, assignments);
+
+                if (isChanged)
+                {
+                    service.SaveAssignments(document);
+                }
+
+                return;
+            }
+
+            lock (documents)
+            {
+                (var document, var isChanged) = ExperimentUtilities.GenerateStickyBucketAssignment(service, documents, hashAttribute, hashValue, assignments);
+
+                if (isChanged)
+                {
+                    service.SaveAssignments(document);
+                    documents[document.FormattedAttribute] = document;
+                }
+            }
+        }
+
         internal void TrackExposure(Experiment experiment, ExperimentResult result, EvaluationContext context)
         {
             var trackedExperiments = context.User.TrackedExperiments;

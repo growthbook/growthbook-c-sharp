@@ -294,18 +294,31 @@ namespace GrowthBook.Utilities
             }
         }
 
-        public static (StickyAssignmentsDocument Document, bool IsChanged) GenerateStickyBucketAssignment(IStickyBucketService stickyBucketService, string attributeName, string attributeValue, IDictionary<string, string> assignments)
+        /// <summary>
+        /// Builds the user's sticky document with the new assignments added to what the service and the
+        /// in-memory documents already hold, the in-memory ones taking precedence as in the JS SDK.
+        /// </summary>
+        public static (StickyAssignmentsDocument Document, bool IsChanged) GenerateStickyBucketAssignment(IStickyBucketService stickyBucketService, IDictionary<string, StickyAssignmentsDocument> cachedDocuments, string attributeName, string attributeValue, IDictionary<string, string> assignments)
         {
-            var existingDocument = stickyBucketService is null ? new StickyAssignmentsDocument(attributeName, attributeValue) : stickyBucketService.GetAssignments(attributeName, attributeValue);
-            var newAssignments = new Dictionary<string, string>(existingDocument?.Assignments ?? new Dictionary<string, string>());
+            var document = new StickyAssignmentsDocument(attributeName, attributeValue);
+            var stored = stickyBucketService?.GetAssignments(attributeName, attributeValue);
+            StickyAssignmentsDocument cached = null;
 
-            newAssignments.MergeWith(new[] { assignments });
+            cachedDocuments?.TryGetValue(document.FormattedAttribute, out cached);
 
-            var isChanged = JsonConvert.SerializeObject(existingDocument?.Assignments) != JsonConvert.SerializeObject(newAssignments);
-            var document = new StickyAssignmentsDocument(attributeName, attributeValue, newAssignments);
+            var newAssignments = new Dictionary<string, string>(stored?.Assignments ?? new Dictionary<string, string>());
 
-            return (document, isChanged);
+            newAssignments.MergeWith(new[] { cached?.Assignments ?? new Dictionary<string, string>(), assignments });
+
+            var isChanged = !HaveSameAssignments(stored?.Assignments, newAssignments) || !HaveSameAssignments(cached?.Assignments, newAssignments);
+
+            return (new StickyAssignmentsDocument(attributeName, attributeValue, newAssignments), isChanged);
         }
+
+        private static bool HaveSameAssignments(IDictionary<string, string> existing, IDictionary<string, string> merged) =>
+            existing != null
+            && existing.Count == merged.Count
+            && merged.All(pair => existing.TryGetValue(pair.Key, out var value) && value == pair.Value);
 
         public static StickyBucketVariation GetStickyBucketVariation(Experiment experiment, int bucketVersion, int minBucketVersion, IList<VariationMeta> meta, JObject attributes, IDictionary<string, StickyAssignmentsDocument> document)
         {
