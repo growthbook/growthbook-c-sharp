@@ -54,22 +54,16 @@ namespace GrowthBook.MultiUser.Configuration
         public IGrowthBookFeatureRepository FeatureRepository { get; set; }
 
         /// <summary>
-        /// Invoked after features are loaded or refreshed, with true on success and false on failure.
-        /// A response carrying no change - HTTP 304 - applies nothing and so fires nothing.
-        /// </summary>
-        public Action<bool> OnFeaturesRefreshed { get; set; }
-
-        /// <summary>
-        /// Enable background streaming updates via SSE. When true, the client keeps a persistent
-        /// connection to the GrowthBook streaming endpoint and automatically refreshes features
-        /// without an explicit <see cref="GrowthBookClient.RefreshFeaturesAsync"/> call.
+        /// Enable background streaming updates via SSE. When true, and the GrowthBook API supports streaming for
+        /// this key, the client keeps a connection to the streaming endpoint and installs each update it receives.
+        /// Without it, features change only when <see cref="GrowthBookClient.RefreshFeaturesAsync"/> is called.
         /// Defaults to false (opt-in), consistent with the single-user <see cref="Context.BackgroundSync"/>.
         /// </summary>
         public bool BackgroundSync { get; set; } = false;
 
         /// <summary>
-        /// How long in seconds before the feature cache is considered expired and a refresh is triggered.
-        /// Defaults to 60.
+        /// How long in seconds a fetched feature set is reused by <see cref="GrowthBookClient.InitializeAsync"/>.
+        /// An expired cache does not refresh anything by itself. Defaults to 60.
         /// </summary>
         public int CacheExpirationInSeconds { get; set; } = 60;
 

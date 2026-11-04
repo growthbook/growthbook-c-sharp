@@ -1,8 +1,10 @@
 using System;
+using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 using FluentAssertions;
 using GrowthBook.Api;
@@ -94,15 +96,166 @@ public class GrowthBookClientDefaultRepositoryTests
             "the cache had expired, so the second load fetched again and has to install what came back");
     }
 
-    private static GrowthBookClient CreateClient(HttpMessageHandler handler, int cacheExpirationInSeconds) =>
+    /// <summary>
+    /// With background sync on, an update from the streaming endpoint has to reach evaluation. It used to stop at
+    /// the repository's cache, which the client never reads, so a long-running app kept its startup flags.
+    /// </summary>
+    [Fact]
+    public async Task AStreamedUpdateReachesTheClient()
+    {
+        using var handler = new StreamingHandler(_ => Task.FromResult(FlagOff));
+        using var client = CreateClient(handler, cacheExpirationInSeconds: 60, backgroundSync: true);
+
+        await client.InitializeAsync();
+        client.IsOn("flag", User).Should().BeFalse();
+
+        handler.Stream(FlagOn);
+
+        SpinWait.SpinUntil(() => client.IsOn("flag", User), TimeSpan.FromSeconds(10)).Should().BeTrue(
+            "the streamed update turned the flag on, and the client has to serve it without a manual refresh");
+    }
+
+    /// <summary>
+    /// A refresh started before a streamed update arrived carries older definitions, however late it is answered.
+    /// </summary>
+    [Fact]
+    public async Task ARefreshAnsweredAfterAStreamedUpdateDoesNotReplaceIt()
+    {
+        using var refreshMayAnswer = new SemaphoreSlim(0);
+        using var refreshStarted = new SemaphoreSlim(0);
+
+        using var handler = new StreamingHandler(async request =>
+        {
+            if (request == 2)
+            {
+                refreshStarted.Release();
+                await refreshMayAnswer.WaitAsync(TimeSpan.FromSeconds(10));
+            }
+
+            return FlagOff;
+        });
+
+        using var client = CreateClient(handler, cacheExpirationInSeconds: 60, backgroundSync: true);
+
+        await client.InitializeAsync();
+
+        var refresh = Task.Run(() => client.RefreshFeaturesAsync());
+        (await refreshStarted.WaitAsync(TimeSpan.FromSeconds(10))).Should().BeTrue();
+
+        handler.Stream(FlagOn);
+        SpinWait.SpinUntil(() => client.IsOn("flag", User), TimeSpan.FromSeconds(10)).Should().BeTrue();
+
+        refreshMayAnswer.Release();
+        await refresh;
+
+        client.IsOn("flag", User).Should().BeTrue("the refresh started before the update arrived, so it brings back older definitions");
+    }
+
+    private static GrowthBookClient CreateClient(HttpMessageHandler handler, int cacheExpirationInSeconds, bool backgroundSync = false) =>
         new GrowthBookClient(new Options
         {
             ClientKey = "sdk-test",
             ApiHost = "https://growthbook.test",
             LoggerFactory = NullLoggerFactory.Instance,
             CacheExpirationInSeconds = cacheExpirationInSeconds,
+            BackgroundSync = backgroundSync,
             HttpClientFactory = new ScriptedHttpClientFactory(handler)
         });
+
+    /// <summary>
+    /// Answers the features endpoint with the scripted payload and says streaming is supported; answers the
+    /// streaming endpoint with whatever the test streams, holding the connection open in between.
+    /// </summary>
+    private sealed class StreamingHandler : HttpMessageHandler
+    {
+        private readonly Func<int, Task<string>> _respond;
+        private readonly Channel<string> _events = Channel.CreateUnbounded<string>();
+        private readonly CancellationTokenSource _closed = new CancellationTokenSource();
+        private int _requests;
+
+        public StreamingHandler(Func<int, Task<string>> respond) => _respond = respond;
+
+        public void Stream(string payload) => _events.Writer.TryWrite($"data: {payload}\n\n");
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            if (request.RequestUri.AbsolutePath.Contains("/sub/"))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StreamContent(new EventStream(_events.Reader, _closed.Token))
+                };
+            }
+
+            var json = await _respond(Interlocked.Increment(ref _requests));
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json")
+            };
+
+            response.Headers.Add(HttpHeaders.ServerSentEvents.Key, HttpHeaders.ServerSentEvents.EnabledValue);
+
+            return response;
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            _closed.Cancel();
+            base.Dispose(disposing);
+        }
+    }
+
+    /// <summary>
+    /// A response body that hands out each streamed event as it arrives and ends once the handler is disposed.
+    /// </summary>
+    private sealed class EventStream : Stream
+    {
+        private readonly ChannelReader<string> _events;
+        private readonly CancellationToken _closed;
+        private byte[] _pending = Array.Empty<byte>();
+        private int _offset;
+
+        public EventStream(ChannelReader<string> events, CancellationToken closed)
+        {
+            _events = events;
+            _closed = closed;
+        }
+
+        public override async Task<int> ReadAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            if (_offset >= _pending.Length)
+            {
+                try
+                {
+                    _pending = Encoding.UTF8.GetBytes(await _events.ReadAsync(_closed));
+                    _offset = 0;
+                }
+                catch (OperationCanceledException)
+                {
+                    return 0;
+                }
+            }
+
+            var read = Math.Min(count, _pending.Length - _offset);
+
+            Array.Copy(_pending, _offset, buffer, offset, read);
+            _offset += read;
+
+            return read;
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => ReadAsync(buffer, offset, count).GetAwaiter().GetResult();
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+    }
 
     /// <summary>
     /// Answers each request with the payload the script returns for its position in the order requests arrived.

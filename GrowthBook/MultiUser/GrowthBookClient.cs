@@ -80,47 +80,28 @@ namespace GrowthBook.MultiUser
             }
             else
             {
-                _repository = CreateRepository(options, _loggerFactory, success =>
-                {
-                    // Only a failure is reported from here. A success is installed and reported by the call
-                    // that started the refresh: it holds the sequence taken when the refresh began, so an older
-                    // response landing late cannot replace a newer one, and it reads nothing back from the
-                    // repository, which with an expired cache would start another refresh and call this again.
-                    if (!success)
-                    {
-                        options.OnFeaturesRefreshed?.Invoke(false);
-                    }
-                });
+                _repository = CreateRepository(options, _loggerFactory, PublishStreamedFeatures);
                 _ownsRepository = true;
             }
         }
 
         /// <summary>
         /// Loads features from the repository. Call once at application startup before serving requests.
-        /// Invokes <see cref="Options.OnFeaturesRefreshed"/> on success.
         /// </summary>
         public async Task InitializeAsync(CancellationToken ct = default)
         {
             var sequence = Interlocked.Increment(ref _refreshSequence);
 
-            // The default repository's refresh callback installs nothing, so a refresh started here is waited
-            // for, or its response would never be installed. A repository of the caller's own is asked as before.
+            // A refresh started here is waited for, since nothing else installs its response. A repository of the
+            // caller's own is asked as before.
             var retrievalOptions = _ownsRepository ? new GrowthBookRetrievalOptions { WaitForCompletion = true } : null;
             var features = await _repository.GetFeatures(retrievalOptions, ct);
-            if (features != null)
-            {
-                // Only when this load is the one that ended up in effect - overlapping loads can finish
-                // out of order, and the one that was overtaken has nothing to report.
-                if (PublishFeatures(features, sequence))
-                {
-                    NotifyFeaturesRefreshed();
-                }
-            }
+
+            PublishFeatures(features, sequence);
         }
 
         /// <summary>
         /// Forces a refresh of features from the API, bypassing the cache.
-        /// Invokes <see cref="Options.OnFeaturesRefreshed"/> on success.
         /// </summary>
         public async Task RefreshFeaturesAsync(CancellationToken ct = default)
         {
@@ -128,13 +109,7 @@ namespace GrowthBook.MultiUser
             var features = await _repository.GetFeatures(
                 new GrowthBookRetrievalOptions { ForceRefresh = true, WaitForCompletion = true}, ct);
 
-            if (features != null)
-            {
-                if (PublishFeatures(features, sequence))
-                {
-                    NotifyFeaturesRefreshed();
-                }
-            }
+            PublishFeatures(features, sequence);
         }
 
         /// <summary>
@@ -248,38 +223,31 @@ namespace GrowthBook.MultiUser
         /// <summary>
         /// Installs a refreshed feature set unless a later refresh has already published one.
         /// </summary>
-        private bool PublishFeatures(IDictionary<string, Feature> features, long sequence)
+        private void PublishFeatures(IDictionary<string, Feature> features, long sequence)
         {
             if (features == null)
             {
-                return false;
+                return;
             }
 
             lock (_publishLock)
             {
                 if (sequence <= _publishedRefresh)
                 {
-                    return false;
+                    return;
                 }
 
                 _publishedRefresh = sequence;
                 _currentFeatures = features;
-
-                return true;
             }
         }
 
-        private void NotifyFeaturesRefreshed()
-        {
-            try
-            {
-                _options.OnFeaturesRefreshed?.Invoke(true);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Encountered unhandled exception in the OnFeaturesRefreshed callback");
-            }
-        }
+        /// <summary>
+        /// Installs features a server-sent event delivered. Sequenced when they arrive, so a refresh started
+        /// earlier and answered later cannot replace them.
+        /// </summary>
+        private void PublishStreamedFeatures(IDictionary<string, Feature> features) =>
+            PublishFeatures(features, Interlocked.Increment(ref _refreshSequence));
 
         private EvaluationContext BuildEvaluationContext(UserContext userContext, Experiment experiment = null)
         {
@@ -340,7 +308,7 @@ namespace GrowthBook.MultiUser
             return context;
         }
 
-        private static IGrowthBookFeatureRepository CreateRepository(Options options, ILoggerFactory loggerFactory, Action<bool> onFeaturesRefreshed)
+        private static IGrowthBookFeatureRepository CreateRepository(Options options, ILoggerFactory loggerFactory, Action<IDictionary<string, Feature>> onFeaturesStreamed)
         {
             var config = new GrowthBookConfigurationOptions
             {
@@ -349,7 +317,7 @@ namespace GrowthBook.MultiUser
                 DecryptionKey = options.DecryptionKey,
                 CacheExpirationInSeconds = options.CacheExpirationInSeconds,
                 PreferServerSentEvents = options.BackgroundSync,
-                OnFeaturesRefreshed = onFeaturesRefreshed
+                OnFeaturesStreamed = onFeaturesStreamed
             };
 
             var cache = new InMemoryFeatureCache(cacheExpirationInSeconds: options.CacheExpirationInSeconds);

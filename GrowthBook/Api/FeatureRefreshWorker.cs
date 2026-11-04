@@ -89,14 +89,10 @@ namespace GrowthBook.Api
 
             if (response.Features is null)
             {
-                NotifyFeaturesRefreshed(false);
-
                 return null;
             }
 
             await _cache.RefreshWith(response.Features, cancellationToken).ConfigureAwait(false);
-
-            NotifyFeaturesRefreshed(true);
 
             // Now that the cache has been populated at least once, we need to see if we're allowed
             // to kick off the server sent events listener and make sure we're in the intended mode
@@ -111,30 +107,22 @@ namespace GrowthBook.Api
             return response.Features;
         }
 
-        /// <summary>
-        /// Tells whoever configured this worker that a refresh happened, and whether it worked.
-        /// </summary>
-        /// <remarks>
-        /// Guarded: the refresh is already finished and the cache already written by the time this
-        /// runs, so a handler that throws must not be able to change either. Only the ordinary
-        /// refresh reports here - the streaming paths belong to the pull requests that own them.
-        /// </remarks>
-        private void NotifyFeaturesRefreshed(bool succeeded)
+        private void NotifyFeaturesStreamed(IDictionary<string, Feature> features)
         {
-            var callback = _config?.OnFeaturesRefreshed;
+            var callback = _config?.OnFeaturesStreamed;
 
-            if (callback is null)
+            if (callback is null || features is null)
             {
                 return;
             }
 
             try
             {
-                callback(succeeded);
+                callback(features);
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "The OnFeaturesRefreshed callback threw while being told the refresh {Outcome}", succeeded ? "succeeded" : "failed");
+                _logger.LogError(ex, "The handler for streamed features threw");
             }
         }
 
@@ -189,7 +177,9 @@ namespace GrowthBook.Api
                         
                         var features = GetFeaturesFrom(sseEvent.Data);
                         await _cache.RefreshWith(features, _refreshWorkerCancellation.Token).ConfigureAwait(false);
-                        
+
+                        NotifyFeaturesStreamed(features);
+
                         _logger.LogInformation("Cache has been refreshed with server sent event features");
                     }
                 });
