@@ -37,24 +37,32 @@ public class StickyBucketServiceConcurrencyTests
 
         using var readerIsRunning = new ManualResetEventSlim(false);
 
+        void Read()
+        {
+            if (service.GetAssignments("id", "user-fixed") is null)
+            {
+                Interlocked.Increment(ref misses);
+            }
+
+            Interlocked.Increment(ref reads);
+        }
+
         var reader = Task.Run(() =>
         {
+            // Read once before letting the writer go. Signalling first let a busy runner pause the
+            // reader there, finish every write, and leave the loop below with nothing to do.
+            Read();
             readerIsRunning.Set();
 
             while (Volatile.Read(ref writing))
             {
-                if (service.GetAssignments("id", "user-fixed") is null)
-                {
-                    Interlocked.Increment(ref misses);
-                }
-
-                Interlocked.Increment(ref reads);
+                Read();
             }
         });
 
         var writer = Task.Run(() =>
         {
-            readerIsRunning.Wait(TimeSpan.FromSeconds(10));
+            var readerStarted = readerIsRunning.Wait(TimeSpan.FromSeconds(10));
 
             try
             {
@@ -67,10 +75,13 @@ public class StickyBucketServiceConcurrencyTests
             {
                 Volatile.Write(ref writing, false);
             }
+
+            return readerStarted;
         });
 
         Task.WaitAll(reader, writer);
 
+        writer.Result.Should().BeTrue("the writes are only meaningful while the reader is reading");
         reads.Should().BeGreaterThan(0, "a run where the reader never read proves nothing");
         misses.Should().Be(0,
             "the assignment was saved before any of this started, so every lookup has to find it");
