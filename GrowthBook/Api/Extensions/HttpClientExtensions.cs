@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using System.Threading;
 using System.IO;
 using GrowthBook.Extensions;
+using GrowthBook.Utilities;
 using Newtonsoft.Json.Linq;
 using Microsoft.Extensions.Logging;
 using System.Linq;
@@ -142,7 +143,7 @@ namespace GrowthBook.Api.Extensions
 
         private static IDictionary<string, Feature> ParseFeaturesFrom(string json, ILogger logger, GrowthBookConfigurationOptions config)
         {
-            var featuresResponse = JsonConvert.DeserializeObject<FeaturesResponse>(json);
+            var featuresResponse = JsonConvert.DeserializeObject<FeaturesResponse>(json, JsonUtilities.PayloadSettings);
 
             if (featuresResponse.EncryptedFeatures.IsNullOrWhitespace())
             {
@@ -156,9 +157,7 @@ namespace GrowthBook.Api.Extensions
 
             logger.LogDebug("Decrypted the features payload into '{CharacterCount}' characters of JSON", decryptedFeaturesJson?.Length ?? 0);
 
-            var jsonObject = JObject.Parse(decryptedFeaturesJson);
-
-            return jsonObject.ToObject<Dictionary<string, Feature>>();
+            return JsonConvert.DeserializeObject<Dictionary<string, Feature>>(decryptedFeaturesJson, JsonUtilities.PayloadSettings);
         }
     }
 }

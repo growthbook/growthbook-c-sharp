@@ -43,7 +43,7 @@ public class RunTests : UnitTest
 
         actualResult.InExperiment.Should().Be(testCase.InExperiment, "because the logic placing an experiment into buckets should be correct");
         actualResult.HashUsed.Should().Be(testCase.HashUsed, "because the logic determining which hash to use should be correct");
-        actualResult.Value.Should().BeEquivalentTo(testCase.ExpectedValue, "because the end result value should reflect the correct experiment decisioning");
+        JToken.DeepEquals(testCase.ExpectedValue, actualResult.Value).Should().BeTrue($"because the end result value should reflect the correct experiment decisioning (expected {testCase.ExpectedValue.ToString(Newtonsoft.Json.Formatting.None)}, got {actualResult.Value?.ToString(Newtonsoft.Json.Formatting.None)})");
     }
 
     [Theory]
@@ -56,7 +56,7 @@ public class RunTests : UnitTest
         {
             actualResult.InExperiment.Should().Be(testCase.InExperiment, "because the logic placing an experiment into buckets should be correct");
             actualResult.HashUsed.Should().Be(testCase.HashUsed, "because the logic determining which hash to use should be correct");
-            actualResult.Value.Should().BeEquivalentTo(testCase.ExpectedValue, "because the end result value should reflect the correct experiment decisioning");
+            JToken.DeepEquals(testCase.ExpectedValue, actualResult.Value).Should().BeTrue($"because the end result value should reflect the correct experiment decisioning (expected {testCase.ExpectedValue.ToString(Newtonsoft.Json.Formatting.None)}, got {actualResult.Value?.ToString(Newtonsoft.Json.Formatting.None)})");
 
             trackingCounter++;
         };
@@ -77,7 +77,7 @@ public class RunTests : UnitTest
         {
             actualResult.InExperiment.Should().Be(testCase.InExperiment, "because the logic placing an experiment into buckets should be correct");
             actualResult.HashUsed.Should().Be(testCase.HashUsed, "because the logic determining which hash to use should be correct");
-            actualResult.Value.Should().BeEquivalentTo(testCase.ExpectedValue, "because the end result value should reflect the correct experiment decisioning");
+            JToken.DeepEquals(testCase.ExpectedValue, actualResult.Value).Should().BeTrue($"because the end result value should reflect the correct experiment decisioning (expected {testCase.ExpectedValue.ToString(Newtonsoft.Json.Formatting.None)}, got {actualResult.Value?.ToString(Newtonsoft.Json.Formatting.None)})");
         }
 
         GrowthBook gb = new(testCase.Context);

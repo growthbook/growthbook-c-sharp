@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
 using Newtonsoft.Json;
 using GrowthBook.Extensions;
+using GrowthBook.Utilities;
 using GrowthBook.Providers;
 using System.Linq;
 using System.IO;
@@ -177,7 +178,7 @@ namespace GrowthBook.Api
 
         private IDictionary<string, Feature> GetFeaturesFrom(string json)
         {
-            var featuresResponse = JsonConvert.DeserializeObject<FeaturesResponse>(json);
+            var featuresResponse = JsonConvert.DeserializeObject<FeaturesResponse>(json, JsonUtilities.PayloadSettings);
 
             if (featuresResponse.EncryptedFeatures.IsNullOrWhitespace())
             {
@@ -191,9 +192,7 @@ namespace GrowthBook.Api
 
             _logger.LogDebug("Decrypted the features payload into \'{CharacterCount}\' characters of JSON", decryptedFeaturesJson?.Length ?? 0);
 
-            var jsonObject = JObject.Parse(decryptedFeaturesJson);
-
-            return jsonObject.ToObject<Dictionary<string, Feature>>();
+            return JsonConvert.DeserializeObject<Dictionary<string, Feature>>(decryptedFeaturesJson, JsonUtilities.PayloadSettings);
         }
 
         public void Dispose()

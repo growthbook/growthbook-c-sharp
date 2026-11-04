@@ -69,17 +69,17 @@ namespace GrowthBook.Utilities
         }
 
         /// <summary>
-        /// Returns an array of floats with numVariations items that are all equal and sum to 1.
+        /// Returns an array of doubles with numVariations items that are all equal and sum to 1.
         /// </summary>
         /// <param name="numVariations">The number of variations to generate weights for.</param>
-        /// <returns>Array of floats with numVariations items that are all equal and sum to 1.</returns>
+        /// <returns>Array of doubles with numVariations items that are all equal and sum to 1.</returns>
         public static IEnumerable<double> GetEqualWeights(int numVariations)
         {
             if (numVariations >= 1)
             {
                 for (int i = 0; i < numVariations; i++)
                 {
-                    yield return (1.0f / numVariations);
+                    yield return 1.0 / numVariations;
                 }
             }
         }
@@ -91,7 +91,7 @@ namespace GrowthBook.Utilities
         /// <param name="coverage">The experiment's coverage (defaults to 1).</param>
         /// <param name="weights">Optional list of variant weights.</param>
         /// <returns>A list of bucket ranges.</returns>
-        public static IEnumerable<BucketRange> GetBucketRanges(int numVariations, double coverage = 1f, IEnumerable<double> weights = null)
+        public static IEnumerable<BucketRange> GetBucketRanges(int numVariations, double coverage = 1.0, IEnumerable<double> weights = null)
         {
             if (coverage < 0)
             {
@@ -111,7 +111,7 @@ namespace GrowthBook.Utilities
 
             double totalWeight = allWeights.Sum();
 
-            if (totalWeight < 0.99 || totalWeight > 1.01f)
+            if (totalWeight < 0.99 || totalWeight > 1.01)
             {
                 allWeights = GetEqualWeights(numVariations).ToArray();
             }
