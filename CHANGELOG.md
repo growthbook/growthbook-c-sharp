@@ -5,6 +5,68 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [2.0.0] - 2026-10-30
+
+- **Breaking:** condition evaluation is strict about types, matching SDK spec 0.10.0 (growthbook/growthbook#7379).
+  When an attribute's type differs from the condition's, the operator fails and its negation (`$ne`, `$nin`, `$vne`,
+  `$not`, `$nregex`) matches. Numeric strings are no longer compared as numbers (`"10" < "9"`), date strings are no
+  longer parsed as dates (ISO dates still order correctly as text), booleans are never ordered, a missing attribute
+  fails `$gt`/`$gte`/`$lt`/`$lte` instead of counting as 0, and version operators need both sides to be strings or
+  both numbers. `$exists` and `$type` are unchanged.
+- Added the `$savedGroup` operator for saved group references, with typed `list` and `condition` entries.
+- **Breaking:** a condition that uses an operator or saved group type this SDK doesn't support no longer passes when
+  negated with `$not` or `$nor` (spec 0.11.0, growthbook/growthbook#7346). `$elemMatch` with `$or`, `$and`, `$nor` or
+  `$savedGroup` now tests each element's fields, and a malformed condition fails that rule, experiment or prerequisite
+  instead of failing the whole evaluation.
+- **Breaking:** a percentage rollout no longer includes the user whose hash equals its coverage, so a coverage of
+  k/10000 includes exactly k hash buckets (spec 0.11.1, growthbook/growthbook#7425).
+- **Breaking:** equal weights and payload bucket ranges are computed in double precision (growthbook-c-sharp#111), so
+  users close to a range boundary can be bucketed differently.
+- Added `PayloadReducer.ReducePayload` and `PayloadReducer.PruneCondition` to reduce a payload for client-side
+  bootstrapping (growthbook/growthbook#7238). As in spec 0.11.3 (growthbook/growthbook#7452), a condition saved group
+  that `$elemMatch` or a prerequisite references, or one on a reference cycle, keeps its condition as written; an auto
+  experiment keeps its forced variation; a contextual bandit definition that isn't an object is kept as it is; and
+  a list saved group's values are never read as references to other groups.
+- Updated the standard test cases to spec 0.12.0.
+- **Breaking:** only a non-empty string or a finite, non-zero number identifies a user for hashing, as in the JS SDK
+  (spec 0.12.0). `0`, `""`, booleans, arrays and objects count as missing, numbers are hashed the way JavaScript
+  writes them (`1.0` as `"1"`), and a whitespace-only string is hashed. The fallback attribute is only used along with
+  sticky bucketing, now also for percentage rollouts.
+- **Breaking:** `$eq` and `$ne` never treat an array or object as equal to anything, `$regex` and `$regexi` fail for a
+  pattern that isn't a string, a dot path can index into an array (`"tags.0"`), and `FeatureResult.On` follows
+  JavaScript truthiness (`"false"`, `"0"`, `[]` and `{}` are on).
+- Fixed `Context.EncryptedFeatures` never being decrypted. The property was declared, documented and cloned, but
+  nothing ever read it, so a caller who supplied an encrypted payload was left with an empty feature set and every
+  flag reading as false - with nothing to distinguish a wrong key from a working one. The payload is now decrypted in
+  the constructor and takes precedence over `Context.Features`. A payload supplied without `Context.DecryptionKey`
+  throws `ArgumentException`, and one that will not decrypt or will not parse throws `DecryptionException`, rather
+  than failing silently.
+- Fixed the async evaluation methods ignoring a locally supplied payload. `IsOnAsync`, `IsOffAsync`, `EvalFeatureAsync`
+  and `GetFeatureValueAsync` always loaded from the repository first, so a caller evaluating an offline payload hit an
+  API they never configured - with no client key that is a failing request to the default host, and a response that did
+  arrive replaced the payload they supplied. The load now happens only when there is somewhere to load from: a client
+  key, or a repository the caller provided.
+- Stopped writing the decryption key to the log. It was logged verbatim at debug level on both feature fetch paths,
+  so anyone with log access could decrypt the payloads it protects. Rotate the key if debug logging has been enabled
+  where those logs are retained or shipped elsewhere.
+- Stopped logging feature payload bodies, both the raw API response and the decrypted one. A payload carries saved
+  groups, which are typically lists of user identifiers, so it is personal data. Character counts are logged instead.
+- Fixed deadlocks on single-threaded synchronization contexts (classic ASP.NET on .NET Framework, WPF, WinForms).
+  No await in the SDK captures the caller's context any more, across `GrowthBook`, `FeatureRepository`,
+  `FeatureRefreshWorker`, `RemoteEvaluationService`, `HttpClientExtensions` and `SSEClient`. An application that
+  blocked on an SDK task could previously hang, and the SDK did it to itself through
+  `EvalFeature(key, alwaysLoadFeatures: true)` and `GetFeatureValue(key, fallback, alwaysLoadFeatures: true)`,
+  which block internally. Those two now also start the load off the calling thread, so a feature repository
+  supplied on the `Context` cannot post a continuation back to the thread they are holding.
+- **Behaviour change:** code after an await inside the SDK now resumes on a thread pool thread. A `TrackingCallback`
+  or a callback registered via `Subscribe` that is reached through the async evaluation APIs (`EvalFeatureAsync`,
+  `GetFeatureValueAsync`, `IsOnAsync`, `IsOffAsync`) therefore runs off the caller's synchronization context.
+  Callbacks that touch context-affine state — UI controls on WPF/WinForms, `HttpContext.Current` on classic
+  ASP.NET — have to marshal back themselves. The synchronous overloads are unaffected: they still invoke callbacks
+  on the calling thread. `SubscribeAsync` was already dispatched off-context and is unchanged. No public API changed.
+
 ## [1.2.0]
 
 - Added custom fields support for experiments.

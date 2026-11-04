@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using System.Threading;
 using System.IO;
 using GrowthBook.Extensions;
+using GrowthBook.Utilities;
 using Newtonsoft.Json.Linq;
 using Microsoft.Extensions.Logging;
 using System.Linq;
@@ -26,7 +27,7 @@ namespace GrowthBook.Api.Extensions
 
         public static async Task<(IDictionary<string, Feature> Features, bool IsServerSentEventsEnabled)> GetFeaturesFrom(this HttpClient httpClient, string endpoint, ILogger logger, GrowthBookConfigurationOptions config, CancellationToken cancellationToken)
         {
-            var response = await GetFeaturesFrom(httpClient, endpoint, logger, config, cancellationToken, etagCache: null);
+            var response = await GetFeaturesFrom(httpClient, endpoint, logger, config, cancellationToken, etagCache: null).ConfigureAwait(false);
 
             return (response.Features, response.IsServerSentEventsEnabled);
         }
@@ -50,7 +51,7 @@ namespace GrowthBook.Api.Extensions
                     }
                 }
 
-                var response = await httpClient.SendAsync(request, cancellationToken);
+                var response = await httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
                 var isServerSentEventsEnabled = response.Headers.TryGetValues(HttpHeaders.ServerSentEvents.Key, out var values) && values.Contains(HttpHeaders.ServerSentEvents.EnabledValue);
 
                 if (response.StatusCode == HttpStatusCode.NotModified)
@@ -81,9 +82,11 @@ namespace GrowthBook.Api.Extensions
                     throw new FeatureLoadException(message, statusCode);
                 }
 
-                var json = await response.Content.ReadAsStringAsync();
+                var json = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
 
-                logger.LogDebug($"Read response JSON from default Features API request: '{json}'");
+                // Deliberately not the body: a features payload carries saved groups, which are typically lists of
+                // user identifiers, so dumping it writes personal data into whatever sink the host has configured.
+                logger.LogDebug("Read '{CharacterCount}' characters of response JSON from the default Features API request", json?.Length ?? 0);
 
                 logger.LogDebug($"{nameof(FeatureRefreshWorker)} is configured to prefer server sent events and enabled is now '{isServerSentEventsEnabled}'");
 
@@ -100,7 +103,7 @@ namespace GrowthBook.Api.Extensions
 
         public static async Task UpdateWithFeaturesStreamFrom(this HttpClient httpClient, string endpoint, ILogger logger, GrowthBookConfigurationOptions config, CancellationToken cancellationToken, Func<IDictionary<string, Feature>, Task> onFeaturesRetrieved)
         {
-            var stream = await httpClient.GetStreamAsync(endpoint);
+            var stream = await httpClient.GetStreamAsync(endpoint).ConfigureAwait(false);
 
             using (var reader = new StreamReader(stream))
             {
@@ -133,14 +136,14 @@ namespace GrowthBook.Api.Extensions
 
                     var features = ParseFeaturesFrom(json, logger, config);
 
-                    await onFeaturesRetrieved(features);
+                    await onFeaturesRetrieved(features).ConfigureAwait(false);
                 }
             }
         }
 
         private static IDictionary<string, Feature> ParseFeaturesFrom(string json, ILogger logger, GrowthBookConfigurationOptions config)
         {
-            var featuresResponse = JsonConvert.DeserializeObject<FeaturesResponse>(json);
+            var featuresResponse = JsonConvert.DeserializeObject<FeaturesResponse>(json, JsonUtilities.PayloadSettings);
 
             if (featuresResponse.EncryptedFeatures.IsNullOrWhitespace())
             {
@@ -149,15 +152,12 @@ namespace GrowthBook.Api.Extensions
             }
 
             logger.LogInformation("API response JSON contained encrypted features, decrypting them now");
-            logger.LogDebug($"Attempting to decrypt features with the provided decryption key '{config.DecryptionKey}'");
 
             var decryptedFeaturesJson = featuresResponse.EncryptedFeatures.DecryptWith(config.DecryptionKey);
 
-            logger.LogDebug($"Completed attempt to decrypt features which resulted in plaintext value of '{decryptedFeaturesJson}'");
+            logger.LogDebug("Decrypted the features payload into '{CharacterCount}' characters of JSON", decryptedFeaturesJson?.Length ?? 0);
 
-            var jsonObject = JObject.Parse(decryptedFeaturesJson);
-
-            return jsonObject.ToObject<Dictionary<string, Feature>>();
+            return JsonConvert.DeserializeObject<Dictionary<string, Feature>>(decryptedFeaturesJson, JsonUtilities.PayloadSettings);
         }
     }
 }

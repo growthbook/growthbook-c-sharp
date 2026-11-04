@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
 using Newtonsoft.Json;
 using GrowthBook.Extensions;
+using GrowthBook.Utilities;
 using GrowthBook.Providers;
 using System.Linq;
 using System.IO;
@@ -67,16 +68,16 @@ namespace GrowthBook.Api
 
             var httpClient = _httpClientFactory.CreateClient(ConfiguredClients.DefaultApiClient);
 
-            var response = await httpClient.GetFeaturesFrom(_featuresApiEndpoint, _logger, _config, cancellationToken ?? _refreshWorkerCancellation.Token, _etagCache);
+            var response = await httpClient.GetFeaturesFrom(_featuresApiEndpoint, _logger, _config, cancellationToken ?? _refreshWorkerCancellation.Token, _etagCache).ConfigureAwait(false);
 
             if (response.IsNotModified)
             {
                 if (_cache is InMemoryFeatureCache inMemoryCache)
                 {
-                    await inMemoryCache.RefreshExpiration(cancellationToken);
+                    await inMemoryCache.RefreshExpiration(cancellationToken).ConfigureAwait(false);
                 }
 
-                return await _cache.GetFeatures(cancellationToken);
+                return await _cache.GetFeatures(cancellationToken).ConfigureAwait(false);
             }
 
             if (response.Features is null)
@@ -84,7 +85,7 @@ namespace GrowthBook.Api
                 return null;
             }
 
-            await _cache.RefreshWith(response.Features, cancellationToken);
+            await _cache.RefreshWith(response.Features, cancellationToken).ConfigureAwait(false);
 
             // Now that the cache has been populated at least once, we need to see if we're allowed
             // to kick off the server sent events listener and make sure we're in the intended mode
@@ -138,7 +139,7 @@ namespace GrowthBook.Api
                         _logger.LogDebug("Received SSE event: {Data}", sseEvent.Data?.Substring(0, Math.Min(sseEvent.Data?.Length ?? 0, 100)));
                         
                         var features = GetFeaturesFrom(sseEvent.Data);
-                        await _cache.RefreshWith(features, _refreshWorkerCancellation.Token);
+                        await _cache.RefreshWith(features, _refreshWorkerCancellation.Token).ConfigureAwait(false);
                         
                         _logger.LogInformation("Cache has been refreshed with server sent event features");
                     }
@@ -160,7 +161,7 @@ namespace GrowthBook.Api
                 {
                     try
                     {
-                        await _sseClient.ConnectAsync(_refreshWorkerCancellation.Token);
+                        await _sseClient.ConnectAsync(_refreshWorkerCancellation.Token).ConfigureAwait(false);
                     }
                     catch (Exception ex)
                     {
@@ -177,7 +178,7 @@ namespace GrowthBook.Api
 
         private IDictionary<string, Feature> GetFeaturesFrom(string json)
         {
-            var featuresResponse = JsonConvert.DeserializeObject<FeaturesResponse>(json);
+            var featuresResponse = JsonConvert.DeserializeObject<FeaturesResponse>(json, JsonUtilities.PayloadSettings);
 
             if (featuresResponse.EncryptedFeatures.IsNullOrWhitespace())
             {
@@ -186,15 +187,12 @@ namespace GrowthBook.Api
             }
 
             _logger.LogInformation("API response JSON contained encrypted features, decrypting them now");
-            _logger.LogDebug("Attempting to decrypt features with the provided decryption key \'{ConfigDecryptionKey}\'", _config.DecryptionKey);
 
             var decryptedFeaturesJson = featuresResponse.EncryptedFeatures.DecryptWith(_config.DecryptionKey);
 
-            _logger.LogDebug("Completed attempt to decrypt features which resulted in plaintext value of \'{DecryptedFeaturesJson}\'", decryptedFeaturesJson);
+            _logger.LogDebug("Decrypted the features payload into \'{CharacterCount}\' characters of JSON", decryptedFeaturesJson?.Length ?? 0);
 
-            var jsonObject = JObject.Parse(decryptedFeaturesJson);
-
-            return jsonObject.ToObject<Dictionary<string, Feature>>();
+            return JsonConvert.DeserializeObject<Dictionary<string, Feature>>(decryptedFeaturesJson, JsonUtilities.PayloadSettings);
         }
 
         public void Dispose()

@@ -20,6 +20,65 @@ public class BucketRangeTupleConverterTests
     }
 
     [Fact]
+    public void ReadJson_FullPrecisionValues_ShouldBeExact()
+    {
+        var json = "[0.3333333333333333, 0.6666666666666666]";
+        var result = JsonConvert.DeserializeObject<BucketRange>(json);
+
+        Assert.NotNull(result);
+        Assert.Equal(1.0 / 3, result.Start);
+        Assert.Equal(2.0 / 3, result.End);
+    }
+
+    [Fact]
+    public void ReadJson_IntegerValues_ShouldDeserialize()
+    {
+        var result = JsonConvert.DeserializeObject<BucketRange>("[0, 1]");
+
+        Assert.NotNull(result);
+        Assert.Equal(0.0, result.Start);
+        Assert.Equal(1.0, result.End);
+    }
+
+    [Theory]
+    [InlineData("[\"abc\", \"def\"]")]
+    [InlineData("[{}, 0.5]")]
+    [InlineData("[true, false]")]
+    [InlineData("[\"0\", \"0.5\"]")]
+    [InlineData("[null, 0.5]")]
+    [InlineData("[0.5, null]")]
+    [InlineData("null")]
+    [InlineData("[]")]
+    [InlineData("[0.5]")]
+    [InlineData("[0, 0.5, 1]")]
+    [InlineData("{}")]
+    public void ReadJson_MalformedRange_ShouldReturnNull(string json)
+    {
+        BucketRange result = null;
+        var ex = Record.Exception(() => result = JsonConvert.DeserializeObject<BucketRange>(json));
+
+        Assert.Null(ex);
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public void ReadJson_MalformedRangeInsideFeature_ShouldNotThrow()
+    {
+        var json = @"{
+              ""defaultValue"": null,
+              ""rules"": [{
+                ""ranges"": [[""abc"", ""def""], [0.5, 1.0]]
+              }]
+            }";
+
+        var feature = JsonConvert.DeserializeObject<Feature>(json);
+
+        Assert.Null(feature.Rules[0].Ranges[0]);
+        Assert.Equal(0.5, feature.Rules[0].Ranges[1].Start);
+        Assert.Equal(1.0, feature.Rules[0].Ranges[1].End);
+    }
+
+    [Fact]
     public void ReadJson_InsideFeature_ShouldDeserializeCorrectly()
     {
         var json = @"{

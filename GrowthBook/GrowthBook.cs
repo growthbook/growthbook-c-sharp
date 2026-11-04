@@ -39,6 +39,11 @@ namespace GrowthBook
         private readonly ILoggerFactory _loggerFactory;
         private readonly bool _ownsLoggerFactory;
         private readonly Context _context;
+
+        /// <summary>
+        /// Whether there is anywhere to fetch features from at all.
+        /// </summary>
+        private readonly bool _canFetchFeatures;
         private JObject _previousAttributes;
         private IDictionary<string, int> _previousForcedVariations;
         private readonly List<Action<Experiment, ExperimentResult>> _subscribers
@@ -55,6 +60,7 @@ namespace GrowthBook
             ValidateRemoteEvaluationConfiguration(context);
 
             _context = context;
+            _canFetchFeatures = context.FeatureRepository != null || !string.IsNullOrWhiteSpace(context.ClientKey);
             Enabled = context.Enabled;
             Attributes = context.Attributes;
             Url = context.Url;
@@ -102,6 +108,8 @@ namespace GrowthBook
 
             _conditionEvaluator = new ConditionEvaluationProvider(conditionEvaluatorLogger);
 
+            ApplyEncryptedFeatures(context);
+
             if (context.FeatureRepository != null)
             {
                 _featureRepository = context.FeatureRepository;
@@ -125,6 +133,35 @@ namespace GrowthBook
 
                 _featureRepository = new FeatureRepository(featureRepositoryLogger, featureCache, featureRefreshWorker, remoteEvaluationService);
             }
+        }
+
+        private void ApplyEncryptedFeatures(Context context)
+        {
+            if (string.IsNullOrWhiteSpace(context.EncryptedFeatures))
+            {
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(context.DecryptionKey))
+            {
+                throw new ArgumentException($"{nameof(Context.EncryptedFeatures)} was supplied without a {nameof(Context.DecryptionKey)} to decrypt it with", nameof(context));
+            }
+
+            _logger.LogInformation("Context contained encrypted features, decrypting them now");
+
+            var decryptedFeaturesJson = context.EncryptedFeatures.DecryptWith(context.DecryptionKey);
+
+            try
+            {
+                Features = JsonConvert.DeserializeObject<Dictionary<string, Feature>>(decryptedFeaturesJson, JsonUtilities.PayloadSettings)
+                    ?? new Dictionary<string, Feature>();
+            }
+            catch (Exception ex)
+            {
+                throw new DecryptionException("The decrypted value was not a valid feature payload", ex);
+            }
+
+            _logger.LogInformation("Decrypted '{FeatureCount}' feature(s) from the context", Features.Count);
         }
 
         /// <summary>
@@ -330,7 +367,7 @@ namespace GrowthBook
         /// <returns><c>true</c> if the feature is on; otherwise, <c>false</c>.</returns>
         public async Task<bool> IsOnAsync(string key, CancellationToken? cancellationToken = null)
         {
-            await LoadFeatures(cancellationToken: cancellationToken);
+            await EnsureFeaturesLoaded(cancellationToken).ConfigureAwait(false);
             var result = EvaluateFeature(key);
             var value = result.Value;
             return !value.IsNull() && value.ToObject<bool>();
@@ -344,7 +381,7 @@ namespace GrowthBook
         /// <returns><c>true</c> if the feature is off; otherwise, <c>false</c>.</returns>
         public async Task<bool> IsOffAsync(string key, CancellationToken? cancellationToken = null)
         {
-            var on = await IsOnAsync(key, cancellationToken);
+            var on = await IsOnAsync(key, cancellationToken).ConfigureAwait(false);
             return !on;
         }
 
@@ -393,12 +430,10 @@ namespace GrowthBook
         /// <inheritdoc />
         public T GetFeatureValue<T>(string key, T fallback, bool alwaysLoadFeatures = false)
         {
-            // Keep the sync API, but avoid deadlocks by doing a quick synchronous spin only if already completed.
             // Prefer callers to use the async APIs.
             if (alwaysLoadFeatures)
             {
-                // Fire-and-wait carefully to avoid deadlocks.
-                LoadFeatures().GetAwaiter().GetResult();
+                LoadFeaturesWithoutCapturingContext();
             }
 
             var result = EvaluateFeature(key);
@@ -410,7 +445,7 @@ namespace GrowthBook
         /// <inheritdoc />
         public async Task<T> GetFeatureValueAsync<T>(string key, T fallback, CancellationToken? cancellationToken = null)
         {
-            var result = await EvalFeatureAsync(key, cancellationToken);
+            var result = await EvalFeatureAsync(key, cancellationToken).ConfigureAwait(false);
             var value = result.Value;
 
             return value.IsNull() ? fallback : value.ToObject<T>();
@@ -427,17 +462,65 @@ namespace GrowthBook
         {
             if (alwaysLoadFeatures)
             {
-                LoadFeatures().GetAwaiter().GetResult();
+                LoadFeaturesWithoutCapturingContext();
             }
 
             return EvaluateFeature(featureId);
         }
 
+        /// <summary>
+        /// Blocks on a load without leaving it anything to post back to this thread. ConfigureAwait only
+        /// governs the SDK's own awaits; a feature repository supplied on the <see cref="Context"/> is the
+        /// application's code, and under a single-threaded synchronization context its continuation would
+        /// be queued to the thread this call is holding. Starting the load where there is no context to
+        /// capture settles it for every participant rather than only for the SDK.
+        /// </summary>
+        private void LoadFeaturesWithoutCapturingContext()
+        {
+            if (SynchronizationContext.Current is null)
+            {
+                LoadFeatures().GetAwaiter().GetResult();
+
+                return;
+            }
+
+            Task.Run(() => LoadFeatures()).GetAwaiter().GetResult();
+        }
+
         public async Task<FeatureResult> EvalFeatureAsync(string featureId, CancellationToken? cancellationToken = null)
         {
-            await LoadFeatures(cancellationToken: cancellationToken);
+            await EnsureFeaturesLoaded(cancellationToken).ConfigureAwait(false);
 
             return EvaluateFeature(featureId);
+        }
+
+        /// <summary>
+        /// Loads the features these methods evaluate against, unless there is nowhere to load them from.
+        /// A payload supplied on the <see cref="Context"/> - plaintext or encrypted - with no client key
+        /// and no repository of the caller's own is a deliberately offline setup: fetching would call an
+        /// API that was never configured, and a response that did arrive would replace the payload the
+        /// caller supplied.
+        /// </summary>
+        private async Task EnsureFeaturesLoaded(CancellationToken? cancellationToken)
+        {
+            if (!_canFetchFeatures)
+            {
+                _logger.LogDebug("No client key and no supplied repository, evaluating the features the context carried");
+
+                return;
+            }
+
+            await LoadFeaturesWithoutCapturingContextAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        private Task LoadFeaturesWithoutCapturingContextAsync(CancellationToken? cancellationToken)
+        {
+            if (SynchronizationContext.Current is null)
+            {
+                return LoadFeatures(cancellationToken: cancellationToken);
+            }
+
+            return Task.Run(() => LoadFeatures(cancellationToken: cancellationToken));
         }
 
         private FeatureResult EvaluateFeature(string featureId, ISet<string> evaluatedFeatures = default)
@@ -484,7 +567,7 @@ namespace GrowthBook
 
                             var evaluationObject = new JObject { ["value"] = parentResult.Value };
 
-                            var isSuccess = _conditionEvaluator.EvalCondition(evaluationObject, parentCondition.Condition ?? new JObject(), _savedGroups);
+                            var isSuccess = EvalConditionSafely(evaluationObject, parentCondition.Condition ?? new JObject());
 
                             if (!isSuccess)
                             {
@@ -513,7 +596,7 @@ namespace GrowthBook
                         continue;
                     }
 
-                    if (!rule.Condition.IsNull() && !_conditionEvaluator.EvalCondition(Attributes, rule.Condition, _savedGroups))
+                    if (!rule.Condition.IsNull() && !EvalConditionSafely(Attributes, rule.Condition))
                     {
                         _logger.LogDebug("Rule {RuleIndex}: attribute condition did not match, continuing", ruleIndex);
                         continue;
@@ -521,7 +604,9 @@ namespace GrowthBook
 
                     if (!rule.Force.IsNull())
                     {
-                        if (!IsIncludedInRollout(rule.Seed ?? featureId, rule.HashAttribute, rule.Range, rule.Coverage, rule.HashVersion))
+                        var rolloutFallbackAttribute = _stickyBucketService != null && !rule.DisableStickyBucketing ? rule.FallbackAttribute : null;
+
+                        if (!IsIncludedInRollout(rule.Seed ?? featureId, rule.HashAttribute, rolloutFallbackAttribute, rule.Range, rule.Coverage, rule.HashVersion))
                         {
                             _logger.LogDebug("Rule {RuleIndex}: excluded by rollout/coverage, continuing", ruleIndex);
                             continue;
@@ -626,7 +711,7 @@ namespace GrowthBook
         /// <inheritdoc />
         public async Task LoadFeatures(GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null)
         {
-            var result = await LoadFeaturesWithResult(options, cancellationToken);
+            var result = await LoadFeaturesWithResult(options, cancellationToken).ConfigureAwait(false);
 
             if (!result.Success)
             {
@@ -648,11 +733,11 @@ namespace GrowthBook
                 if (_context.RemoteEval && RemoteEvaluationUtilities.IsValidForRemoteEvaluation(_context))
                 {
                     var currentContext = CreateCurrentContext();
-                    features = await _featureRepository.GetFeaturesWithContext(currentContext, options, cancellationToken);
+                    features = await _featureRepository.GetFeaturesWithContext(currentContext, options, cancellationToken).ConfigureAwait(false);
                 }
                 else
                 {
-                    features = await _featureRepository.GetFeatures(options, cancellationToken);
+                    features = await _featureRepository.GetFeatures(options, cancellationToken).ConfigureAwait(false);
                 }
 
                 if (features == null)
@@ -778,23 +863,16 @@ namespace GrowthBook
 
             // 6. Abort if we're unable to generate a hash identifying this run.
 
-            (var hashAttribute, var hashValue) = Attributes.GetHashAttributeAndValue(experiment.HashAttribute);
+            // The fallback attribute is only used along with sticky bucketing, as in the JS SDK.
 
-            if (hashValue.IsNullOrWhitespace())
+            var fallbackAttribute = _stickyBucketService != null && !experiment.DisableStickyBucketing ? experiment.FallbackAttribute : null;
+
+            (var hashAttribute, var hashValue) = Attributes.GetHashAttributeAndValue(experiment.HashAttribute, fallbackAttribute);
+
+            if (hashValue is null)
             {
-                // Check if a fallback attribute for sticky bucketing exists and use it if possible.
-
-                var hasFallback = !experiment.FallbackAttribute.IsNullOrWhitespace();
-
-                if (hasFallback)
-                {
-                    (hashAttribute, hashValue) = Attributes.GetHashAttributeAndValue(experiment.FallbackAttribute);
-                }
-                else
-                {
-                    _logger.LogDebug("Aborting experiment, unable to locate a value for the experiment hash attribute \'{ExperimentHashAttribute}\'", experiment.HashAttribute);
-                    return GetExperimentResult(experiment, featureId: featureId);
-                }
+                _logger.LogDebug("Aborting experiment, unable to locate a value for the experiment hash attribute \'{ExperimentHashAttribute}\'", experiment.HashAttribute);
+                return GetExperimentResult(experiment, featureId: featureId);
             }
 
             // 6.5 When sticky bucketing is permitted, determine if they already have a value and use it if possible.
@@ -845,7 +923,7 @@ namespace GrowthBook
 
                 if (!experiment.Condition.IsNull())
                 {
-                    if (!_conditionEvaluator.EvalCondition(Attributes, experiment.Condition, _savedGroups))
+                    if (!EvalConditionSafely(Attributes, experiment.Condition))
                     {
                         _logger.LogDebug("Aborting experiment, associated conditions have prohibited participation");
                         return GetExperimentResult(experiment, featureId: featureId);
@@ -867,7 +945,7 @@ namespace GrowthBook
 
                         var evaluationObject = new JObject { ["value"] = parentResult.Value };
 
-                        if (!_conditionEvaluator.EvalCondition(evaluationObject, parentCondition.Condition ?? new JObject(), _savedGroups))
+                        if (!EvalConditionSafely(evaluationObject, parentCondition.Condition ?? new JObject()))
                         {
                             return GetExperimentResult(experiment, featureId: featureId);
                         }
@@ -967,7 +1045,7 @@ namespace GrowthBook
             {
                 (_, var hashValue) = Attributes.GetHashAttributeAndValue(filter.Attribute);
 
-                if (hashValue.IsNullOrWhitespace())
+                if (hashValue is null)
                 {
                     _logger.LogDebug("Attributes are missing a filter\'s hash attribute of \'{FilterAttribute}\', marking as filtered out", filter.Attribute);
                     return true;
@@ -987,7 +1065,26 @@ namespace GrowthBook
             return false;
         }
 
-        private bool IsIncludedInRollout(string seed, string hashAttribute = null, BucketRange range = null, double? coverage = null, int? hashVersion = null)
+        /// <summary>
+        /// Evaluates a condition, failing it instead of throwing when it is malformed.
+        /// </summary>
+        /// <param name="attributes">The attributes to evaluate against.</param>
+        /// <param name="condition">The condition to evaluate.</param>
+        /// <returns>True if the condition passes; false if it fails or can't be evaluated.</returns>
+        private bool EvalConditionSafely(JToken attributes, JObject condition)
+        {
+            try
+            {
+                return _conditionEvaluator.EvalCondition(attributes, condition, _savedGroups);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Condition evaluation failed, treating the condition as not matching");
+                return false;
+            }
+        }
+
+        private bool IsIncludedInRollout(string seed, string hashAttribute = null, string fallbackAttribute = null, BucketRange range = null, double? coverage = null, int? hashVersion = null)
         {
             if (coverage == null && range == null)
             {
@@ -1001,7 +1098,7 @@ namespace GrowthBook
                 return false;
             }
 
-            (_, var hashValue) = Attributes.GetHashAttributeAndValue(hashAttribute);
+            (_, var hashValue) = Attributes.GetHashAttributeAndValue(hashAttribute, fallbackAttribute);
 
             if (hashValue is null)
             {
@@ -1018,7 +1115,8 @@ namespace GrowthBook
 
             if (coverage != null)
             {
-                return bucket <= coverage;
+                // Half-open like InRange, so a coverage of k/10000 includes exactly k hash buckets
+                return bucket < coverage;
             }
 
             return true;
@@ -1055,7 +1153,7 @@ namespace GrowthBook
                 InExperiment = inExperiment,
                 HashAttribute = hashAttribute,
                 HashUsed = hashUsed,
-                HashValue = hashValue,
+                HashValue = hashValue ?? string.Empty,
                 Value = experiment.Variations is null ? null : experiment.Variations[variationIndex],
                 VariationId = variationIndex,
                 Name = meta?.Name,
@@ -1170,7 +1268,7 @@ namespace GrowthBook
                 _logger?.LogDebug("Triggering remote evaluation due to attribute changes");
 
                 var currentContext = CreateCurrentContext();
-                var features = await _featureRepository.GetFeaturesWithContext(currentContext);
+                var features = await _featureRepository.GetFeaturesWithContext(currentContext).ConfigureAwait(false);
 
                 if (features != null)
                 {
