@@ -60,7 +60,8 @@ namespace GrowthBook
             if (context == null)
                 return new RemoteEvaluationRequest();
 
-            // Convert ForcedFeatures dictionary to list of [key, value] pairs
+            // Convert the forced feature values to the list of [key, value] pairs the API expects, mirroring
+            // sdk-js `Array.from(forcedFeatureValues)`. An object would be rejected with 400 Bad Request.
             var forcedFeaturesList = new List<List<object>>();
             if (context.ForcedFeatures != null)
             {
