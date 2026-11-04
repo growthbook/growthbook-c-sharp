@@ -20,8 +20,6 @@ namespace GrowthBook.Evaluation
         /// <summary>Force specific experiments to always assign a specific variation for this user. Used for QA.</summary>
         public IDictionary<string, int>   ForcedVariations { get; set; }
 
-        /// <summary>Force specific feature values for this user. Takes precedence over global forced values.</summary>
-
         /// <summary>
         /// Per-request tracking callback. Runs in addition to <see cref="Options.TrackingCallback"/>, which is not
         /// replaced: setting both means both are invoked for the same exposure, so do not send both to the same
@@ -30,17 +28,23 @@ namespace GrowthBook.Evaluation
         /// </summary>
         public Action<Experiment, ExperimentResult> TrackingCallback { get; set; }
 
-        /// <summary>Per-request sticky bucket service. Overrides <see cref="Options.StickyBucketService"/> if set.</summary>
+        /// <summary>
+        /// Not read by the evaluators, which use <see cref="GlobalContext.StickyBucketService"/>: whoever builds
+        /// the context decides which service goes there.
+        /// </summary>
         public IStickyBucketService StickyBucketService { get; set; }
 
-        /// <summary>Pre-loaded sticky bucket assignment docs. If null, loaded automatically from the service.</summary>
+        /// <summary>
+        /// The user's saved sticky bucket assignments, keyed by <c>attribute||value</c>. The evaluators read them
+        /// from here and write new assignments back, but do not load them: supply what the service holds for
+        /// this user, or sticky assignments are only found within this context.
+        /// </summary>
         public IDictionary<string, StickyAssignmentsDocument> StickyBucketAssignmentDocs { get; set; }
 
         /// <summary>
         /// Keys of the experiment assignments already reported to the tracking callbacks, so the same exposure
-        /// is not sent twice. Left null, one is created for the duration of a single evaluation call, which
-        /// deduplicates within that call only. Supply your own set - and keep it for as long as the request
-        /// lives - to deduplicate across every evaluation the request makes.
+        /// is not sent twice. Left null, nothing is deduplicated. Supply a set - and keep it for as long as the
+        /// request lives - to deduplicate across every evaluation the request makes.
         /// </summary>
         public ISet<string> TrackedExperiments { get; set; }
     }
