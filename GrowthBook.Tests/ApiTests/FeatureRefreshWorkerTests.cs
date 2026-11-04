@@ -290,4 +290,46 @@ public class FeatureRefreshWorkerTests : ApiUnitTest<FeatureRefreshWorker>
         await _cache.Received(1).RefreshWith(Arg.Any<IDictionary<string, Feature>>(), Arg.Any<CancellationToken?>());
         await _cache.Received(1).GetFeatures(Arg.Any<CancellationToken?>());
     }
+
+    [Fact]
+    public async Task RaisesFeaturesRefreshed_OnModifiedThenNotModified()
+    {
+        var etag = "test-etag-304";
+        var json = JsonConvert.SerializeObject(new FeaturesResponse { Features = _availableFeatures });
+        var handler = new ETagTestDelegatingHandler(etag, json, returnNotModifiedOnSecondCall:true);
+        var worker = new FeatureRefreshWorker(_logger, new ETagHttpClientFactory(handler), _config, _cache);
+
+        _cache.RefreshWith(Arg.Any<IDictionary<string, Feature>>(), Arg.Any<CancellationToken?>())
+            .Returns(Task.CompletedTask);
+        _cache.GetFeatures(Arg.Any<CancellationToken?>())
+            .Returns(Task.FromResult<IDictionary<string, Feature>>(_availableFeatures));
+
+        var events = new List<FeaturesRefreshedEventArgs>();
+        worker.FeaturesRefreshed += (_, e) => events.Add(e);
+
+        await worker.RefreshCacheFromApi();
+        await worker.RefreshCacheFromApi();
+
+        events.Should().HaveCount(2);
+        events[0].WasModified.Should().BeTrue();
+        events[0].Source.Should().Be(FeatureRefreshSource.Http);
+        events[1].WasModified.Should().BeFalse();
+        events[1].Source.Should().Be(FeatureRefreshSource.Http);
+        events[1].Features.Should().BeEquivalentTo(_availableFeatures);
+    }
+
+    [Fact]
+    public async Task FeaturesRefreshed_SubscriberException_DoesNotBreakOtherSubscribers()
+    {
+        _config.PreferServerSentEvents = true;
+        _cache.RefreshWith(Arg.Any<IDictionary<string, Feature>>(), Arg.Any<CancellationToken?>())
+            .Returns(Task.CompletedTask);
+
+        var secondCalled = false;
+        _worker.FeaturesRefreshed += (_, e) => throw new InvalidOperationException("boom");
+        _worker.FeaturesRefreshed += (_, e) => secondCalled = true;
+
+        await _worker.RefreshCacheFromApi();
+        secondCalled.Should().BeTrue();
+    }
 }

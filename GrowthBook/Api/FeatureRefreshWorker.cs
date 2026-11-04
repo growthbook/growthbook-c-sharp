@@ -2,7 +2,6 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Net.Http;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
@@ -35,8 +34,10 @@ namespace GrowthBook.Api
         private readonly string _featuresApiEndpoint;
         private readonly string _serverSentEventsApiEndpoint;
         private bool _isServerSentEventsEnabled;
+        private long _refreshSequence;
         private SSEClient _sseClient;
         private CancellationTokenSource _refreshWorkerCancellation = new CancellationTokenSource();
+        public event EventHandler<FeaturesRefreshedEventArgs> FeaturesRefreshed;
 
         public FeatureRefreshWorker(ILogger<FeatureRefreshWorker> logger, IHttpClientFactory httpClientFactory, GrowthBookConfigurationOptions config, IGrowthBookFeatureCache cache)
         {
@@ -77,7 +78,9 @@ namespace GrowthBook.Api
                     await inMemoryCache.RefreshExpiration(cancellationToken).ConfigureAwait(false);
                 }
 
-                return await _cache.GetFeatures(cancellationToken).ConfigureAwait(false);
+                var cached = await _cache.GetFeatures(cancellationToken).ConfigureAwait(false);
+                RaiseRefreshed(wasModified: false, FeatureRefreshSource.Http, cached);
+                return cached;
             }
 
             if (response.Features is null)
@@ -86,6 +89,7 @@ namespace GrowthBook.Api
             }
 
             await _cache.RefreshWith(response.Features, cancellationToken).ConfigureAwait(false);
+            RaiseRefreshed(wasModified:true, FeatureRefreshSource.Http, response.Features);
 
             // Now that the cache has been populated at least once, we need to see if we're allowed
             // to kick off the server sent events listener and make sure we're in the intended mode
@@ -125,22 +129,24 @@ namespace GrowthBook.Api
             try
             {
                 _sseClient?.Dispose();
-                
-                var sseLogger = _logger as ILogger<SSEClient> ?? 
+
+                var sseLogger = _logger as ILogger<SSEClient> ??
                     new Microsoft.Extensions.Logging.Abstractions.NullLogger<SSEClient>();
-                
+
                 _sseClient = new SSEClient(sseLogger, _httpClientFactory, _serverSentEventsApiEndpoint, null, ConfiguredClients.ServerSentEventsApiClient);
-                
+
                 // Add general event listener for all events (handles data field)
                 _sseClient.AddEventListener(null, async (sseEvent) =>
                 {
                     if (sseEvent.HasData)
                     {
                         _logger.LogDebug("Received SSE event: {Data}", sseEvent.Data?.Substring(0, Math.Min(sseEvent.Data?.Length ?? 0, 100)));
-                        
+
                         var features = GetFeaturesFrom(sseEvent.Data);
                         await _cache.RefreshWith(features, _refreshWorkerCancellation.Token).ConfigureAwait(false);
-                        
+                        RaiseRefreshed(wasModified:true, FeatureRefreshSource.ServerSentEvent, features);
+
+
                         _logger.LogInformation("Cache has been refreshed with server sent event features");
                     }
                 });
@@ -200,6 +206,27 @@ namespace GrowthBook.Api
             Cancel();
             _sseClient?.Dispose();
             _refreshWorkerCancellation?.Dispose();
+        }
+
+        private void RaiseRefreshed(bool wasModified, FeatureRefreshSource source,
+            IDictionary<string, Feature> features)
+        {
+            var handler = FeaturesRefreshed;
+
+            if (handler is null)
+            {
+                return;
+            }
+
+            var args = new FeaturesRefreshedEventArgs(
+                wasModified,
+                source,
+                new Dictionary<string, Feature>(features ?? new Dictionary<string, Feature>()),
+                DateTimeOffset.UtcNow,
+                Interlocked.Increment(ref _refreshSequence));
+
+            FeaturesRefreshedNotifier.Raise(handler, this, args,
+                ex => _logger.LogError(ex, "A FeaturesRefreshed subscriber threw an exception"));
         }
     }
 }

@@ -133,6 +133,12 @@ public class SynchronizationContextDeadlockTests
         private readonly IDictionary<string, Feature> _features =
             new Dictionary<string, Feature> { ["flag"] = new Feature { DefaultValue = true } };
 
+        // Required by the interface as of this branch. Never raised: this double answers from a
+        // fixed map and never refreshes, which is the whole point of it.
+#pragma warning disable CS0067
+        public event EventHandler<FeaturesRefreshedEventArgs> FeaturesRefreshed;
+#pragma warning restore CS0067
+
         public async Task<IDictionary<string, Feature>> GetFeatures(GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null)
         {
             await Task.Delay(10);
