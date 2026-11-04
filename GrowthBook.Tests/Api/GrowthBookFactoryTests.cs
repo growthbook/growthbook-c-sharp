@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using FluentAssertions;
 using Xunit;
 
@@ -46,6 +47,31 @@ namespace GrowthBook.Tests.Api
 
             // Assert
             growthBook.Attributes["environment"].ToString().Should().Be("test");
+        }
+
+        [Fact]
+        public void GrowthBookFactory_CreateForUser_PropagatesApiHeadersAndStreamingHostConfiguration()
+        {
+            // Arrange
+            var baseContext = new Context
+            {
+                ClientKey = "test-key",
+                ApiHostRequestHeaders = new Dictionary<string, string> { ["Authorization"] = "Bearer factory-token" },
+                StreamingHost = "https://streaming.example.com",
+                StreamingHostRequestHeaders = new Dictionary<string, string> { ["Authorization"] = "Bearer streaming-token" }
+            };
+            using var factory = new GrowthBookFactory(baseContext);
+
+            // Act
+            using var growthBook = factory.CreateForUser(new { userId = "user123" });
+
+            // Assert
+            var contextField = typeof(GrowthBook).GetField("_context", BindingFlags.NonPublic | BindingFlags.Instance);
+            var context = (Context)contextField.GetValue(growthBook);
+
+            context.ApiHostRequestHeaders["Authorization"].Should().Be("Bearer factory-token");
+            context.StreamingHost.Should().Be("https://streaming.example.com");
+            context.StreamingHostRequestHeaders["Authorization"].Should().Be("Bearer streaming-token");
         }
 
         public void Dispose()

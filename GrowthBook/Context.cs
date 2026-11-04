@@ -51,6 +51,27 @@ namespace GrowthBook
         public string ApiHost { get; set; }
 
         /// <summary>
+        /// Headers to attach to every Features GET request and Remote Evaluation POST request.
+        /// Useful for self-hosted deployments behind an authenticated gateway/proxy. Reserved
+        /// header names managed by the SDK itself (User-Agent, If-None-Match, Cache-Control) are
+        /// rejected at construction, case-insensitively.
+        /// </summary>
+        public IDictionary<string, string> ApiHostRequestHeaders { get; set; } = new Dictionary<string, string>();
+
+        /// <summary>
+        /// A separate host for the Server-Sent Events streaming connection. Optional - falls back
+        /// to <see cref="ApiHost"/> when not set. Useful when streaming is served from a dedicated
+        /// domain (e.g. GrowthBook Cloud's streaming endpoint).
+        /// </summary>
+        public string StreamingHost { get; set; }
+
+        /// <summary>
+        /// Headers to attach to the Server-Sent Events streaming connection. Same reserved-header
+        /// restrictions as <see cref="ApiHostRequestHeaders"/> apply.
+        /// </summary>
+        public IDictionary<string, string> StreamingHostRequestHeaders { get; set; } = new Dictionary<string, string>();
+
+        /// <summary>
         /// The key used to fetch features from the GrowthBook API. Optional.
         /// </summary>
         public string ClientKey { get; set; }
@@ -182,6 +203,9 @@ namespace GrowthBook
             {
                 Enabled = this.Enabled,
                 ApiHost = this.ApiHost,
+                ApiHostRequestHeaders = new Dictionary<string, string>(this.ApiHostRequestHeaders ?? new Dictionary<string, string>()),
+                StreamingHost = this.StreamingHost,
+                StreamingHostRequestHeaders = new Dictionary<string, string>(this.StreamingHostRequestHeaders ?? new Dictionary<string, string>()),
                 ClientKey = this.ClientKey,
                 DecryptionKey = this.DecryptionKey,
                 Attributes = this.Attributes?.DeepClone() as JObject ?? new JObject(),
