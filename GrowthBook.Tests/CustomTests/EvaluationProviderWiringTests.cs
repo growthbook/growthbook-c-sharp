@@ -175,6 +175,48 @@ public class EvaluationProviderWiringTests
     }
 
     /// <summary>
+    /// Tracking data comes from the payload. A broken entry must not change the forced value, and must not
+    /// stop the entries after it from being reported.
+    /// </summary>
+    [Fact]
+    public void ABrokenTrackEntryDoesNotChangeTheForcedValue()
+    {
+        var (features, _, _) = BuildEvaluators();
+
+        var reported = new List<string>();
+
+        var context = ContextFor(
+            new Dictionary<string, Feature>
+            {
+                ["flag"] = new Feature
+                {
+                    DefaultValue = JToken.FromObject(false),
+                    Rules = new List<FeatureRule>
+                    {
+                        new FeatureRule
+                        {
+                            Force = JToken.FromObject(true),
+                            Tracks = new List<TrackData>
+                            {
+                                null,
+                                new TrackData { Result = new ExperimentResult { VariationId = 0 } },
+                                new TrackData
+                                {
+                                    Experiment = new Experiment { Key = "exp-1" },
+                                    Result = new ExperimentResult { VariationId = 1, HashAttribute = "id", HashValue = "user-1" }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            onTracked: (experiment, result) => reported.Add(experiment.Key));
+
+        features.EvaluateFeature("flag", context).Value.Value<bool>().Should().BeTrue("the rule forces true whatever its tracks hold");
+        reported.Should().Equal(new[] { "exp-1" }, "the valid entry after the broken ones is still reported");
+    }
+
+    /// <summary>
     /// A feature's experiment rule is run by the experiment evaluator, so this only works through the
     /// feature evaluator's link to its peer.
     /// </summary>

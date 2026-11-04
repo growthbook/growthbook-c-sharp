@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   three behaviours now match the JavaScript SDK where they previously did not:
   - A forced rule's `tracks` entries are deduplicated along with everything else, instead of calling the tracking
     callback on every evaluation. Applications that count exposures will see fewer events for features that force a
-    value and carry tracks.
+    value and carry tracks. Entries without an experiment or a result are skipped.
   - A sticky bucket assignment is merged with the user's assignments already held in memory and in the service, and
     written back to both, so a second evaluation in the same process finds it instead of re-hashing, and saving one
     experiment no longer drops another's preloaded assignment. Saves for the same user are serialized, so concurrent

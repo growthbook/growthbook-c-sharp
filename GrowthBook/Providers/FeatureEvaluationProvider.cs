@@ -130,6 +130,11 @@ namespace GrowthBook.Providers
                         {
                             foreach (var trackData in rule.Tracks)
                             {
+                                if (trackData?.Experiment == null || trackData.Result == null)
+                                {
+                                    continue;
+                                }
+
                                 ExperimentEvaluator.TrackExposure(trackData.Experiment, trackData.Result, context);
                             }
                         }
