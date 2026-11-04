@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Added `FileBasedFeatureCache` — a persistent, file-backed cache implementation inspired by the Swift CachingManager pattern. Supports custom cache paths, SHA256-based key isolation, and `ClearCache()`.
+- Added `Context.FeatureCache` — allows injecting a custom `IGrowthBookFeatureCache` (e.g. `FileBasedFeatureCache` or a Redis-backed implementation) without replacing the entire `FeatureRepository`.
+- Removed `Context.CachePath` — replaced by `FileBasedFeatureCache(cachePath: ...)` constructor parameter.
+
 ## [2.0.0] - 2026-10-30
 
 - **Breaking:** condition evaluation is strict about types, matching SDK spec 0.10.0 (growthbook/growthbook#7379).

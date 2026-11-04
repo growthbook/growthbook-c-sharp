@@ -266,6 +266,305 @@ public class FeatureRefreshWorkerTests : ApiUnitTest<FeatureRefreshWorker>
         handler.ReceivedIfNoneMatchHeader.Should().BeFalse("because the public overload has no ETag cache");
     }
 
+
+    /// <summary>
+    /// A 304 says the cached features are still current, so the window has to restart. The worker used
+    /// to ask for that by checking for one concrete cache type, which meant a caller's own cache - the
+    /// whole point of Context.FeatureCache - stayed expired and sent the next load straight back to the
+    /// API, every time, until the features actually changed.
+    /// </summary>
+
+    /// <summary>
+    /// A 304 answers the stored ETag, not the cache. Once the cache has been emptied — ClearCache, or
+    /// a file that went away — "nothing changed" is true of the server and false of us, and treating
+    /// the empty cache as fresh would hide the features for good: every later request gets the same
+    /// 304 and nothing ever refills it.
+    /// </summary>
+    [Fact]
+    public async Task AClearedCacheIsRefilledEvenWhenTheServerReportsNoChange()
+    {
+        var json = JsonConvert.SerializeObject(new FeaturesResponse { Features = _availableFeatures });
+
+        // 304 whenever an If-None-Match arrives, 200 otherwise - which is what a real server does, and
+        // what makes dropping the stored ETag the thing that recovers.
+        var handler = new ConditionalETagHandler("cleared-cache-etag", json);
+        var cachePath = Path.Combine(Path.GetTempPath(), $"gb-cleared-{Guid.NewGuid():N}");
+
+        try
+        {
+            var cache = new FileBasedFeatureCache("cleared-client", cacheExpirationInSeconds: 60, cachePath: cachePath);
+            var worker = new FeatureRefreshWorker(_logger, new ETagHttpClientFactory(handler), _config, cache);
+
+            (await worker.RefreshCacheFromApi()).Should().NotBeNull();
+            cache.FeatureCount.Should().Be(_availableFeatures.Count);
+
+            cache.ClearCache();
+            cache.FeatureCount.Should().Be(0);
+
+            var refilled = await worker.RefreshCacheFromApi();
+
+            refilled.Should().NotBeNull("a 304 against an empty cache has to be answered by asking for the whole payload");
+            cache.FeatureCount.Should().Be(_availableFeatures.Count, "and the features have to be back");
+            cache.IsCacheExpired.Should().BeFalse();
+        }
+        finally
+        {
+            if (Directory.Exists(cachePath))
+            {
+                Directory.Delete(cachePath, recursive: true);
+            }
+        }
+    }
+
+    /// <summary>
+    /// A payload with no features in it is a correct answer, and an empty cache holding it is correct
+    /// too. Treating empty as lost made every later 304 throw the ETag away and ask again for the same
+    /// empty answer, with the caller waiting for both requests.
+    /// </summary>
+    [Fact]
+    public async Task AnUnchangedEmptyPayloadDoesNotProvokeASecondRequest()
+    {
+        var json = JsonConvert.SerializeObject(new FeaturesResponse { Features = new Dictionary<string, Feature>() });
+
+        var handler = new ConditionalETagHandler("empty-payload-etag", json);
+        var cachePath = Path.Combine(Path.GetTempPath(), $"gb-empty-{Guid.NewGuid():N}");
+
+        try
+        {
+            var cache = new FileBasedFeatureCache("empty-client", cacheExpirationInSeconds: 60, cachePath: cachePath);
+            var worker = new FeatureRefreshWorker(_logger, new ETagHttpClientFactory(handler), _config, cache);
+
+            (await worker.RefreshCacheFromApi()).Should().NotBeNull();
+
+            cache.FeatureCount.Should().Be(0, "the payload really has no features in it");
+            handler.Requests.Should().Be(1);
+
+            var afterNotModified = await worker.RefreshCacheFromApi();
+
+            handler.Requests.Should().Be(2,
+                "one conditional request answered 304 - and no second request for the same empty answer");
+            afterNotModified.Should().NotBeNull().And.BeEmpty();
+            cache.IsCacheExpired.Should().BeFalse("the 304 restarted the window instead");
+        }
+        finally
+        {
+            if (Directory.Exists(cachePath))
+            {
+                Directory.Delete(cachePath, recursive: true);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Two refreshes overlapping must not leave the recorded count describing a different payload
+    /// than the one the cache holds. One can save an empty map and be suspended before recording its
+    /// count while another saves a full one and records two; when the first resumes and writes zero,
+    /// a later ClearCache looks like an ordinary empty payload and the flags never come back.
+    /// </summary>
+    [Fact]
+    public async Task OverlappingRefreshesDoNotLeaveTheCountDescribingAnotherPayload()
+    {
+        var empty = JsonConvert.SerializeObject(new FeaturesResponse { Features = new Dictionary<string, Feature>() });
+        var full = JsonConvert.SerializeObject(new FeaturesResponse { Features = _availableFeatures });
+
+        var handler = new SequencedETagHandler(empty, full);
+        var cache = new GatedCache();
+        var worker = new FeatureRefreshWorker(_logger, new ETagHttpClientFactory(handler), _config, cache);
+
+        // The first refresh saves the empty payload and is held inside RefreshWith, which is exactly
+        // the window between saving the features and recording how many there were.
+        var first = Task.Run(() => worker.RefreshCacheFromApi());
+
+        cache.FirstWriteStarted.Wait(TimeSpan.FromSeconds(10)).Should().BeTrue();
+
+        var second = Task.Run(() => worker.RefreshCacheFromApi());
+
+        // Give the second refresh the chance to get all the way through, which is what creates the
+        // bad pairing: it records two while the first is still suspended, and the first then records
+        // zero on top. Keeping the store and the count together is what stops it finishing here.
+        await Task.WhenAny(second, Task.Delay(TimeSpan.FromSeconds(1)));
+
+        cache.ReleaseFirstWrite();
+
+        await Task.WhenAll(first, second);
+
+        // Whatever order they finished in, the cache and the recorded count have to agree. Clearing
+        // the cache now must therefore read as lost features rather than as an empty payload.
+        cache.Clear();
+
+        var recovered = await worker.RefreshCacheFromApi();
+
+        recovered.Should().NotBeNullOrEmpty(
+            "a cleared cache has to be refilled, and that only happens when the recorded count " +
+            "describes the payload the cache was actually holding");
+    }
+
+    /// <summary>
+    /// Serves the given payloads in order, then answers 304 to a conditional request and repeats the
+    /// last payload to an unconditional one.
+    /// </summary>
+    private sealed class SequencedETagHandler : DelegatingHandler
+    {
+        private readonly string[] _payloads;
+        private int _served;
+
+        public int Served => Volatile.Read(ref _served);
+
+        public SequencedETagHandler(params string[] payloads)
+        {
+            _payloads = payloads;
+            InnerHandler = new HttpClientHandler();
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var index = Interlocked.Increment(ref _served) - 1;
+
+            HttpResponseMessage response;
+
+            if (index < _payloads.Length)
+            {
+                response = new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(_payloads[index], Encoding.UTF8, "application/json")
+                };
+            }
+            else if (request.Headers.IfNoneMatch.Any())
+            {
+                response = new HttpResponseMessage(HttpStatusCode.NotModified);
+            }
+            else
+            {
+                response = new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(_payloads[_payloads.Length - 1], Encoding.UTF8, "application/json")
+                };
+            }
+
+            response.Headers.ETag = new System.Net.Http.Headers.EntityTagHeaderValue("\"sequenced\"");
+
+            return Task.FromResult(response);
+        }
+    }
+
+    /// <summary>
+    /// Records features as soon as it is asked to, but holds the first caller there until released -
+    /// the suspension point the finding describes.
+    /// </summary>
+    private sealed class GatedCache : IGrowthBookFeatureCache
+    {
+        private readonly ManualResetEventSlim _release = new ManualResetEventSlim(false);
+        private IDictionary<string, Feature> _features = new Dictionary<string, Feature>();
+        private int _writes;
+
+        public ManualResetEventSlim FirstWriteStarted { get; } = new ManualResetEventSlim(false);
+
+        public int FeatureCount => _features.Count;
+
+        public bool IsCacheExpired => false;
+
+        public void ReleaseFirstWrite() => _release.Set();
+
+        public void Clear() => _features = new Dictionary<string, Feature>();
+
+        public Task<IDictionary<string, Feature>> GetFeatures(CancellationToken? cancellationToken = null) =>
+            Task.FromResult(_features);
+
+        public async Task RefreshWith(IDictionary<string, Feature> features, CancellationToken? cancellationToken = null)
+        {
+            _features = features;
+
+            if (Interlocked.Increment(ref _writes) == 1)
+            {
+                FirstWriteStarted.Set();
+
+                await Task.Run(() => _release.Wait(TimeSpan.FromSeconds(10))).ConfigureAwait(false);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Answers 304 to a conditional request and 200 to an unconditional one, as a server does.
+    /// </summary>
+    private sealed class ConditionalETagHandler : DelegatingHandler
+    {
+        private readonly string _etag;
+        private readonly string _jsonContent;
+        private int _requests;
+
+        public ConditionalETagHandler(string etag, string jsonContent)
+        {
+            _etag = etag;
+            _jsonContent = jsonContent;
+            InnerHandler = new HttpClientHandler();
+        }
+
+        public int Requests => Volatile.Read(ref _requests);
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _requests);
+
+            HttpResponseMessage response;
+
+            if (request.Headers.IfNoneMatch.Any())
+            {
+                response = new HttpResponseMessage(HttpStatusCode.NotModified);
+            }
+            else
+            {
+                response = new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(_jsonContent, Encoding.UTF8, "application/json")
+                };
+            }
+
+            response.Headers.ETag = new System.Net.Http.Headers.EntityTagHeaderValue($"\"{_etag}\"");
+
+            return Task.FromResult(response);
+        }
+    }
+
+    [Fact]
+    public async Task ANotModifiedResponseRestartsTheWindowOnAnyCacheThatSupportsIt()
+    {
+        var etag = "test-etag-304-injected";
+        var json = JsonConvert.SerializeObject(new FeaturesResponse { Features = _availableFeatures });
+        var handler = new ETagTestDelegatingHandler(etag, json, returnNotModifiedOnSecondCall: true);
+
+        var cachePath = Path.Combine(Path.GetTempPath(), $"gb-worker-{Guid.NewGuid():N}");
+
+        try
+        {
+            // A real injected cache rather than a substitute, because the defect was a type check that
+            // a substitute would have satisfied or missed for the wrong reason.
+            var cache = new FileBasedFeatureCache("worker-client", cacheExpirationInSeconds: 60, cachePath: cachePath);
+            var worker = new FeatureRefreshWorker(_logger, new ETagHttpClientFactory(handler), _config, cache);
+
+            await worker.RefreshCacheFromApi();
+
+            typeof(FileBasedFeatureCache).Should().BeAssignableTo<IFeatureCacheExpiration>(
+                "the worker finds the capability by interface, not by concrete type");
+
+            // Expire it, then let the server answer 304.
+            cache.SetCacheKey("worker-client-elsewhere");
+            cache.SetCacheKey("worker-client");
+            cache.IsCacheExpired.Should().BeTrue("nothing has been cached for this key since the reset");
+
+            await worker.RefreshCacheFromApi();
+
+            cache.IsCacheExpired.Should().BeFalse(
+                "the server confirmed what is cached is current, so the next load must not go back out");
+        }
+        finally
+        {
+            if (Directory.Exists(cachePath))
+            {
+                Directory.Delete(cachePath, recursive: true);
+            }
+        }
+    }
+
     [Fact]
     public async Task NotModifiedResponseReturnsCachedFeaturesWithoutReplacingCache()
     {
@@ -280,6 +579,9 @@ public class FeatureRefreshWorkerTests : ApiUnitTest<FeatureRefreshWorker>
         _cache
             .GetFeatures(Arg.Any<CancellationToken?>())
             .Returns(Task.FromResult<IDictionary<string, Feature>>(_availableFeatures));
+        // A cache that answers with features reports holding them; the worker reads this to tell a
+        // genuine "nothing changed" from a 304 arriving at a cache that has since been emptied.
+        _cache.FeatureCount.Returns(_availableFeatures.Count);
 
         var first = await worker.RefreshCacheFromApi();
         var second = await worker.RefreshCacheFromApi();
