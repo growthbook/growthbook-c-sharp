@@ -69,4 +69,92 @@ public class InMemoryFeatureCacheTests : UnitTest
         features.Should().NotBeSameAs(_availableFeatures, "because a copy of the cache will be returned to discourage external cache manipulation");
         features.Should().BeEquivalentTo(_availableFeatures, "because all cached features will be present");
     }
+
+    /// <summary>
+    /// A clock the test moves by hand, so expiry can be exercised without waiting out the TTL in real
+    /// seconds. Time only advances when a test says so, which is what makes these assertions deterministic
+    /// under any amount of CPU contention.
+    /// </summary>
+    private sealed class ManualClock
+    {
+        private DateTime _now = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+
+        public DateTime UtcNow() => _now;
+
+        public void Advance(TimeSpan amount) => _now = _now.Add(amount);
+    }
+
+    [Fact]
+    public async Task ARefreshedCacheGoesStaleOnceItsTimeToLiveElapses()
+    {
+        var clock = new ManualClock();
+        var cache = new InMemoryFeatureCache(60, clock.UtcNow);
+
+        await cache.RefreshWith(_availableFeatures);
+
+        cache.IsCacheExpired.Should().BeFalse("because the cache was just refreshed");
+
+        clock.Advance(TimeSpan.FromSeconds(59));
+        cache.IsCacheExpired.Should().BeFalse("because one second of the time to live is still left");
+
+        clock.Advance(TimeSpan.FromSeconds(1));
+        cache.IsCacheExpired.Should().BeTrue("because the expiration is inclusive - reaching it counts as expired");
+
+        clock.Advance(TimeSpan.FromHours(1));
+        cache.IsCacheExpired.Should().BeTrue("because nothing un-expires a cache except another refresh");
+    }
+
+    [Fact]
+    public async Task RefreshingAStaleCacheExtendsTheTimeToLiveFromTheMomentOfTheRefresh()
+    {
+        var clock = new ManualClock();
+        var cache = new InMemoryFeatureCache(60, clock.UtcNow);
+
+        await cache.RefreshWith(_availableFeatures);
+
+        clock.Advance(TimeSpan.FromSeconds(90));
+        cache.IsCacheExpired.Should().BeTrue();
+
+        await cache.RefreshWith(_availableFeatures);
+
+        cache.IsCacheExpired.Should().BeFalse("because the window restarts from the refresh, not from the original expiry");
+
+        clock.Advance(TimeSpan.FromSeconds(59));
+        cache.IsCacheExpired.Should().BeFalse();
+
+        clock.Advance(TimeSpan.FromSeconds(1));
+        cache.IsCacheExpired.Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task StaleFeaturesAreStillServedWhileTheCacheIsExpired()
+    {
+        var clock = new ManualClock();
+        var cache = new InMemoryFeatureCache(60, clock.UtcNow);
+
+        await cache.RefreshWith(_availableFeatures);
+
+        clock.Advance(TimeSpan.FromSeconds(120));
+
+        cache.IsCacheExpired.Should().BeTrue();
+        cache.FeatureCount.Should().Be(_availableFeatures.Count, "because expiry marks the cache for refresh - it does not empty it");
+
+        var features = await cache.GetFeatures();
+
+        features.Should().BeEquivalentTo(_availableFeatures,
+            "because serving stale values while a refresh is pending is the whole point of the expiry flag");
+    }
+
+    [Fact]
+    public void ACacheWithNoTimeToLiveIsAlwaysExpired()
+    {
+        var clock = new ManualClock();
+        var cache = new InMemoryFeatureCache(0, clock.UtcNow);
+
+        cache.IsCacheExpired.Should().BeTrue("because it starts out pre-expired");
+
+        cache.RefreshWith(_availableFeatures).GetAwaiter().GetResult();
+
+        cache.IsCacheExpired.Should().BeTrue("because a zero second window expires the instant it is set");
+    }
 }
