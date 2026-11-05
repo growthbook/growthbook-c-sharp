@@ -516,9 +516,10 @@ namespace GrowthBook.Utilities
             }
 
             return attributeNames
-                .Select(name => (name, value: attributes?[name]?.ToString()))
-                .Where(pair => !string.IsNullOrEmpty(pair.value))
-                .Select(pair => $"{pair.name}||{pair.value}");
+                .Select(name => attributes.GetHashAttributeAndValue(name))
+                .Where(pair => pair.Value != null)
+                .Select(pair => new StickyAssignmentsDocument(pair.Attribute, pair.Value).FormattedAttribute)
+                .Distinct();
         }
 }
 }

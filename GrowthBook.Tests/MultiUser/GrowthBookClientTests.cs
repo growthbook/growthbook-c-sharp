@@ -198,6 +198,71 @@ public class GrowthBookClientTests
         }
     }
 
+    /// <summary>
+    /// With no documents supplied, the client loads them from the service under the keys evaluation saves under.
+    /// An empty hash attribute means "id" there, so a saved assignment has to be found for it too.
+    /// </summary>
+    [Fact]
+    public async Task ASavedAssignmentIsFoundWhenTheHashAttributeIsEmpty()
+    {
+        var value = await StickyValueAsync(hashAttribute: "", id: JToken.FromObject("user-1"));
+
+        value.Should().Be(1, "the user was saved in variation 1, which the weights alone would never pick");
+    }
+
+    /// <summary>
+    /// Evaluation writes numbers the way JavaScript does, so the client has to look a numeric id up the same way.
+    /// </summary>
+    [Fact]
+    public async Task ASavedAssignmentIsFoundForANumericId()
+    {
+        var value = await StickyValueAsync(hashAttribute: "id", id: JToken.FromObject(1e21));
+
+        value.Should().Be(1, "the user was saved in variation 1, which the weights alone would never pick");
+    }
+
+    private static async Task<int> StickyValueAsync(string hashAttribute, JToken id)
+    {
+        var attributes = new JObject { ["id"] = id };
+        var (attribute, hashValue) = global::GrowthBook.Extensions.JsonExtensions.GetHashAttributeAndValue(attributes, hashAttribute);
+
+        var service = new global::GrowthBook.Services.InMemoryStickyBucketService();
+        service.SaveAssignments(new StickyAssignmentsDocument(attribute, hashValue, new Dictionary<string, string> { ["exp__0"] = "1" }));
+
+        var repository = Substitute.For<IGrowthBookFeatureRepository>();
+        repository.GetFeatures(Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IDictionary<string, Feature>>(new Dictionary<string, Feature>
+            {
+                ["flag"] = new Feature
+                {
+                    DefaultValue = JToken.FromObject(-1),
+                    Rules = new List<FeatureRule>
+                    {
+                        new FeatureRule
+                        {
+                            Key = "exp",
+                            HashAttribute = hashAttribute,
+                            Variations = new JArray(0, 1),
+                            Weights = new List<double> { 1, 0 },
+                            Coverage = 1,
+                            Meta = new List<VariationMeta> { new VariationMeta { Key = "0" }, new VariationMeta { Key = "1" } }
+                        }
+                    }
+                }
+            }));
+
+        using var client = new GrowthBookClient(new Options
+        {
+            LoggerFactory = NullLoggerFactory.Instance,
+            FeatureRepository = repository,
+            StickyBucketService = service
+        });
+
+        await client.InitializeAsync();
+
+        return client.GetFeature("flag", -1, new UserContext { Attributes = attributes });
+    }
+
     [Fact]
     public async Task GetFeatures_ReturnsLoadedFeatures()
     {
