@@ -151,6 +151,84 @@ public class GrowthBookClientDefaultRepositoryTests
         client.IsOn("flag", User).Should().BeTrue("the refresh started before the update arrived, so it brings back older definitions");
     }
 
+    /// <summary>
+    /// An overtaken refresh must not leave its older flags in the cache either, or the next load reads them back
+    /// and installs them over the newer ones.
+    /// </summary>
+    [Fact]
+    public async Task ALoadAfterAnOvertakenRefreshDoesNotReinstallIt()
+    {
+        using var olderMayAnswer = new SemaphoreSlim(0);
+        using var olderStarted = new SemaphoreSlim(0);
+
+        var handler = new ScriptedHandler(async request =>
+        {
+            if (request == 2)
+            {
+                olderStarted.Release();
+                await olderMayAnswer.WaitAsync(TimeSpan.FromSeconds(10));
+                return FlagOff;
+            }
+
+            return request == 1 ? FlagOff : FlagOn;
+        });
+
+        using var client = CreateClient(handler, cacheExpirationInSeconds: 60);
+
+        await client.InitializeAsync();
+
+        var older = Task.Run(() => client.RefreshFeaturesAsync());
+        (await olderStarted.WaitAsync(TimeSpan.FromSeconds(10))).Should().BeTrue();
+
+        await client.RefreshFeaturesAsync();
+
+        olderMayAnswer.Release();
+        await older;
+
+        await client.InitializeAsync();
+
+        handler.Requests.Should().Be(3, "the last load read the cache rather than fetching again");
+        client.IsOn("flag", User).Should().BeTrue("the cache has to hold the newer flags, not the overtaken ones");
+    }
+
+    /// <summary>
+    /// An older response landing after a streamed update must not overwrite the update in the cache.
+    /// </summary>
+    [Fact]
+    public async Task ALoadAfterAnOlderRefreshKeepsTheStreamedUpdate()
+    {
+        using var refreshMayAnswer = new SemaphoreSlim(0);
+        using var refreshStarted = new SemaphoreSlim(0);
+
+        using var handler = new StreamingHandler(async request =>
+        {
+            if (request == 2)
+            {
+                refreshStarted.Release();
+                await refreshMayAnswer.WaitAsync(TimeSpan.FromSeconds(10));
+            }
+
+            return FlagOff;
+        });
+
+        using var client = CreateClient(handler, cacheExpirationInSeconds: 60, backgroundSync: true);
+
+        await client.InitializeAsync();
+
+        var refresh = Task.Run(() => client.RefreshFeaturesAsync());
+        (await refreshStarted.WaitAsync(TimeSpan.FromSeconds(10))).Should().BeTrue();
+
+        handler.Stream(FlagOn);
+        SpinWait.SpinUntil(() => client.IsOn("flag", User), TimeSpan.FromSeconds(10)).Should().BeTrue();
+
+        refreshMayAnswer.Release();
+        await refresh;
+
+        await client.InitializeAsync();
+
+        client.IsOn("flag", User).Should().BeTrue("the cache still holds the streamed update, not the older response");
+    }
+
     private static GrowthBookClient CreateClient(HttpMessageHandler handler, int cacheExpirationInSeconds, bool backgroundSync = false) =>
         new GrowthBookClient(new Options
         {
