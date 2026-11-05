@@ -418,6 +418,31 @@ public class GrowthBookClientTests
         }
     }
 
+    /// <summary>
+    /// The refresh an application calls to recover reports whether it worked, and a failed one keeps the
+    /// features already in use rather than dropping them.
+    /// </summary>
+    [Fact]
+    public async Task RefreshFeaturesAsyncReportsWhetherAnythingWasLoaded()
+    {
+        var calls = 0;
+        var repository = Substitute.For<IGrowthBookFeatureRepository>();
+        repository.GetFeatures(Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(Interlocked.Increment(ref calls) == 2 ? null : CreateFeatures()));
+
+        using var client = new GrowthBookClient(new Options { LoggerFactory = NullLoggerFactory.Instance, FeatureRepository = repository });
+
+        await client.InitializeAsync();
+
+        (await client.RefreshFeaturesAsync()).Success.Should().BeFalse("the repository returned no features");
+        client.GetFeatures().Should().ContainKey("dark-mode", "a failed refresh leaves the features in use in place");
+
+        var result = await client.RefreshFeaturesAsync();
+
+        result.Success.Should().BeTrue();
+        result.FeatureCount.Should().Be(CreateFeatures().Count);
+    }
+
     [Fact]
     public async Task GetFeatures_ReturnsLoadedFeatures()
     {

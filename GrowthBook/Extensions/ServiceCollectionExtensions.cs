@@ -81,8 +81,8 @@ namespace GrowthBook.Extensions
         /// default values, and nothing brings it back on its own: no polling runs, and streaming only starts
         /// once a load has succeeded. The failure is logged as an error for that reason. An application that
         /// cannot usefully run on default values should call <see cref="GrowthBookClient.RefreshFeaturesAsync"/>
-        /// itself - once that succeeds, <see cref="Options.BackgroundSync"/> keeps the features current - or set
-        /// <see cref="Options.ThrowOnInitializationFailure"/>.
+        /// itself, which reports whether it succeeded - once it has, <see cref="Options.BackgroundSync"/> keeps the
+        /// features current - or set <see cref="Options.ThrowOnInitializationFailure"/>.
         /// </para>
         /// </remarks>
         private static GrowthBookClient CreateInitializedClient(Options options, IServiceProvider provider)
