@@ -32,7 +32,11 @@ namespace GrowthBook.Api.Extensions
             return (response.Features, response.IsServerSentEventsEnabled);
         }
 
-        internal static async Task<(IDictionary<string, Feature> Features, bool IsServerSentEventsEnabled, bool IsNotModified)> GetFeaturesFrom(this HttpClient httpClient, string endpoint, ILogger logger, GrowthBookConfigurationOptions config, CancellationToken cancellationToken, LruETagCache etagCache)
+        /// <summary>
+        /// Sends the stored ETag and returns the response's own without storing it, so the caller can keep it with the
+        /// features or drop both.
+        /// </summary>
+        internal static async Task<(IDictionary<string, Feature> Features, bool IsServerSentEventsEnabled, bool IsNotModified, string ETag)> GetFeaturesFrom(this HttpClient httpClient, string endpoint, ILogger logger, GrowthBookConfigurationOptions config, CancellationToken cancellationToken, LruETagCache etagCache)
         {
             using (var request = new HttpRequestMessage(HttpMethod.Get, endpoint))
             {
@@ -57,7 +61,7 @@ namespace GrowthBook.Api.Extensions
                 if (response.StatusCode == HttpStatusCode.NotModified)
                 {
                     logger.LogInformation("Features API returned 304 Not Modified for endpoint '{Endpoint}'", endpoint);
-                    return (null, isServerSentEventsEnabled, true);
+                    return (null, isServerSentEventsEnabled, true, null);
                 }
 
                 if (!response.IsSuccessStatusCode)
@@ -92,12 +96,7 @@ namespace GrowthBook.Api.Extensions
 
                 var features = ParseFeaturesFrom(json, logger, config);
 
-                if (response.Headers.ETag != null)
-                {
-                    etagCache?.Put(endpoint, response.Headers.ETag.ToString());
-                }
-
-                return (features, isServerSentEventsEnabled, false);
+                return (features, isServerSentEventsEnabled, false, response.Headers.ETag?.ToString());
             }
         }
 

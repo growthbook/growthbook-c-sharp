@@ -97,7 +97,7 @@ namespace GrowthBook.Api
                 return null;
             }
 
-            if (!await WriteCacheInOrder(response.Features, sequence, cancellationToken ?? _refreshWorkerCancellation.Token).ConfigureAwait(false))
+            if (!await WriteCacheInOrder(response.Features, response.ETag, sequence, cancellationToken ?? _refreshWorkerCancellation.Token).ConfigureAwait(false))
             {
                 return await _cache.GetFeatures(cancellationToken).ConfigureAwait(false);
             }
@@ -115,7 +115,7 @@ namespace GrowthBook.Api
             return response.Features;
         }
 
-        private async Task<bool> WriteCacheInOrder(IDictionary<string, Feature> features, long sequence, CancellationToken cancellationToken)
+        private async Task<bool> WriteCacheInOrder(IDictionary<string, Feature> features, string etag, long sequence, CancellationToken cancellationToken)
         {
             await _cacheWriteLock.WaitAsync(cancellationToken).ConfigureAwait(false);
 
@@ -128,6 +128,11 @@ namespace GrowthBook.Api
 
                 await _cache.RefreshWith(features, cancellationToken).ConfigureAwait(false);
                 _cachedSequence = sequence;
+
+                if (etag != null)
+                {
+                    _etagCache.Put(_featuresApiEndpoint, etag);
+                }
 
                 return true;
             }
@@ -208,7 +213,7 @@ namespace GrowthBook.Api
                         var sequence = Interlocked.Increment(ref _cacheWriteSequence);
                         var features = GetFeaturesFrom(sseEvent.Data);
 
-                        if (features != null && await WriteCacheInOrder(features, sequence, _refreshWorkerCancellation.Token).ConfigureAwait(false))
+                        if (features != null && await WriteCacheInOrder(features, null, sequence, _refreshWorkerCancellation.Token).ConfigureAwait(false))
                         {
                             NotifyFeaturesStreamed(features);
 

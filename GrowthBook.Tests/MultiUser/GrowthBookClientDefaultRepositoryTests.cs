@@ -229,6 +229,51 @@ public class GrowthBookClientDefaultRepositoryTests
         client.IsOn("flag", User).Should().BeTrue("the cache still holds the streamed update, not the older response");
     }
 
+    /// <summary>
+    /// An overtaken refresh must not leave its ETag behind either. The cache would hold the newer flags under the
+    /// older response's ETag, and once the API rolled back to that response, every refresh would get a 304.
+    /// </summary>
+    [Fact]
+    public async Task ARollbackAfterAnOvertakenRefreshIsApplied()
+    {
+        using var olderMayAnswer = new SemaphoreSlim(0);
+        using var olderStarted = new SemaphoreSlim(0);
+
+        var handler = new ETagHandler(async request =>
+        {
+            switch (request)
+            {
+                case 1:
+                    return (FlagOff, "\"v0\"");
+                case 2:
+                    olderStarted.Release();
+                    await olderMayAnswer.WaitAsync(TimeSpan.FromSeconds(10));
+                    return (FlagOff, "\"v1\"");
+                case 3:
+                    return (FlagOn, "\"v2\"");
+                default:
+                    // The API has rolled back to what the overtaken refresh fetched.
+                    return (FlagOff, "\"v1\"");
+            }
+        });
+
+        using var client = CreateClient(handler, cacheExpirationInSeconds: 60);
+
+        await client.InitializeAsync();
+
+        var older = Task.Run(() => client.RefreshFeaturesAsync());
+        (await olderStarted.WaitAsync(TimeSpan.FromSeconds(10))).Should().BeTrue();
+
+        await client.RefreshFeaturesAsync();
+
+        olderMayAnswer.Release();
+        await older;
+
+        await client.RefreshFeaturesAsync();
+
+        client.IsOn("flag", User).Should().BeFalse("the API rolled back, and the refresh has to fetch it rather than get a 304");
+    }
+
     private static GrowthBookClient CreateClient(HttpMessageHandler handler, int cacheExpirationInSeconds, bool backgroundSync = false) =>
         new GrowthBookClient(new Options
         {
@@ -355,6 +400,40 @@ public class GrowthBookClientDefaultRepositoryTests
             {
                 Content = new StringContent(json, Encoding.UTF8, "application/json")
             };
+        }
+    }
+
+    /// <summary>
+    /// Answers each request with what the script returns for its number, and with a 304 when the request already
+    /// holds that response's ETag.
+    /// </summary>
+    private sealed class ETagHandler : HttpMessageHandler
+    {
+        private readonly Func<int, Task<(string Json, string ETag)>> _respond;
+        private int _requests;
+
+        public ETagHandler(Func<int, Task<(string Json, string ETag)>> respond) => _respond = respond;
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var (json, etag) = await _respond(Interlocked.Increment(ref _requests));
+            var tag = new System.Net.Http.Headers.EntityTagHeaderValue(etag);
+
+            if (request.Headers.IfNoneMatch.Contains(tag))
+            {
+                var notModified = new HttpResponseMessage(HttpStatusCode.NotModified);
+                notModified.Headers.ETag = tag;
+
+                return notModified;
+            }
+
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json")
+            };
+            response.Headers.ETag = tag;
+
+            return response;
         }
     }
 

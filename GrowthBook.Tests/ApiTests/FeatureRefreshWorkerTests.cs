@@ -236,18 +236,20 @@ public class FeatureRefreshWorkerTests : ApiUnitTest<FeatureRefreshWorker>
     public async Task ETagIsStoredAndSentOnLaterFeatureRequests()
     {
         var etag = "test-etag";
-        var endpoint = "https://cdn.growthbook.io/api/features/sdk-test";
         var json = JsonConvert.SerializeObject(new FeaturesResponse { Features = _availableFeatures });
         var handler = new ETagTestDelegatingHandler(etag, json);
-        var httpClient = new HttpClient(handler);
-        var etagCache = new LruETagCache();
+        var worker = new FeatureRefreshWorker(_logger, new ETagHttpClientFactory(handler), _config, _cache);
 
-        var first = await httpClient.GetFeaturesFrom(endpoint, _logger, _config, CancellationToken.None, etagCache);
-        first.Features.Should().BeEquivalentTo(_availableFeatures);
+        _cache
+            .RefreshWith(Arg.Any<IDictionary<string, Feature>>(), Arg.Any<CancellationToken?>())
+            .Returns(Task.CompletedTask);
+
+        var first = await worker.RefreshCacheFromApi();
+        first.Should().BeEquivalentTo(_availableFeatures);
         handler.ReceivedIfNoneMatchHeader.Should().BeFalse("because the first request has no cached ETag yet");
 
-        var second = await httpClient.GetFeaturesFrom(endpoint, _logger, _config, CancellationToken.None, etagCache);
-        second.Features.Should().BeEquivalentTo(_availableFeatures);
+        var second = await worker.RefreshCacheFromApi();
+        second.Should().BeEquivalentTo(_availableFeatures);
         handler.ReceivedIfNoneMatchHeader.Should().BeTrue("because the ETag from the first response should be reused");
         handler.ReceivedETagValue.Should().Be(etag);
     }
