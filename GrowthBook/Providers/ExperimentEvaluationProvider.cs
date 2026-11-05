@@ -108,15 +108,26 @@ namespace GrowthBook.Providers
                 var bucketVersion = experiment.BucketVersion;
                 var minBucketVersion = experiment.MinBucketVersion;
                 var meta = experiment.Meta ?? new List<VariationMeta>();
+                var attributes = context.GetAttributes();
+                var documents = context.User.StickyBucketAssignmentDocs;
 
-                var stickyBucketVariation = ExperimentUtilities.GetStickyBucketVariation(
-                    experiment,
-                    bucketVersion,
-                    minBucketVersion,
-                    meta,
-                    context.GetAttributes(),
-                    context.User.StickyBucketAssignmentDocs
-                );
+                StickyBucketVariation ReadStickyBucket() => ExperimentUtilities.GetStickyBucketVariation(
+                    experiment, bucketVersion, minBucketVersion, meta, attributes, documents);
+
+                StickyBucketVariation stickyBucketVariation;
+
+                // Read under the lock the save takes: the documents can be shared by a request's parallel checks.
+                if (documents is null)
+                {
+                    stickyBucketVariation = ReadStickyBucket();
+                }
+                else
+                {
+                    lock (documents)
+                    {
+                        stickyBucketVariation = ReadStickyBucket();
+                    }
+                }
 
                 foundStickyBucket = stickyBucketVariation.VariationIndex >= 0;
                 assignedBucket = stickyBucketVariation.VariationIndex;
