@@ -264,6 +264,79 @@ public class GrowthBookClientTests
     }
 
     /// <summary>
+    /// Without documents of its own, each call loads a separate copy, so a lock on the documents doesn't span
+    /// calls. Parallel checks for one user must still each add their assignment to the saved document.
+    /// </summary>
+    [Fact]
+    public async Task ParallelChecksForOneUserKeepEverySavedAssignment()
+    {
+        const int ExperimentCount = 30;
+
+        var features = Enumerable.Range(0, ExperimentCount).ToDictionary(
+            i => $"flag-{i}",
+            i => new Feature
+            {
+                DefaultValue = JToken.FromObject(-1),
+                Rules = new List<FeatureRule>
+                {
+                    new FeatureRule
+                    {
+                        Key = $"exp-{i}",
+                        Variations = new JArray(0, 1),
+                        Weights = new List<double> { 0.5, 0.5 },
+                        Coverage = 1,
+                        Meta = new List<VariationMeta> { new VariationMeta { Key = "0" }, new VariationMeta { Key = "1" } }
+                    }
+                }
+            });
+
+        var repository = Substitute.For<IGrowthBookFeatureRepository>();
+        repository.GetFeatures(Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IDictionary<string, Feature>>(features));
+
+        var service = new SlowStickyBucketService();
+
+        using var client = new GrowthBookClient(new Options
+        {
+            LoggerFactory = NullLoggerFactory.Instance,
+            FeatureRepository = repository,
+            StickyBucketService = service
+        });
+
+        await client.InitializeAsync();
+
+        var user = new UserContext { Attributes = new JObject { ["id"] = "user-1" } };
+
+        Parallel.ForEach(features.Keys, new ParallelOptions { MaxDegreeOfParallelism = 16 }, key => client.GetFeature(key, -1, user));
+
+        service.GetAssignments("id", "user-1").Assignments.Should().HaveCount(ExperimentCount,
+            "every check saved an assignment, and none may be lost to another check's save");
+    }
+
+    /// <summary>
+    /// Widens the gap between reading a document and saving it, as a remote store would.
+    /// </summary>
+    private sealed class SlowStickyBucketService : global::GrowthBook.Services.IStickyBucketService
+    {
+        private readonly global::GrowthBook.Services.InMemoryStickyBucketService _inner = new global::GrowthBook.Services.InMemoryStickyBucketService();
+
+        public IDictionary<string, StickyAssignmentsDocument> GetAllAssignments(IEnumerable<string> attributes) => _inner.GetAllAssignments(attributes);
+
+        public StickyAssignmentsDocument GetAssignments(string attributeName, string attributeValue)
+        {
+            var document = _inner.GetAssignments(attributeName, attributeValue);
+            Thread.Sleep(1);
+            return document;
+        }
+
+        public void SaveAssignments(StickyAssignmentsDocument document)
+        {
+            Thread.Sleep(1);
+            _inner.SaveAssignments(document);
+        }
+    }
+
+    /// <summary>
     /// The set a request carries to deduplicate exposures is shared by its parallel flag checks. Each exposure
     /// has to be reported once, and none of them may break an evaluation.
     /// </summary>

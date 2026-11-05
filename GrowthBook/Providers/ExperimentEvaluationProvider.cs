@@ -260,34 +260,45 @@ namespace GrowthBook.Providers
         }
 
         /// <summary>
-        /// Saves a new sticky assignment. Locked on the user's documents, so two evaluations for the same
-        /// user cannot each write a document that is missing the other's assignment.
+        /// Serializes saving one user's sticky document across evaluations that don't share a document map, as
+        /// the multi-user client's calls don't when the caller supplies none. Striped, so memory stays fixed
+        /// however many users there are.
+        /// </summary>
+        private static readonly object[] StickySaveLocks = Enumerable.Range(0, 64).Select(_ => new object()).ToArray();
+
+        /// <summary>
+        /// Saves a new sticky assignment. Locked per user across every evaluation, and on the user's documents,
+        /// so two evaluations for the same user cannot each save a document missing the other's assignment.
         /// </summary>
         private static void SaveStickyAssignment(EvaluationContext context, string hashAttribute, string hashValue, IDictionary<string, string> assignments)
         {
             var service = context.Global.StickyBucketService;
             var documents = context.User.StickyBucketAssignmentDocs;
+            var stripe = StickySaveLocks[(uint)$"{hashAttribute}||{hashValue}".GetHashCode() % (uint)StickySaveLocks.Length];
 
-            if (documents is null)
+            lock (stripe)
             {
-                (var document, var isChanged) = ExperimentUtilities.GenerateStickyBucketAssignment(service, null, hashAttribute, hashValue, assignments);
-
-                if (isChanged)
+                if (documents is null)
                 {
-                    service.SaveAssignments(document);
+                    (var document, var isChanged) = ExperimentUtilities.GenerateStickyBucketAssignment(service, null, hashAttribute, hashValue, assignments);
+
+                    if (isChanged)
+                    {
+                        service.SaveAssignments(document);
+                    }
+
+                    return;
                 }
 
-                return;
-            }
-
-            lock (documents)
-            {
-                (var document, var isChanged) = ExperimentUtilities.GenerateStickyBucketAssignment(service, documents, hashAttribute, hashValue, assignments);
-
-                if (isChanged)
+                lock (documents)
                 {
-                    service.SaveAssignments(document);
-                    documents[document.FormattedAttribute] = document;
+                    (var document, var isChanged) = ExperimentUtilities.GenerateStickyBucketAssignment(service, documents, hashAttribute, hashValue, assignments);
+
+                    if (isChanged)
+                    {
+                        service.SaveAssignments(document);
+                        documents[document.FormattedAttribute] = document;
+                    }
                 }
             }
         }
