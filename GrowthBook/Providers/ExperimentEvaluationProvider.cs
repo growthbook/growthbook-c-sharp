@@ -260,12 +260,6 @@ namespace GrowthBook.Providers
         }
 
         /// <summary>
-        /// Reports the exposure to the tracking callbacks. It is reported once per unique assignment when the
-        /// user context carries a set to record them in, and every callback is guarded separately: the
-        /// assignment is already decided and may already be saved, so neither a throwing callback nor another
-        /// callback having thrown may change what the user is shown.
-        /// </summary>
-        /// <summary>
         /// Saves a new sticky assignment. Locked on the user's documents, so two evaluations for the same
         /// user cannot each write a document that is missing the other's assignment.
         /// </summary>
@@ -298,14 +292,30 @@ namespace GrowthBook.Providers
             }
         }
 
+        /// <summary>
+        /// Reports the exposure to the tracking callbacks. It is reported once per unique assignment when the
+        /// user context carries a set to record them in, and every callback is guarded separately: the
+        /// assignment is already decided and may already be saved, so neither a throwing callback nor another
+        /// callback having thrown may change what the user is shown.
+        /// </summary>
         internal void TrackExposure(Experiment experiment, ExperimentResult result, EvaluationContext context)
         {
             var trackedExperiments = context.User.TrackedExperiments;
 
-            if (trackedExperiments != null && !trackedExperiments.Add(GetTrackingKey(experiment, result)))
+            if (trackedExperiments != null)
             {
-                _logger.LogDebug("Experiment \'{ExperimentKey}\' has already been tracked for this user, not reporting it again", experiment.Key);
-                return;
+                bool isNew;
+
+                lock (trackedExperiments)
+                {
+                    isNew = trackedExperiments.Add(GetTrackingKey(experiment, result));
+                }
+
+                if (!isNew)
+                {
+                    _logger.LogDebug("Experiment \'{ExperimentKey}\' has already been tracked for this user, not reporting it again", experiment.Key);
+                    return;
+                }
             }
 
             Invoke(context.Global.TrackingCallback, "global");

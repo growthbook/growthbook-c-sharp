@@ -263,6 +263,63 @@ public class GrowthBookClientTests
         return client.GetFeature("flag", -1, new UserContext { Attributes = attributes });
     }
 
+    /// <summary>
+    /// The set a request carries to deduplicate exposures is shared by its parallel flag checks. Each exposure
+    /// has to be reported once, and none of them may break an evaluation.
+    /// </summary>
+    [Fact]
+    public async Task ParallelChecksInOneRequestReportEachExposureOnce()
+    {
+        const int ExperimentCount = 100;
+
+        var features = Enumerable.Range(0, ExperimentCount).ToDictionary(
+            i => $"flag-{i}",
+            i => new Feature
+            {
+                DefaultValue = JToken.FromObject(-1),
+                Rules = new List<FeatureRule>
+                {
+                    new FeatureRule { Key = $"exp-{i}", Variations = new JArray(0, 1), Weights = new List<double> { 0, 1 }, Coverage = 1 }
+                }
+            });
+
+        var repository = Substitute.For<IGrowthBookFeatureRepository>();
+        repository.GetFeatures(Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IDictionary<string, Feature>>(features));
+
+        var reported = new System.Collections.Concurrent.ConcurrentDictionary<string, int>();
+
+        using var client = new GrowthBookClient(new Options
+        {
+            LoggerFactory = NullLoggerFactory.Instance,
+            FeatureRepository = repository,
+            TrackingCallback = (experiment, result) => reported.AddOrUpdate(experiment.Key, 1, (_, count) => count + 1)
+        });
+
+        await client.InitializeAsync();
+
+        for (var round = 0; round < 20; round++)
+        {
+            reported.Clear();
+
+            var request = new UserContext
+            {
+                Attributes = new JObject { ["id"] = $"user-{round}" },
+                TrackedExperiments = new HashSet<string>()
+            };
+
+            var values = new System.Collections.Concurrent.ConcurrentBag<int>();
+
+            // Every flag checked twice, all at once, within the one request.
+            Parallel.ForEach(features.Keys.Concat(features.Keys), new ParallelOptions { MaxDegreeOfParallelism = 16 },
+                key => values.Add(client.GetFeature(key, -1, request)));
+
+            values.Should().OnlyContain(value => value == 1, "no evaluation may fall back to the default");
+            reported.Should().HaveCount(ExperimentCount);
+            reported.Values.Should().OnlyContain(count => count == 1, "each exposure is reported once per request");
+        }
+    }
+
     [Fact]
     public async Task GetFeatures_ReturnsLoadedFeatures()
     {
