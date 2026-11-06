@@ -82,9 +82,10 @@ namespace GrowthBook
         Task<T> GetFeatureValueAsync<T>(string key, T fallback, CancellationToken? cancellationToken = null);
 
         /// <summary>
-        /// Returns a map of the latest results indexed by experiment key.
+        /// Returns a snapshot of the latest results indexed by experiment key. Empty before anything has
+        /// been evaluated, never null. The returned dictionary is a copy - mutating it does not affect the
+        /// instance, and it does not observe later evaluations.
         /// </summary>
-        /// <returns></returns>
         IDictionary<string, ExperimentAssignment> GetAllResults();
 
         /// <summary>
