@@ -293,6 +293,17 @@ public class FeatureFetchBackoffReviewTests : UnitTest
             }
         }
 
+        public int QueuedCount
+        {
+            get
+            {
+                lock (_queued)
+                {
+                    return _queued.Count;
+                }
+            }
+        }
+
         /// <summary>
         /// Runs what is queued right now, not what those tasks go on to queue in turn.
         /// </summary>
@@ -351,9 +362,12 @@ public class FeatureFetchBackoffReviewTests : UnitTest
     /// </summary>
     /// <remarks>
     /// <para>
-    /// The late caller is held on a scheduler the test pumps by hand, which is what makes the ordering
-    /// a decision rather than a race: it is suspended between its fetch failing and its recording of
-    /// that failure, and a second, successful fetch is driven to completion in that gap.
+    /// The late outcome is a background caller's, recorded by a continuation that runs on the scheduler
+    /// current when it was registered - here one the test pumps by hand. That is what makes the ordering
+    /// a decision rather than a race: the fetch fails, its recording stays queued, and a second,
+    /// successful fetch is driven to completion in that gap. A blocking caller cannot be held like this:
+    /// it resumes from an await that does not come back to the caller's scheduler, so its recording runs
+    /// on the thread pool whenever that gets to it.
     /// </para>
     /// <para>
     /// Two things keep this right, and this pins the outcome rather than either one of them: outcomes
@@ -369,52 +383,35 @@ public class FeatureFetchBackoffReviewTests : UnitTest
         var repository = CreateRepository(worker, new ManualClock(), out var cache);
         await cache.RefreshWith(FeatureSet());
 
-        // xUnit installs a SynchronizationContext, and an await prefers one of those over the ambient
-        // scheduler, which would hand the caller back to the test runner instead of to the scheduler
-        // this test pumps. Without this the caller cannot be held suspended at all.
-        var testContext = SynchronizationContext.Current;
-        SynchronizationContext.SetSynchronizationContext(null);
+        var scheduler = new ManualScheduler();
 
-        try
+        var late = Task.Factory
+            .StartNew(() => repository.GetFeatures(Background), CancellationToken.None, TaskCreationOptions.None, scheduler)
+            .Unwrap();
+
+        // Run the call, then its fetch, which fails. Its recording is queued behind it and stays there.
+        while (worker.Attempts == 0 && scheduler.RunQueued() > 0)
         {
-            var scheduler = new ManualScheduler();
-
-            var late = Task.Factory
-                .StartNew(() => repository.GetFeatures(Blocking), CancellationToken.None, TaskCreationOptions.None, scheduler)
-                .Unwrap();
-
-            // Run the call, then its fetch, then one more step so the fetch's answer reaches the frame
-            // below the caller. The caller's own resumption, which is what records the failure, stays
-            // queued. How many steps that is depends on the async machinery, so it is discovered rather
-            // than hard-coded; both assertions below fail loudly if this lands anywhere else.
-            while (worker.Attempts == 0 && scheduler.RunQueued() > 0)
-            {
-            }
-
-            scheduler.RunQueued();
-
-            late.IsCompleted.Should().BeFalse(
-                "the caller has to still be suspended before it records, which is the point of this test");
-
-            // In the gap: a forced refresh accounts for the failed fetch, makes its own, and succeeds.
-            var forced = await repository.GetFeatures(new GrowthBookRetrievalOptions { ForceRefresh = true, WaitForCompletion = true });
-
-            forced.Should().NotBeNull();
-            worker.Attempts.Should().Be(2, "the failed fetch had finished, so this is a new request rather than a join");
-
-            // Only now does the first caller get to record a failure that a later success has overtaken.
-            scheduler.RunQueued();
-            await late;
-
-            await repository.GetFeatures(Background);
-
-            worker.WaitForAttempts(3).Should().BeTrue(
-                "the stale failure must not reopen the window that the later success closed");
         }
-        finally
-        {
-            SynchronizationContext.SetSynchronizationContext(testContext);
-        }
+
+        worker.Attempts.Should().Be(1);
+        scheduler.QueuedCount.Should().Be(1, "the failed fetch's recording has to be held, which is the point of this test");
+
+        // In the gap: a forced refresh accounts for the failed fetch, makes its own, and succeeds.
+        var forced = await repository.GetFeatures(new GrowthBookRetrievalOptions { ForceRefresh = true, WaitForCompletion = true });
+
+        forced.Should().NotBeNull();
+        worker.Attempts.Should().Be(2, "the failed fetch had finished, so this is a new request rather than a join");
+        scheduler.QueuedCount.Should().Be(1, "the failed fetch's recording must still be waiting");
+
+        // Only now is the failure recorded, after a later success has overtaken it.
+        scheduler.RunQueued();
+        await late;
+
+        await repository.GetFeatures(Background);
+
+        worker.WaitForAttempts(3).Should().BeTrue(
+            "the stale failure must not reopen the window that the later success closed");
     }
 
     /// <summary>
