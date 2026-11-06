@@ -461,6 +461,30 @@ public class SSELifecycleTests
     }
 
     [Fact]
+    public void TheReconnectDelayStaysJitteredOnceItReachesTheCeiling()
+    {
+        // Capping after the jitter would pin every client to the ceiling once the backoff reached it, so a long
+        // outage would keep them all retrying on the same schedule.
+        const int Ceiling = 5 * 60 * 1000;
+
+        using var client = CreateClient(new ScriptedSseHandler(_ => null));
+
+        foreach (var attempt in new[] { 8, 25, 1000, int.MaxValue })
+        {
+            var delays = new HashSet<int>();
+
+            for (var i = 0; i < 40; i++)
+            {
+                delays.Add(InvokeCalculateRetryDelay(client, attempt, 3000));
+            }
+
+            delays.Should().HaveCountGreaterThan(1, $"because attempt {attempt} is past the ceiling, where clients still have to spread out");
+            delays.Max().Should().BeLessThanOrEqualTo(Ceiling, $"because attempt {attempt} must stay within the ceiling");
+            delays.Min().Should().BeGreaterThanOrEqualTo(Ceiling / 2, $"because the spread at attempt {attempt} must not cut the wait by more than half");
+        }
+    }
+
+    [Fact]
     public async Task TheClientKeepsRetryingPastTheAttemptCountThatUsedToMakeItGiveUp()
     {
         const int OldGiveUpLimit = 10;

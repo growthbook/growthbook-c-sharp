@@ -288,9 +288,9 @@ namespace GrowthBook.Api.SSE
                 jitterFactor = 1d + JitterSource.NextDouble();
             }
 
-            var delay = _retryTimeMs * Math.Pow(2, _currentRetryAttempt - 1) * jitterFactor;
+            var backoff = Math.Min(_retryTimeMs * Math.Pow(2, _currentRetryAttempt - 1), MaxRetryDelayMs / 2d);
 
-            return (int)Math.Min(delay, MaxRetryDelayMs);
+            return (int)(backoff * jitterFactor);
         }
 
         private void SetConnectionStatus(SSEConnectionStatus status)
