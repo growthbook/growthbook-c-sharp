@@ -89,5 +89,48 @@ namespace GrowthBook.MultiUser.Configuration
 
         /// <summary>Service that provides sticky bucketing to ensure consistent experiment assignments across sessions.</summary>
         public IStickyBucketService StickyBucketService { get; set; }
-    }
+    
+        /// <summary>
+        /// Whether a failed first load should stop the client being created.
+        /// </summary>
+        /// <remarks>
+        /// False by default: a feature API that is down, rejecting the key or answering without features at
+        /// startup should not take the application down with it, so the client is created and serves default
+        /// values. It does not recover on its own - nothing refreshes until something calls
+        /// <see cref="MultiUser.GrowthBookClient.RefreshFeaturesAsync"/>, and streaming only starts after a load
+        /// has succeeded - so the failure is logged as an error rather than a warning. Once a refresh succeeds,
+        /// <see cref="BackgroundSync"/> keeps the features current from then on.
+        /// <para>
+        /// Set to true where starting without features is worse than not starting: the client is disposed and a
+        /// <see cref="Exceptions.FeatureLoadException"/>, or the exception the load threw, is rethrown.
+        /// </para>
+        /// </remarks>
+        public bool ThrowOnInitializationFailure { get; set; }
+
+        /// <summary>
+        /// A copy, so that handing these options to a client does not tie the caller's instance to it.
+        /// </summary>
+        internal Options Clone() => new Options
+        {
+            ClientKey = ClientKey,
+            ApiHost = ApiHost,
+            DecryptionKey = DecryptionKey,
+            Enabled = Enabled,
+            QaMode = QaMode,
+            GlobalAttributes = GlobalAttributes?.DeepClone() as JObject,
+            SavedGroups = SavedGroups?.DeepClone() as JObject,
+            GlobalForcedVariations = GlobalForcedVariations is null
+                ? null
+                : new Dictionary<string, int>(GlobalForcedVariations),
+            LoggerFactory = LoggerFactory,
+            FeatureRepository = FeatureRepository,
+            BackgroundSync = BackgroundSync,
+            CacheExpirationInSeconds = CacheExpirationInSeconds,
+            HttpRequestTimeoutInSeconds = HttpRequestTimeoutInSeconds,
+            HttpClientFactory = HttpClientFactory,
+            TrackingCallback = TrackingCallback,
+            StickyBucketService = StickyBucketService,
+            ThrowOnInitializationFailure = ThrowOnInitializationFailure
+        };
+}
 }

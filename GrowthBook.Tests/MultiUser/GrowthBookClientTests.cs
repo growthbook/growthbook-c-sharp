@@ -393,6 +393,56 @@ public class GrowthBookClientTests
         }
     }
 
+    /// <summary>
+    /// A repository that answers without features is a failed load, not an empty one, and the caller has to be
+    /// able to tell the two apart.
+    /// </summary>
+    [Fact]
+    public async Task InitializeAsyncReportsWhetherAnythingWasLoaded()
+    {
+        var empty = Substitute.For<IGrowthBookFeatureRepository>();
+        empty.GetFeatures(Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<IDictionary<string, Feature>>(null));
+
+        using (var client = new GrowthBookClient(new Options { LoggerFactory = NullLoggerFactory.Instance, FeatureRepository = empty }))
+        {
+            (await client.InitializeAsync()).Success.Should().BeFalse("the repository returned no features");
+        }
+
+        using (var client = CreateClient())
+        {
+            var result = await client.InitializeAsync();
+
+            result.Success.Should().BeTrue();
+            result.FeatureCount.Should().Be(CreateFeatures().Count);
+        }
+    }
+
+    /// <summary>
+    /// The refresh an application calls to recover reports whether it worked, and a failed one keeps the
+    /// features already in use rather than dropping them.
+    /// </summary>
+    [Fact]
+    public async Task RefreshFeaturesAsyncReportsWhetherAnythingWasLoaded()
+    {
+        var calls = 0;
+        var repository = Substitute.For<IGrowthBookFeatureRepository>();
+        repository.GetFeatures(Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken>())
+            .Returns(_ => Task.FromResult(Interlocked.Increment(ref calls) == 2 ? null : CreateFeatures()));
+
+        using var client = new GrowthBookClient(new Options { LoggerFactory = NullLoggerFactory.Instance, FeatureRepository = repository });
+
+        await client.InitializeAsync();
+
+        (await client.RefreshFeaturesAsync()).Success.Should().BeFalse("the repository returned no features");
+        client.GetFeatures().Should().ContainKey("dark-mode", "a failed refresh leaves the features in use in place");
+
+        var result = await client.RefreshFeaturesAsync();
+
+        result.Success.Should().BeTrue();
+        result.FeatureCount.Should().Be(CreateFeatures().Count);
+    }
+
     [Fact]
     public async Task GetFeatures_ReturnsLoadedFeatures()
     {

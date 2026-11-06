@@ -88,7 +88,11 @@ namespace GrowthBook.MultiUser
         /// <summary>
         /// Loads features from the repository. Call once at application startup before serving requests.
         /// </summary>
-        public async Task InitializeAsync(CancellationToken ct = default)
+        /// <returns>
+        /// Whether features were loaded. A repository that answers without any - such as an API response with no
+        /// <c>features</c> - is a failed load, not an empty one.
+        /// </returns>
+        public async Task<FeatureLoadResult> InitializeAsync(CancellationToken ct = default)
         {
             var sequence = Interlocked.Increment(ref _refreshSequence);
 
@@ -97,19 +101,37 @@ namespace GrowthBook.MultiUser
             var retrievalOptions = _ownsRepository ? new GrowthBookRetrievalOptions { WaitForCompletion = true } : null;
             var features = await _repository.GetFeatures(retrievalOptions, ct);
 
+            if (features == null)
+            {
+                return FeatureLoadResult.CreateFailure("The feature repository returned no features");
+            }
+
             PublishFeatures(features, sequence);
+
+            return FeatureLoadResult.CreateSuccess(features.Count);
         }
 
         /// <summary>
         /// Forces a refresh of features from the API, bypassing the cache.
         /// </summary>
-        public async Task RefreshFeaturesAsync(CancellationToken ct = default)
+        /// <returns>
+        /// Whether features were loaded, on the same terms as <see cref="InitializeAsync"/>. A failed refresh leaves
+        /// the features already in use in place.
+        /// </returns>
+        public async Task<FeatureLoadResult> RefreshFeaturesAsync(CancellationToken ct = default)
         {
             var sequence = Interlocked.Increment(ref _refreshSequence);
             var features = await _repository.GetFeatures(
                 new GrowthBookRetrievalOptions { ForceRefresh = true, WaitForCompletion = true}, ct);
 
+            if (features == null)
+            {
+                return FeatureLoadResult.CreateFailure("The feature repository returned no features");
+            }
+
             PublishFeatures(features, sequence);
+
+            return FeatureLoadResult.CreateSuccess(features.Count);
         }
 
         /// <summary>
