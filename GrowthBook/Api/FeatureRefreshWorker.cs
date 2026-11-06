@@ -39,6 +39,9 @@ namespace GrowthBook.Api
         private SSEClient _sseClient;
         private bool _isDisposed;
         private readonly Func<Func<Task>, Task> _startConnection = work => Task.Run(work);
+        private readonly SemaphoreSlim _cacheWriteLock = new SemaphoreSlim(1, 1);
+        private long _cacheWriteSequence;
+        private long _cachedSequence;
         private CancellationTokenSource _refreshWorkerCancellation = new CancellationTokenSource();
 
         public FeatureRefreshWorker(ILogger<FeatureRefreshWorker> logger, IHttpClientFactory httpClientFactory, GrowthBookConfigurationOptions config, IGrowthBookFeatureCache cache)
@@ -71,6 +74,8 @@ namespace GrowthBook.Api
 
         public async Task<IDictionary<string, Feature>> RefreshCacheFromApi(CancellationToken? cancellationToken = null)
         {
+            var sequence = Interlocked.Increment(ref _cacheWriteSequence);
+
             _logger.LogInformation("Making an HTTP request to the default Features API endpoint \'{FeaturesApiEndpoint}\'", _featuresApiEndpoint);
 
             var httpClient = _httpClientFactory.CreateClient(ConfiguredClients.DefaultApiClient);
@@ -92,7 +97,10 @@ namespace GrowthBook.Api
                 return null;
             }
 
-            await _cache.RefreshWith(response.Features, cancellationToken).ConfigureAwait(false);
+            if (!await WriteCacheInOrder(response.Features, response.ETag, sequence, cancellationToken ?? _refreshWorkerCancellation.Token).ConfigureAwait(false))
+            {
+                return await _cache.GetFeatures(cancellationToken).ConfigureAwait(false);
+            }
 
             // Now that the cache has been populated at least once, we need to see if we're allowed
             // to kick off the server sent events listener and make sure we're in the intended mode
@@ -105,6 +113,52 @@ namespace GrowthBook.Api
             }
 
             return response.Features;
+        }
+
+        private async Task<bool> WriteCacheInOrder(IDictionary<string, Feature> features, string etag, long sequence, CancellationToken cancellationToken)
+        {
+            await _cacheWriteLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+            try
+            {
+                if (sequence <= _cachedSequence)
+                {
+                    return false;
+                }
+
+                await _cache.RefreshWith(features, cancellationToken).ConfigureAwait(false);
+                _cachedSequence = sequence;
+
+                if (etag != null)
+                {
+                    _etagCache.Put(_featuresApiEndpoint, etag);
+                }
+
+                return true;
+            }
+            finally
+            {
+                _cacheWriteLock.Release();
+            }
+        }
+
+        private void NotifyFeaturesStreamed(IDictionary<string, Feature> features)
+        {
+            var callback = _config?.OnFeaturesStreamed;
+
+            if (callback is null || features is null)
+            {
+                return;
+            }
+
+            try
+            {
+                callback(features);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "The handler for streamed features threw");
+            }
         }
 
         private void EnsureCorrectRefreshModeIsActive()
@@ -156,10 +210,15 @@ namespace GrowthBook.Api
                     {
                         _logger.LogDebug("Received SSE event: {Data}", sseEvent.Data?.Substring(0, Math.Min(sseEvent.Data?.Length ?? 0, 100)));
                         
+                        var sequence = Interlocked.Increment(ref _cacheWriteSequence);
                         var features = GetFeaturesFrom(sseEvent.Data);
-                        await _cache.RefreshWith(features, _refreshWorkerCancellation.Token).ConfigureAwait(false);
-                        
-                        _logger.LogInformation("Cache has been refreshed with server sent event features");
+
+                        if (features != null && await WriteCacheInOrder(features, null, sequence, _refreshWorkerCancellation.Token).ConfigureAwait(false))
+                        {
+                            NotifyFeaturesStreamed(features);
+
+                            _logger.LogInformation("Cache has been refreshed with server sent event features");
+                        }
                     }
                 });
 

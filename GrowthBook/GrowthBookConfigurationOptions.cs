@@ -42,5 +42,11 @@ namespace GrowthBook
         /// The maximum number of ETags to keep for conditional feature API requests.
         /// </summary>
         public int EtagCacheSize { get; set; } = 100;
+
+        /// <summary>
+        /// Called with the features a server-sent event delivered, once they are cached. Set by
+        /// <see cref="MultiUser.GrowthBookClient"/> on the repository it builds.
+        /// </summary>
+        internal Action<IDictionary<string, Feature>> OnFeaturesStreamed { get; set; }
     }
 }

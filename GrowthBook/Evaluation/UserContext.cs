@@ -5,8 +5,14 @@ using Newtonsoft.Json.Linq;
 
 namespace GrowthBook.Evaluation
 {
-    /// <summary>Per-request context containing user-specific data passed to each evaluation call.</summary>
-    internal class UserContext
+    /// <summary>
+    /// Per-request context carrying one user's data into an evaluation.
+    /// </summary>
+    /// <remarks>
+    /// Public because <see cref="MultiUser.GrowthBookClient"/> takes one per call: a client serving
+    /// many users is handed the user with the question rather than holding them.
+    /// </remarks>
+    public class UserContext
     {
         /// <summary>User attributes used for targeting and experiment assignment (e.g. id, country, plan).</summary>
         public JObject Attributes { get; set; } = new JObject();
@@ -29,22 +35,23 @@ namespace GrowthBook.Evaluation
         public Action<Experiment, ExperimentResult> TrackingCallback { get; set; }
 
         /// <summary>
-        /// Not read by the evaluators, which use <see cref="GlobalContext.StickyBucketService"/>: whoever builds
-        /// the context decides which service goes there.
+        /// Sticky bucket service for this call. <see cref="MultiUser.GrowthBookClient"/> uses it instead of
+        /// <see cref="Options.StickyBucketService"/> when set.
         /// </summary>
         public IStickyBucketService StickyBucketService { get; set; }
 
         /// <summary>
-        /// The user's saved sticky bucket assignments, keyed by <c>attribute||value</c>. The evaluators read them
-        /// from here and write new assignments back, but do not load them: supply what the service holds for
-        /// this user, or sticky assignments are only found within this context.
+        /// The user's saved sticky bucket assignments, keyed by <c>attribute||value</c>. New assignments are written
+        /// back here. Left null, <see cref="MultiUser.GrowthBookClient"/> loads them from the sticky bucket service
+        /// for each call.
         /// </summary>
         public IDictionary<string, StickyAssignmentsDocument> StickyBucketAssignmentDocs { get; set; }
 
         /// <summary>
         /// Keys of the experiment assignments already reported to the tracking callbacks, so the same exposure
-        /// is not sent twice. Left null, nothing is deduplicated. Supply a set - and keep it for as long as the
-        /// request lives - to deduplicate across every evaluation the request makes.
+        /// is not sent twice. Left null, <see cref="MultiUser.GrowthBookClient"/> deduplicates within a single call
+        /// only. Supply a set - and keep it for as long as the request lives - to deduplicate across every
+        /// evaluation the request makes.
         /// </summary>
         public ISet<string> TrackedExperiments { get; set; }
     }

@@ -260,52 +260,73 @@ namespace GrowthBook.Providers
         }
 
         /// <summary>
-        /// Reports the exposure to the tracking callbacks. It is reported once per unique assignment when the
-        /// user context carries a set to record them in, and every callback is guarded separately: the
-        /// assignment is already decided and may already be saved, so neither a throwing callback nor another
-        /// callback having thrown may change what the user is shown.
+        /// Serializes saving one user's sticky document across evaluations that don't share a document map, as
+        /// the multi-user client's calls don't when the caller supplies none. Striped, so memory stays fixed
+        /// however many users there are.
         /// </summary>
+        private static readonly object[] StickySaveLocks = Enumerable.Range(0, 64).Select(_ => new object()).ToArray();
+
         /// <summary>
-        /// Saves a new sticky assignment. Locked on the user's documents, so two evaluations for the same
-        /// user cannot each write a document that is missing the other's assignment.
+        /// Saves a new sticky assignment. Locked per user across every evaluation, and on the user's documents,
+        /// so two evaluations for the same user cannot each save a document missing the other's assignment.
         /// </summary>
         private static void SaveStickyAssignment(EvaluationContext context, string hashAttribute, string hashValue, IDictionary<string, string> assignments)
         {
             var service = context.Global.StickyBucketService;
             var documents = context.User.StickyBucketAssignmentDocs;
+            var stripe = StickySaveLocks[(uint)$"{hashAttribute}||{hashValue}".GetHashCode() % (uint)StickySaveLocks.Length];
 
-            if (documents is null)
+            lock (stripe)
             {
-                (var document, var isChanged) = ExperimentUtilities.GenerateStickyBucketAssignment(service, null, hashAttribute, hashValue, assignments);
-
-                if (isChanged)
+                if (documents is null)
                 {
-                    service.SaveAssignments(document);
+                    (var document, var isChanged) = ExperimentUtilities.GenerateStickyBucketAssignment(service, null, hashAttribute, hashValue, assignments);
+
+                    if (isChanged)
+                    {
+                        service.SaveAssignments(document);
+                    }
+
+                    return;
                 }
 
-                return;
-            }
-
-            lock (documents)
-            {
-                (var document, var isChanged) = ExperimentUtilities.GenerateStickyBucketAssignment(service, documents, hashAttribute, hashValue, assignments);
-
-                if (isChanged)
+                lock (documents)
                 {
-                    service.SaveAssignments(document);
-                    documents[document.FormattedAttribute] = document;
+                    (var document, var isChanged) = ExperimentUtilities.GenerateStickyBucketAssignment(service, documents, hashAttribute, hashValue, assignments);
+
+                    if (isChanged)
+                    {
+                        service.SaveAssignments(document);
+                        documents[document.FormattedAttribute] = document;
+                    }
                 }
             }
         }
 
+        /// <summary>
+        /// Reports the exposure to the tracking callbacks. It is reported once per unique assignment when the
+        /// user context carries a set to record them in, and every callback is guarded separately: the
+        /// assignment is already decided and may already be saved, so neither a throwing callback nor another
+        /// callback having thrown may change what the user is shown.
+        /// </summary>
         internal void TrackExposure(Experiment experiment, ExperimentResult result, EvaluationContext context)
         {
             var trackedExperiments = context.User.TrackedExperiments;
 
-            if (trackedExperiments != null && !trackedExperiments.Add(GetTrackingKey(experiment, result)))
+            if (trackedExperiments != null)
             {
-                _logger.LogDebug("Experiment \'{ExperimentKey}\' has already been tracked for this user, not reporting it again", experiment.Key);
-                return;
+                bool isNew;
+
+                lock (trackedExperiments)
+                {
+                    isNew = trackedExperiments.Add(GetTrackingKey(experiment, result));
+                }
+
+                if (!isNew)
+                {
+                    _logger.LogDebug("Experiment \'{ExperimentKey}\' has already been tracked for this user, not reporting it again", experiment.Key);
+                    return;
+                }
             }
 
             Invoke(context.Global.TrackingCallback, "global");

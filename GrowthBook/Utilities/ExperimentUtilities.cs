@@ -473,5 +473,53 @@ namespace GrowthBook.Utilities
 
             return true;
         }
-    }
+    
+        /// <summary>
+        /// The sticky bucket identifiers that could matter for this payload and this user.
+        /// </summary>
+        /// <remarks>
+        /// Only rules and experiments that assign variations can use sticky bucketing, so only their
+        /// hash and fallback attributes are worth loading documents for. Returned in the
+        /// <c>name||value</c> form the sticky bucket service keys on, and only for attributes the
+        /// user actually has.
+        /// </remarks>
+        public static IEnumerable<string> DeriveIdentifierAttributes(IDictionary<string, Feature> features, IList<Experiment> experiments, JObject attributes)
+        {
+            var attributeNames = new HashSet<string>();
+
+            foreach (var feature in features?.Values ?? Enumerable.Empty<Feature>())
+            {
+                foreach (var rule in feature?.Rules ?? Enumerable.Empty<FeatureRule>())
+                {
+                    if (rule.Variations.IsNull())
+                    {
+                        continue;
+                    }
+
+                    attributeNames.Add(rule.HashAttribute ?? "id");
+
+                    if (!string.IsNullOrEmpty(rule.FallbackAttribute))
+                    {
+                        attributeNames.Add(rule.FallbackAttribute);
+                    }
+                }
+            }
+
+            foreach (var experiment in experiments ?? Enumerable.Empty<Experiment>())
+            {
+                attributeNames.Add(experiment.HashAttribute ?? "id");
+
+                if (!string.IsNullOrEmpty(experiment.FallbackAttribute))
+                {
+                    attributeNames.Add(experiment.FallbackAttribute);
+                }
+            }
+
+            return attributeNames
+                .Select(name => attributes.GetHashAttributeAndValue(name))
+                .Where(pair => pair.Value != null)
+                .Select(pair => new StickyAssignmentsDocument(pair.Attribute, pair.Value).FormattedAttribute)
+                .Distinct();
+        }
+}
 }
