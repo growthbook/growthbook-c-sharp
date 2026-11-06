@@ -7,6 +7,7 @@ using System.Text.RegularExpressions;
 using System.Web;
 using GrowthBook.Extensions;
 using GrowthBook.Services;
+using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -293,18 +294,31 @@ namespace GrowthBook.Utilities
             }
         }
 
-        public static (StickyAssignmentsDocument Document, bool IsChanged) GenerateStickyBucketAssignment(IStickyBucketService stickyBucketService, string attributeName, string attributeValue, IDictionary<string, string> assignments)
+        /// <summary>
+        /// Builds the user's sticky document with the new assignments added to what the service and the
+        /// in-memory documents already hold, the in-memory ones taking precedence as in the JS SDK.
+        /// </summary>
+        public static (StickyAssignmentsDocument Document, bool IsChanged) GenerateStickyBucketAssignment(IStickyBucketService stickyBucketService, IDictionary<string, StickyAssignmentsDocument> cachedDocuments, string attributeName, string attributeValue, IDictionary<string, string> assignments)
         {
-            var existingDocument = stickyBucketService is null ? new StickyAssignmentsDocument(attributeName, attributeValue) : stickyBucketService.GetAssignments(attributeName, attributeValue);
-            var newAssignments = new Dictionary<string, string>(existingDocument?.Assignments ?? new Dictionary<string, string>());
+            var document = new StickyAssignmentsDocument(attributeName, attributeValue);
+            var stored = stickyBucketService?.GetAssignments(attributeName, attributeValue);
+            StickyAssignmentsDocument cached = null;
 
-            newAssignments.MergeWith(new[] { assignments });
+            cachedDocuments?.TryGetValue(document.FormattedAttribute, out cached);
 
-            var isChanged = JsonConvert.SerializeObject(existingDocument?.Assignments) != JsonConvert.SerializeObject(newAssignments);
-            var document = new StickyAssignmentsDocument(attributeName, attributeValue, newAssignments);
+            var newAssignments = new Dictionary<string, string>(stored?.Assignments ?? new Dictionary<string, string>());
 
-            return (document, isChanged);
+            newAssignments.MergeWith(new[] { cached?.Assignments ?? new Dictionary<string, string>(), assignments });
+
+            var isChanged = !HaveSameAssignments(stored?.Assignments, newAssignments) || !HaveSameAssignments(cached?.Assignments, newAssignments);
+
+            return (new StickyAssignmentsDocument(attributeName, attributeValue, newAssignments), isChanged);
         }
+
+        private static bool HaveSameAssignments(IDictionary<string, string> existing, IDictionary<string, string> merged) =>
+            existing != null
+            && existing.Count == merged.Count
+            && merged.All(pair => existing.TryGetValue(pair.Key, out var value) && value == pair.Value);
 
         public static StickyBucketVariation GetStickyBucketVariation(Experiment experiment, int bucketVersion, int minBucketVersion, IList<VariationMeta> meta, JObject attributes, IDictionary<string, StickyAssignmentsDocument> document)
         {
@@ -380,5 +394,84 @@ namespace GrowthBook.Utilities
         }
 
         public static string GetStickyBucketExperimentKey(string key, int bucketVersion) => $"{key}__{bucketVersion}";
+
+        /// <summary>
+        /// Whether any of the filters excludes this run.
+        /// </summary>
+        /// <remarks>
+        /// Moved here from <see cref="GrowthBook"/> unchanged, taking the attributes as an argument
+        /// rather than reading the instance's own, so that an evaluation can be performed for a set of
+        /// attributes the instance does not hold.
+        /// </remarks>
+        public static bool IsFilteredOut(IEnumerable<Filter> filters, JObject attributes, ILogger logger = null)
+        {
+            foreach (var filter in filters)
+            {
+                (_, var hashValue) = attributes.GetHashAttributeAndValue(filter.Attribute);
+
+                if (hashValue is null)
+                {
+                    logger?.LogDebug("Attributes are missing a filter's hash attribute of '{FilterAttribute}', marking as filtered out", filter.Attribute);
+                    return true;
+                }
+
+                var bucket = HashUtilities.Hash(filter.Seed, hashValue, filter.HashVersion);
+
+                var isInAnyRange = filter.Ranges.Any(x => InRange(bucket.Value, x));
+
+                if (!isInAnyRange)
+                {
+                    logger?.LogDebug("This run is not in any range associated with a filter, marking as filtered out");
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Whether this run falls inside the rule's rollout.
+        /// </summary>
+        /// <remarks>
+        /// Moved here from <see cref="GrowthBook"/> unchanged, for the same reason as
+        /// <see cref="IsFilteredOut"/>.
+        /// </remarks>
+        public static bool IsIncludedInRollout(string seed, JObject attributes, string hashAttribute = null, string fallbackAttribute = null, BucketRange range = null, double? coverage = null, int? hashVersion = null, ILogger logger = null)
+        {
+            if (coverage == null && range == null)
+            {
+                logger?.LogDebug("No coverage value or range was specified, marking as included in rollout");
+                return true;
+            }
+
+            if (range is null && coverage == 0)
+            {
+                logger?.LogDebug("Range and coverage were not set, marking as not included in rollout");
+                return false;
+            }
+
+            (_, var hashValue) = attributes.GetHashAttributeAndValue(hashAttribute, fallbackAttribute);
+
+            if (hashValue is null)
+            {
+                logger?.LogDebug("Attributes do not have a value for hash attribute '{HashAttribute}', marking as excluded from rollout", hashAttribute);
+                return false;
+            }
+
+            var bucket = HashUtilities.Hash(seed, hashValue, hashVersion ?? 1);
+
+            if (range != null)
+            {
+                return InRange(bucket.Value, range);
+            }
+
+            if (coverage != null)
+            {
+                // Half-open like InRange, so a coverage of k/10000 includes exactly k hash buckets
+                return bucket < coverage;
+            }
+
+            return true;
+        }
     }
 }
