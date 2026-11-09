@@ -332,6 +332,19 @@ public class FileBasedFeatureCacheTests : IDisposable
         return growthBook.GetFeatureValue("launch-date", "");
     }
 
+    /// <summary>
+    /// The SDK never read CachePath, but callers set it, so it stays as an obsolete no-op rather than a compile error.
+    /// </summary>
+    [Fact]
+    public void TheDeprecatedCachePathStillCompilesAndIsCopied()
+    {
+#pragma warning disable CS0618
+        var context = new Context { CachePath = _testCachePath };
+
+        context.Clone().CachePath.Should().Be(_testCachePath);
+#pragma warning restore CS0618
+    }
+
     private sealed class CapturingLogger : Microsoft.Extensions.Logging.ILogger<FileBasedFeatureCache>
     {
         public List<string> Messages { get; } = new List<string>();

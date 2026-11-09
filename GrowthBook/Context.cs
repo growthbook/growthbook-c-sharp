@@ -140,6 +140,13 @@ namespace GrowthBook
         public ILoggerFactory LoggerFactory { get; set; }
 
         /// <summary>
+        /// Not used: the SDK never read it. To keep features on disk, pass the directory to
+        /// <see cref="Api.FileBasedFeatureCache"/> and set that as <see cref="FeatureCache"/>.
+        /// </summary>
+        [Obsolete("Never read by the SDK. Pass the directory to FileBasedFeatureCache and set it as Context.FeatureCache instead.")]
+        public string CachePath { get; set; }
+
+        /// <summary>
         /// Enable remote evaluation of features. When true, the SDK will send user attributes
         /// to the server for evaluation instead of evaluating features locally.
         /// Cannot be used with encryption or GrowthBook Cloud.
@@ -198,6 +205,9 @@ namespace GrowthBook
                 FeatureRepository = this.FeatureRepository,
                 FeatureCache = this.FeatureCache,
                 LoggerFactory = this.LoggerFactory,
+#pragma warning disable CS0618 // Copied so that a clone still reads back what the caller set.
+                CachePath = this.CachePath,
+#pragma warning restore CS0618
                 RemoteEval = this.RemoteEval,
                 CacheKeyAttributes = this.CacheKeyAttributes?.ToArray(),
                 ForcedFeatures = this.ForcedFeatures
