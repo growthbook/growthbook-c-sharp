@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Version operators (`$veq`, `$vgt` and the rest) no longer slow down on an attribute with many `+` characters
+  followed by a newline. The regex that stripped build metadata backtracked quadratically, taking about 1 s on a
+  20,000-character value; it is now a linear scan. Build metadata is now everything after the first `+`, even when a
+  newline follows it. Other versions compare as before.
 - Moved feature and experiment evaluation out of `GrowthBook` into stateless providers. Nothing public changed, but
   three behaviours now match the JavaScript SDK where they previously did not:
   - A forced rule's `tracks` entries are deduplicated along with everything else, instead of calling the tracking
