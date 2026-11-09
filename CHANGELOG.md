@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   followed by a newline. The regex that stripped build metadata backtracked quadratically, taking about 1 s on a
   20,000-character value; it is now a linear scan. Build metadata is now everything after the first `+`, even when a
   newline follows it. Other versions compare as before.
+- A version part with a trailing newline, such as the `3\n` in `1.0.0-3\n`, is no longer treated as a number, matching
+  the JavaScript SDK. It now sorts as a pre-release tag, so `1.0.0-3\n` is greater than `1.0.0-40`.
 - Moved feature and experiment evaluation out of `GrowthBook` into stateless providers. Nothing public changed, but
   three behaviours now match the JavaScript SDK where they previously did not:
   - A forced rule's `tracks` entries are deduplicated along with everything else, instead of calling the tracking

@@ -813,7 +813,8 @@ namespace GrowthBook.Providers
             // Left pad each numeric part with spaces so string comparisons will work ("9">"10", but " 9"<"10")
             // Then, join back together into a single string
 
-            var paddedVersionParts = versionParts.Select(x => Regex.IsMatch(x, "^[0-9]+$") ? x.PadLeft(5, ' ') : x);
+            // `\z`, not `$`: .NET's `$` also matches before a final newline, so "3\n" would count as numeric
+            var paddedVersionParts = versionParts.Select(x => Regex.IsMatch(x, @"^[0-9]+\z") ? x.PadLeft(5, ' ') : x);
 
             return string.Join("-", paddedVersionParts);
         }

@@ -18,6 +18,9 @@ public class PaddedVersionStringTests
     [InlineData("vv1.2.3", "v1-    2-    3-~")]
     [InlineData("+build", "")]
     [InlineData("", "    0")]
+    // A part with a trailing newline is not numeric, so it is not padded
+    [InlineData("1.2.3\n", "    1-    2-3\n-~")]
+    [InlineData("1.0.0-3\n", "    1-    0-    0-3\n")]
     public void StripsLeadingVAndBuildMetadata(string input, string expected)
     {
         ConditionEvaluationProvider.PaddedVersionString(input).Should().Be(expected);
