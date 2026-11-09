@@ -164,9 +164,9 @@ namespace GrowthBook.MultiUser
             => _options.GlobalAttributes;
 
         /// <summary>
-        /// Returns a snapshot of the currently loaded features. The map is a copy, so adding or removing
-        /// entries cannot change what every other user in the process evaluates against. The
-        /// <see cref="Feature"/> objects in it are the live ones, however - treat them as read only.
+        /// Returns a snapshot of the currently loaded features. The map and the <see cref="Feature"/> objects in it
+        /// are copies, as <see cref="GrowthBook.GetFeatures"/> hands out, so editing them cannot change what any user
+        /// in the process is evaluated against.
         /// </summary>
         public IDictionary<string, Feature> GetFeatures()
         {
@@ -177,7 +177,15 @@ namespace GrowthBook.MultiUser
                 return new Dictionary<string, Feature>();
             }
 
-            return new Dictionary<string, Feature>(features);
+            var comparer = (features as Dictionary<string, Feature>)?.Comparer ?? EqualityComparer<string>.Default;
+            var snapshot = new Dictionary<string, Feature>(features.Count, comparer);
+
+            foreach (var feature in features)
+            {
+                snapshot[feature.Key] = StateCopy.Of(feature.Value);
+            }
+
+            return snapshot;
         }
 
         /// <summary>Cancels the background feature refresh worker and releases resources.</summary>

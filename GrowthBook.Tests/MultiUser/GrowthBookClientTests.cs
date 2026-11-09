@@ -454,6 +454,27 @@ public class GrowthBookClientTests
         features.Should().ContainKey("dark-mode");
     }
 
+    /// <summary>
+    /// The snapshot holds copies, as GrowthBook.GetFeatures does, so editing a feature in it cannot change what any
+    /// user in the process is evaluated against.
+    /// </summary>
+    [Fact]
+    public async Task EditingAFeaturesSnapshotDoesNotChangeWhatIsEvaluated()
+    {
+        using var client = CreateClient();
+        await client.InitializeAsync();
+
+        var user = new UserContext { Attributes = new JObject { ["id"] = "user-1" } };
+        var before = client.EvalFeature("dark-mode", user).Value;
+
+        var snapshot = client.GetFeatures();
+        snapshot["dark-mode"].DefaultValue = JToken.FromObject("edited");
+        snapshot["dark-mode"].Rules.Clear();
+
+        JToken.DeepEquals(client.EvalFeature("dark-mode", user).Value, before).Should().BeTrue("editing the snapshot must not reach the loaded features");
+        client.GetFeatures()["dark-mode"].Rules.Should().HaveCount(1);
+    }
+
     [Fact]
     public async Task SetTrackingCallback_IsInvokedOnExperimentEval()
     {

@@ -33,14 +33,6 @@ namespace GrowthBook
             new ReadOnlyCollection<Experiment>(new List<Experiment>());
 
         private readonly bool _qaMode;
-        private static readonly JsonSerializer StateSerializer = JsonSerializer.Create(new JsonSerializerSettings
-        {
-            DefaultValueHandling = DefaultValueHandling.Include,
-            NullValueHandling = NullValueHandling.Include,
-            ObjectCreationHandling = ObjectCreationHandling.Replace,
-            ReferenceLoopHandling = ReferenceLoopHandling.Ignore,
-            TypeNameHandling = TypeNameHandling.None
-        });
         private readonly Dictionary<string, ExperimentAssignment> _assigned;
         private readonly ConcurrentDictionary<string, byte> _tracked;
         private Action<Experiment, ExperimentResult> _trackingCallback;
@@ -522,7 +514,7 @@ namespace GrowthBook
 
             foreach (var feature in features)
             {
-                snapshot[feature.Key] = CopyState(feature.Value);
+                snapshot[feature.Key] = StateCopy.Of(feature.Value);
             }
 
             return new ReadOnlyDictionary<string, Feature>(snapshot);
@@ -545,20 +537,10 @@ namespace GrowthBook
 
             foreach (var experiment in experiments)
             {
-                snapshot.Add(CopyState(experiment));
+                snapshot.Add(StateCopy.Of(experiment));
             }
 
             return new ReadOnlyCollection<Experiment>(snapshot);
-        }
-
-        private static T CopyState<T>(T value) where T : class
-        {
-            if (value is null)
-            {
-                return null;
-            }
-
-            return JToken.FromObject(value, StateSerializer).ToObject<T>(StateSerializer);
         }
 
         /// <inheritdoc />
