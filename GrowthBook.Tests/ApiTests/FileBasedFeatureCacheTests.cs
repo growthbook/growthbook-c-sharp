@@ -5,6 +5,8 @@ using System.Linq;
 using System.Threading.Tasks;
 using FluentAssertions;
 using GrowthBook.Api;
+using GrowthBook.Utilities;
+using Newtonsoft.Json;
 using Xunit;
 
 namespace GrowthBook.Tests.ApiTests;
@@ -300,6 +302,34 @@ public class FileBasedFeatureCacheTests : IDisposable
         {
             cache.ClearCache();
         }
+    }
+
+    /// <summary>
+    /// ISO 8601 strings in a payload stay strings, as they do in the API response. Read back as dates after a
+    /// restart, a value that looks like a timestamp would come back with different text.
+    /// </summary>
+    [Fact]
+    public async Task AFeatureReadBackAfterARestartKeepsItsTimestampText()
+    {
+        const string Launch = "2024-01-01T00:00:00.000Z";
+
+        var features = JsonConvert.DeserializeObject<Dictionary<string, Feature>>(
+            @"{ ""launch-date"": { ""defaultValue"": """ + Launch + @""" } }", JsonUtilities.PayloadSettings);
+
+        await _cache.RefreshWith(features);
+
+        var restarted = new FileBasedFeatureCache("client-under-test", cacheExpirationInSeconds: 60, cachePath: _testCachePath);
+        var reloaded = await restarted.GetFeatures();
+
+        LaunchDate(features).Should().Be(Launch);
+        LaunchDate(reloaded).Should().Be(Launch, "the features read back after a restart have to answer as the API's did");
+    }
+
+    private static string LaunchDate(IDictionary<string, Feature> features)
+    {
+        using var growthBook = new GrowthBook(new Context { Features = features });
+
+        return growthBook.GetFeatureValue("launch-date", "");
     }
 
     private sealed class CapturingLogger : Microsoft.Extensions.Logging.ILogger<FileBasedFeatureCache>

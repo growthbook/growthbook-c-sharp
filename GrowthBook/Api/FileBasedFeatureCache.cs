@@ -5,6 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using GrowthBook.Utilities;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 
@@ -192,7 +193,7 @@ namespace GrowthBook.Api
                     }
 
                     var content = File.ReadAllText(filePath);
-                    var features = JsonConvert.DeserializeObject<Dictionary<string, Feature>>(content);
+                    var features = JsonConvert.DeserializeObject<Dictionary<string, Feature>>(content, JsonUtilities.PayloadSettings);
                     _cachedFeatures = features ?? new Dictionary<string, Feature>();
                     _logger?.LogDebug("Loaded {Count} features from cache file", _cachedFeatures.Count);
                 }
