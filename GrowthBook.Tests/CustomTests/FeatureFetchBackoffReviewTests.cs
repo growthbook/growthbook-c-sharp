@@ -246,7 +246,6 @@ public class FeatureFetchBackoffReviewTests : UnitTest
         public Task<IDictionary<string, Feature>> RefreshCacheFromApi(CancellationToken? cancellationToken = null)
         {
             Interlocked.Increment(ref _attempts);
-            _entered.Release();
 
             var pending = new TaskCompletionSource<IDictionary<string, Feature>>();
 
@@ -254,6 +253,9 @@ public class FeatureFetchBackoffReviewTests : UnitTest
             {
                 _pending.Add(pending);
             }
+
+            // Signalled only once the fetch can be finished, or a test could call Finish before it is in the list.
+            _entered.Release();
 
             return pending.Task;
         }
@@ -454,6 +456,35 @@ public class FeatureFetchBackoffReviewTests : UnitTest
 
         worker.Attempts.Should().Be(1,
             "the finished fetch is accounted for before the gate decides, so no second request starts");
+    }
+
+    /// <summary>
+    /// Two instances that share a repository and join one fetch must each get a map of their own. An instance clears
+    /// its map on dispose, and with one map shared that emptied the flags the other instance was still serving.
+    /// </summary>
+    [Fact]
+    public async Task InstancesThatJoinOneFetchDoNotShareTheirFlags()
+    {
+        var worker = new ControlledWorker();
+        var repository = CreateRepository(worker, new ManualClock(), out _);
+
+        using var kept = new GrowthBook(new Context { FeatureRepository = repository });
+        var disposed = new GrowthBook(new Context { FeatureRepository = repository });
+
+        var firstLoad = kept.LoadFeatures();
+        worker.WaitUntilEntered().Should().BeTrue("the first load starts a fetch");
+
+        // Joins before the call returns, since nothing has finished the fetch.
+        var secondLoad = disposed.LoadFeatures();
+
+        worker.Finish(0, FeatureSet());
+        await Task.WhenAll(firstLoad, secondLoad);
+
+        worker.Attempts.Should().Be(1, "the second load joined the first one's fetch");
+
+        disposed.Dispose();
+
+        kept.IsOn("flag").Should().BeTrue("disposing the other instance must not clear these flags");
     }
 
     /// <summary>

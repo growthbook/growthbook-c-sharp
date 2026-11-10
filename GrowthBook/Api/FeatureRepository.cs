@@ -117,7 +117,9 @@ namespace GrowthBook.Api
                         // reach the gate before this outcome is known, or it fires a second request.
                         RecordRefreshOutcome(attempt.Id, features != null);
 
-                        return features;
+                        // Every caller waiting on a shared fetch gets a map of its own. An instance keeps the map it is
+                        // handed and clears it on dispose, which would otherwise empty every other instance's flags.
+                        return features is null ? null : new Dictionary<string, Feature>(features);
                     }
                     catch (OperationCanceledException) when (callerToken.IsCancellationRequested)
                     {
