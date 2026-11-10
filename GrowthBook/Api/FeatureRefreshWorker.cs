@@ -142,25 +142,6 @@ namespace GrowthBook.Api
             }
         }
 
-        private void NotifyFeaturesStreamed(IDictionary<string, Feature> features)
-        {
-            var callback = _config?.OnFeaturesStreamed;
-
-            if (callback is null || features is null)
-            {
-                return;
-            }
-
-            try
-            {
-                callback(features);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "The handler for streamed features threw");
-            }
-        }
-
         private void EnsureCorrectRefreshModeIsActive()
         {
             lock (_sseClientLock)
@@ -215,8 +196,6 @@ namespace GrowthBook.Api
 
                         if (features != null && await WriteCacheInOrder(features, null, sequence, _refreshWorkerCancellation.Token).ConfigureAwait(false))
                         {
-                            NotifyFeaturesStreamed(features);
-
                             _logger.LogInformation("Cache has been refreshed with server sent event features");
                         }
                     }
