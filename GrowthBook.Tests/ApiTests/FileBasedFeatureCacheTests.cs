@@ -349,7 +349,7 @@ public class FileBasedFeatureCacheTests : IDisposable
     /// The temporary file has a random name and is created exclusively. A predictable one in a shared directory could
     /// already be a link another account planted, and writing through it overwrote the file it pointed at.
     /// </summary>
-    [Fact]
+    [SymbolicLinkFact]
     public async Task ALinkPlantedAtTheOldTemporaryNameIsNotWrittenThrough()
     {
         var directory = Path.Combine(_testCachePath, $"GrowthBook-Cache-{Sha256Hex("client-under-test")}");
@@ -395,5 +395,52 @@ public class FileBasedFeatureCacheTests : IDisposable
         var hash = sha256.ComputeHash(System.Text.Encoding.UTF8.GetBytes(input));
 
         return BitConverter.ToString(hash).Replace("-", string.Empty).ToLowerInvariant();
+    }
+}
+
+/// <summary>
+/// A test that plants a symbolic link. Windows allows creating one only with Developer Mode or the right privilege, so
+/// where it is not allowed the test is reported as skipped instead of failing for a reason unrelated to the cache.
+/// </summary>
+internal sealed class SymbolicLinkFactAttribute : FactAttribute
+{
+    private static readonly Lazy<bool> Supported = new Lazy<bool>(CanCreateSymbolicLinks);
+
+    public SymbolicLinkFactAttribute()
+    {
+        if (!Supported.Value)
+        {
+            Skip = "This host does not allow creating symbolic links.";
+        }
+    }
+
+    private static bool CanCreateSymbolicLinks()
+    {
+        var directory = Path.Combine(Path.GetTempPath(), $"gb-link-probe-{Guid.NewGuid():N}");
+
+        try
+        {
+            Directory.CreateDirectory(directory);
+            var target = Path.Combine(directory, "target");
+            File.WriteAllText(target, string.Empty);
+            File.CreateSymbolicLink(Path.Combine(directory, "link"), target);
+
+            return true;
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException || ex is IOException || ex is PlatformNotSupportedException)
+        {
+            return false;
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+            catch (IOException)
+            {
+                // A probe left behind in the temporary directory is harmless.
+            }
+        }
     }
 }
