@@ -144,6 +144,10 @@ namespace GrowthBook.Api
                         await expiringCache.RefreshExpiration(cancellationToken).ConfigureAwait(false);
                     }
 
+                    // A worker sharing its cache can be answered 304 on its very first request, with the ETag another
+                    // worker stored, and still has to open a stream of its own.
+                    ApplyStreamingSupport(response.IsServerSentEventsEnabled);
+
                     return await _cache.GetFeatures(cancellationToken).ConfigureAwait(false);
                 }
             }
@@ -155,20 +159,27 @@ namespace GrowthBook.Api
 
             if (!await WriteCacheInOrder(response.Features, response.ETag, sequence, cancellationToken ?? _refreshWorkerCancellation.Token).ConfigureAwait(false))
             {
+                ApplyStreamingSupport(response.IsServerSentEventsEnabled);
+
                 return await _cache.GetFeatures(cancellationToken).ConfigureAwait(false);
             }
 
-            // Now that the cache has been populated at least once, we need to see if we're allowed
-            // to kick off the server sent events listener and make sure we're in the intended mode
-            // of operating going forward.
-
-            if (_config.PreferServerSentEvents)
-            {
-                _isServerSentEventsEnabled = response.IsServerSentEventsEnabled;
-                EnsureCorrectRefreshModeIsActive();
-            }
+            ApplyStreamingSupport(response.IsServerSentEventsEnabled);
 
             return response.Features;
+        }
+
+        /// <summary>
+        /// Now that the cache holds a payload, decides whether the server sent events listener should run, from what
+        /// the server said about streaming, and starts or stops it to match.
+        /// </summary>
+        private void ApplyStreamingSupport(bool isServerSentEventsEnabled)
+        {
+            if (_config.PreferServerSentEvents)
+            {
+                _isServerSentEventsEnabled = isServerSentEventsEnabled;
+                EnsureCorrectRefreshModeIsActive();
+            }
         }
 
         private async Task<bool> WriteCacheInOrder(IDictionary<string, Feature> features, string etag, long sequence, CancellationToken cancellationToken)
