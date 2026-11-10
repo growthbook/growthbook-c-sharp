@@ -345,6 +345,27 @@ public class FileBasedFeatureCacheTests : IDisposable
 #pragma warning restore CS0618
     }
 
+    /// <summary>
+    /// The temporary file has a random name and is created exclusively. A predictable one in a shared directory could
+    /// already be a link another account planted, and writing through it overwrote the file it pointed at.
+    /// </summary>
+    [Fact]
+    public async Task ALinkPlantedAtTheOldTemporaryNameIsNotWrittenThrough()
+    {
+        var directory = Path.Combine(_testCachePath, $"GrowthBook-Cache-{Sha256Hex("client-under-test")}");
+        Directory.CreateDirectory(directory);
+
+        var victim = Path.Combine(_testCachePath, "victim.txt");
+        File.WriteAllText(victim, "untouched");
+        File.CreateSymbolicLink(Path.Combine(directory, "gb-features.json.tmp"), victim);
+
+        await _cache.RefreshWith(_availableFeatures);
+
+        File.ReadAllText(victim).Should().Be("untouched", "the cache must not write through a link it did not create");
+        (await new FileBasedFeatureCache("client-under-test", cachePath: _testCachePath).GetFeatures()).Should().HaveCount(_availableFeatures.Count);
+        Directory.GetFiles(directory, "*.tmp").Should().ContainSingle("only the planted link is left, no temporary file of the cache's own");
+    }
+
     private sealed class CapturingLogger : Microsoft.Extensions.Logging.ILogger<FileBasedFeatureCache>
     {
         public List<string> Messages { get; } = new List<string>();

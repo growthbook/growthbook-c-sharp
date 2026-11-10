@@ -219,17 +219,34 @@ namespace GrowthBook.Api
 
                 var content = JsonConvert.SerializeObject(_cachedFeatures, Formatting.None);
 
-                var temporaryPath = filePath + ".tmp";
+                // A fresh random name, created exclusively. In a shared directory a predictable name could already be a
+                // link another account planted, and writing through it would overwrite whatever the link points at.
+                var temporaryPath = Path.Combine(directory, $"{DefaultFileName}.{Path.GetRandomFileName()}.tmp");
 
-                File.WriteAllText(temporaryPath, content);
-
-                if (File.Exists(filePath))
+                try
                 {
-                    File.Replace(temporaryPath, filePath, destinationBackupFileName: null);
+                    using (var stream = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+                    using (var writer = new StreamWriter(stream, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false)))
+                    {
+                        writer.Write(content);
+                    }
+
+                    if (File.Exists(filePath))
+                    {
+                        File.Replace(temporaryPath, filePath, destinationBackupFileName: null);
+                    }
+                    else
+                    {
+                        File.Move(temporaryPath, filePath);
+                    }
                 }
-                else
+                finally
                 {
-                    File.Move(temporaryPath, filePath);
+                    // Still there only if moving it into place failed.
+                    if (File.Exists(temporaryPath))
+                    {
+                        File.Delete(temporaryPath);
+                    }
                 }
 
                 _logger?.LogDebug("Saved {Count} features to cache file", _cachedFeatures.Count);
