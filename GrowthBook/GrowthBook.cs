@@ -189,9 +189,9 @@ namespace GrowthBook
 
             lock (_featuresLock)
             {
-                if (_publishedRemoteEvaluation > 0)
+                if (_canEvaluateRemotely || _publishedRemoteEvaluation > 0)
                 {
-                    _logger.LogDebug("Ignored a shared refresh: this instance is evaluated remotely and has its own result");
+                    _logger.LogDebug("Ignored a shared refresh: this instance is evaluated remotely");
 
                     return;
                 }

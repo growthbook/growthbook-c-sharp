@@ -117,6 +117,9 @@ namespace GrowthBook.Api
 
         private async Task<bool> WriteCacheInOrder(IDictionary<string, Feature> features, string etag, long sequence, CancellationToken cancellationToken)
         {
+            var announcingCache = _cache as IAnnouncingFeatureCache;
+            FeatureRefresh toAnnounce = null;
+
             await _cacheWriteLock.WaitAsync(cancellationToken).ConfigureAwait(false);
 
             try
@@ -126,7 +129,15 @@ namespace GrowthBook.Api
                     return false;
                 }
 
-                await _cache.RefreshWith(features, cancellationToken).ConfigureAwait(false);
+                if (announcingCache != null)
+                {
+                    toAnnounce = announcingCache.StoreWithoutAnnouncing(features);
+                }
+                else
+                {
+                    await _cache.RefreshWith(features, cancellationToken).ConfigureAwait(false);
+                }
+
                 _cachedSequence = sequence;
 
                 if (etag != null)
@@ -134,12 +145,18 @@ namespace GrowthBook.Api
                     _etagCache.Put(_featuresApiEndpoint, etag);
                 }
 
-                return true;
             }
             finally
             {
                 _cacheWriteLock.Release();
             }
+
+            if (toAnnounce != null)
+            {
+                announcingCache.Announce(toAnnounce);
+            }
+
+            return true;
         }
 
         private void EnsureCorrectRefreshModeIsActive()

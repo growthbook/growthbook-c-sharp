@@ -559,6 +559,88 @@ public class PushRefreshedFeaturesTests
     }
 
     /// <summary>
+    /// The cache is written under the worker's write lock and its subscribers are told afterwards. Told while the lock
+    /// was held, a subscriber that refreshed again from its handler waited on a lock its own caller was holding.
+    /// </summary>
+    [Fact]
+    public void ASubscriberThatRefreshesFromItsHandlerDoesNotDeadlock()
+    {
+        var cache = new InMemoryFeatureCache(cacheExpirationInSeconds: 60);
+        var http = new CountingHandler();
+        using var worker = new FeatureRefreshWorker(
+            NullLogger<FeatureRefreshWorker>.Instance,
+            new HandlerHttpClientFactory(http),
+            new GrowthBookConfigurationOptions { ApiHost = "https://growthbook.test", ClientKey = "sdk-test" },
+            cache);
+
+        var nested = 0;
+
+        using var subscription = cache.SubscribeToRefresh(_ =>
+        {
+            if (Interlocked.Increment(ref nested) == 1)
+            {
+                worker.RefreshCacheFromApi().GetAwaiter().GetResult();
+            }
+        });
+
+        var outer = Task.Run(() => worker.RefreshCacheFromApi());
+
+        outer.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue("a refresh made from a subscriber must not wait on its caller's lock");
+        http.Requests.Should().Be(2, "the subscriber's own refresh went through as well");
+    }
+
+    /// <summary>
+    /// An instance that can evaluate remotely answers from its own remote result, never from shared definitions, and
+    /// that holds before its first result arrives too. A push accepted in that gap stayed if the remote load failed.
+    /// </summary>
+    [Fact]
+    public void ASharedRefreshBeforeTheFirstRemoteResultIsIgnored()
+    {
+        var repository = new GatedRemoteRepository();
+
+        using var growthBook = new GrowthBook(new Context
+        {
+            Attributes = JObject.FromObject(new { id = "user-1" }),
+            Features = FeatureSet(false),
+            RemoteEval = true,
+            ClientKey = "sdk-key",
+            ApiHost = "https://api.example.test",
+            FeatureRepository = repository
+        });
+
+        repository.Push(1, FeatureSet(true));
+
+        growthBook.IsOn("flag").Should().BeFalse("the shared definitions are not this user's remote answer");
+    }
+
+    private sealed class CountingHandler : System.Net.Http.HttpMessageHandler
+    {
+        private int _requests;
+
+        public int Requests => Volatile.Read(ref _requests);
+
+        protected override Task<System.Net.Http.HttpResponseMessage> SendAsync(System.Net.Http.HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _requests);
+
+            return Task.FromResult(new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new System.Net.Http.StringContent(@"{ ""features"": { ""flag"": { ""defaultValue"": true } } }", System.Text.Encoding.UTF8, "application/json")
+            });
+        }
+    }
+
+    private sealed class HandlerHttpClientFactory : HttpClientFactory
+    {
+        private readonly System.Net.Http.HttpMessageHandler _handler;
+
+        public HandlerHttpClientFactory(System.Net.Http.HttpMessageHandler handler) => _handler = handler;
+
+        protected internal override System.Net.Http.HttpClient CreateClient(Func<System.Net.Http.HttpClient, System.Net.Http.HttpClient> configure) =>
+            configure(new System.Net.Http.HttpClient(_handler, disposeHandler: false));
+    }
+
+    /// <summary>
     /// A remote evaluation answers a question about this instance's attributes. A refresh from the
     /// shared cache is a different, less specific answer, so it must not cause the remote result to
     /// be thrown away - the instance would be left evaluating the shared map for a user it has

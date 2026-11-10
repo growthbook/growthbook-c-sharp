@@ -11,7 +11,7 @@ namespace GrowthBook.Api
     /// <summary>
     /// Represents a simple in-memory cache for GrowthBook features.
     /// </summary>
-    public class InMemoryFeatureCache : IGrowthBookFeatureCache, IFeatureRefreshSource
+    public class InMemoryFeatureCache : IGrowthBookFeatureCache, IFeatureRefreshSource, IAnnouncingFeatureCache
     {
         // We're providing a lock and locking around every operation within this cache
         // because this is an in-memory cache and may be accessed by multiple threads
@@ -85,22 +85,31 @@ namespace GrowthBook.Api
 
         public Task RefreshWith(IDictionary<string, Feature> features, CancellationToken? cancellationToken = null)
         {
-            FeatureRefresh refresh;
+            Announce(StoreWithoutAnnouncing(features));
 
+            return Task.CompletedTask;
+        }
+
+        /// <inheritdoc/>
+        FeatureRefresh IAnnouncingFeatureCache.StoreWithoutAnnouncing(IDictionary<string, Feature> features) => StoreWithoutAnnouncing(features);
+
+        /// <inheritdoc/>
+        void IAnnouncingFeatureCache.Announce(FeatureRefresh refresh) => Announce(refresh);
+
+        private FeatureRefresh StoreWithoutAnnouncing(IDictionary<string, Feature> features)
+        {
             lock(_cacheLock)
             {
                 _cachedFeatures = new Dictionary<string, Feature>(features);
                 _nextCacheExpiration = _utcNow().AddSeconds(_cacheExpirationInSeconds);
 
                 // Stamped under the same lock as the write, so the version orders the refreshes the
-                // way the cache saw them even though the fan-out below runs unlocked.
-                refresh = new FeatureRefresh(++_refreshVersion, new Dictionary<string, Feature>(_cachedFeatures));
+                // way the cache saw them even though the fan-out runs unlocked.
+                return new FeatureRefresh(++_refreshVersion, new Dictionary<string, Feature>(_cachedFeatures));
             }
-
-            _refreshSubscriptions.Notify(refresh, null);
-
-            return Task.CompletedTask;
         }
+
+        private void Announce(FeatureRefresh refresh) => _refreshSubscriptions.Notify(refresh, null);
 
         internal Task RefreshExpiration(CancellationToken? cancellationToken = null)
         {
