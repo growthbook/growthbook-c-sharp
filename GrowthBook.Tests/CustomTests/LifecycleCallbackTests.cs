@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
@@ -114,6 +115,46 @@ public class LifecycleCallbackTests : UnitTest
         growthBook.Dispose();
 
         calls.Should().Be(1, "exactly once");
+    }
+
+    /// <summary>
+    /// A caller may keep the handles it was given. Once a callback is unregistered, or has run on teardown, the
+    /// handle must not keep what the callback captured alive.
+    /// </summary>
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AKeptHandleDoesNotKeepItsCallbackAlive(bool tornDown)
+    {
+        var growthBook = NewInstance();
+        var (handle, captured) = RegisterCapturing(growthBook);
+
+        if (tornDown)
+        {
+            growthBook.Dispose();
+        }
+        else
+        {
+            handle.Dispose();
+        }
+
+        GC.Collect();
+        GC.WaitForPendingFinalizers();
+        GC.Collect();
+
+        captured.IsAlive.Should().BeFalse("nothing but the kept handle refers to the callback any more");
+
+        GC.KeepAlive(handle);
+        GC.KeepAlive(growthBook);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static (IDisposable Handle, WeakReference Captured) RegisterCapturing(GrowthBook growthBook)
+    {
+        var payload = new byte[1024];
+        var handle = growthBook.OnDestroy(() => GC.KeepAlive(payload));
+
+        return (handle, new WeakReference(payload));
     }
 
     /// <summary>

@@ -303,7 +303,7 @@ namespace GrowthBook
                 {
                     lock (_destroyCallbackLock)
                     {
-                        registration.Removed = true;
+                        registration.Callback = null;
                         _destroyCallbacks.Remove(registration);
                     }
                 });
@@ -325,21 +325,22 @@ namespace GrowthBook
 
             foreach (var registration in callbacks)
             {
-                bool removed;
+                Action callback;
 
                 lock (_destroyCallbackLock)
                 {
-                    removed = registration.Removed;
+                    callback = registration.Callback;
+                    registration.Callback = null;
                 }
 
-                if (removed)
+                if (callback is null)
                 {
                     continue;
                 }
 
                 try
                 {
-                    registration.Callback();
+                    callback();
                 }
                 catch (Exception ex)
                 {
@@ -348,13 +349,15 @@ namespace GrowthBook
             }
         }
 
+        /// <summary>
+        /// One registered callback. Cleared once it is unregistered or has run, so a handle the caller keeps does not
+        /// keep what the callback captured alive. Read and written under <see cref="_destroyCallbackLock"/>.
+        /// </summary>
         private sealed class DestroyRegistration
         {
             public DestroyRegistration(Action callback) => Callback = callback;
 
-            public Action Callback { get; }
-
-            public bool Removed { get; set; }
+            public Action Callback { get; set; }
         }
 
         /// <summary>
