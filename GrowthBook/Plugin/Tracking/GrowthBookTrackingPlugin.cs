@@ -246,9 +246,11 @@ namespace GrowthBook.Plugin
             _flushChain = _flushChain.ContinueWith(
                 async _ =>
                 {
+                    var delivered = false;
+
                     try
                     {
-                        await FlushBatchAsync(batch).ConfigureAwait(false);
+                        delivered = await FlushBatchAsync(batch).ConfigureAwait(false);
                     }
                     catch (Exception ex)
                     {
@@ -259,6 +261,14 @@ namespace GrowthBook.Plugin
                         lock (_lock)
                         {
                             _pendingBatches--;
+
+                            if (!delivered)
+                            {
+                                foreach (var failed in batch)
+                                {
+                                    Forget(failed.DedupeKey);
+                                }
+                            }
                         }
                     }
                 },
@@ -358,10 +368,9 @@ namespace GrowthBook.Plugin
             _buffer.Clear();
             return result;
         }
-
-        private async Task FlushBatchAsync(List<TrackingEvent> batch)
+        private async Task<bool> FlushBatchAsync(List<TrackingEvent> batch)
         {
-            if (batch.Count == 0 || _disabled) return;
+            if (batch.Count == 0 || _disabled) return true;
 
             var url = $"{_config.ResolvedIngestorHost()}/track?client_key={_config.ClientKey}";
             var json = JsonConvert.SerializeObject(batch);
@@ -383,6 +392,8 @@ namespace GrowthBook.Plugin
                             "Tracking POST to {Host} returned {Status}",
                             _config.ResolvedIngestorHost(), (int)response.StatusCode);
                     }
+
+                    return response.IsSuccessStatusCode;
                 }
             }
         }

@@ -634,6 +634,37 @@ namespace GrowthBook.Tests.CustomTests
         }
 
         /// <summary>
+        /// A batch the ingestor refused, or that never reached it, was not sent either. Remembered as sent, a flag
+        /// checked on every request kept its entry fresh and was never reported again once the ingestor recovered.
+        /// </summary>
+        [Theory]
+        [InlineData(false)]
+        [InlineData(true)]
+        public void AnEventInAFailedBatchIsSentTheNextTimeItHappens(bool requestThrows)
+        {
+            var handler = new FailsFirstHandler(requestThrows);
+            var plugin = NewPlugin(handler, c => c.BatchSize = 1);
+
+            plugin.OnFeatureEvaluated("hot", MakeFeatureResult(), null);
+
+            SpinWait.SpinUntil(() => handler.Attempts >= 1, TimeSpan.FromSeconds(5)).Should().BeTrue("the first batch is sent");
+
+            // The batch is forgotten once its send has finished, which a test cannot observe directly.
+            var sent = false;
+
+            for (var attempt = 0; attempt < 250 && !sent; attempt++)
+            {
+                plugin.OnFeatureEvaluated("hot", MakeFeatureResult(), null);
+
+                sent = SpinWait.SpinUntil(() => handler.Sent("hot"), TimeSpan.FromMilliseconds(20));
+            }
+
+            plugin.Close();
+
+            sent.Should().BeTrue("the first \"hot\" failed to send, so the next one is not a repeat");
+        }
+
+        /// <summary>
         /// A factory shares one plugin between its users. Two of them seeing the same value are two facts,
         /// not one fact and a repeat.
         /// </summary>
@@ -783,6 +814,44 @@ namespace GrowthBook.Tests.CustomTests
                 var events = JArray.Parse(await request.Content.ReadAsStringAsync());
 
                 _gate.Wait(TimeSpan.FromSeconds(10));
+
+                lock (_features) _features.AddRange(events.Select(e => e["properties"]?["feature"]?.Value<string>()));
+
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            }
+        }
+
+        /// <summary>
+        /// Fails the first send, with a server error or by throwing, and records which features every later one carried.
+        /// </summary>
+        private sealed class FailsFirstHandler : HttpMessageHandler
+        {
+            private readonly bool _throws;
+            private readonly List<string> _features = new List<string>();
+            private int _attempts;
+
+            public FailsFirstHandler(bool throws) => _throws = throws;
+
+            public int Attempts => Volatile.Read(ref _attempts);
+
+            public bool Sent(string feature)
+            {
+                lock (_features) return _features.Contains(feature);
+            }
+
+            protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                var events = JArray.Parse(await request.Content.ReadAsStringAsync());
+
+                if (Interlocked.Increment(ref _attempts) == 1)
+                {
+                    if (_throws)
+                    {
+                        throw new HttpRequestException("ingestor unreachable");
+                    }
+
+                    return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+                }
 
                 lock (_features) _features.AddRange(events.Select(e => e["properties"]?["feature"]?.Value<string>()));
 
