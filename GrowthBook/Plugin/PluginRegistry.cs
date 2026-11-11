@@ -37,7 +37,7 @@ namespace GrowthBook.Plugin
         /// </param>
         internal PluginRegistry(List<IGrowthBookPlugin> plugins, IReadOnlyList<IGrowthBookPlugin> sharedPlugins = null, ILogger logger = null)
         {
-            _plugins = plugins ?? (IList<IGrowthBookPlugin>)Array.Empty<IGrowthBookPlugin>();
+            _plugins = plugins?.ToList() ?? (IList<IGrowthBookPlugin>)Array.Empty<IGrowthBookPlugin>();
             _sharedPlugins = sharedPlugins ?? Array.Empty<IGrowthBookPlugin>();
             _logger = logger;
 

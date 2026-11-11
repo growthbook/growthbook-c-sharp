@@ -188,6 +188,28 @@ namespace GrowthBook.Tests.CustomTests
         }
 
         /// <summary>
+        /// An instance closes the plugins it was built with. A caller that refills the same list to configure
+        /// another instance afterwards used to have this one close the replacements and leave its own unflushed.
+        /// </summary>
+        [Fact]
+        public void ChangingThePluginListAfterwardsDoesNotChangeWhatTheInstanceCloses()
+        {
+            var original = new RecordingPlugin();
+            var replacement = new RecordingPlugin();
+            var plugins = new List<IGrowthBookPlugin> { original };
+
+            var gb = BuildGrowthBook(plugins);
+
+            plugins.Clear();
+            plugins.Add(replacement);
+
+            gb.Dispose();
+
+            original.CloseCount.Should().Be(1, "the instance was built with it");
+            replacement.CloseCount.Should().Be(0, "the instance never started it");
+        }
+
+        /// <summary>
         /// What a plugin is told must not depend on which of the public ways of checking a flag the
         /// caller happened to use.
         /// </summary>
