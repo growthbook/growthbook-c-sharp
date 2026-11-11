@@ -180,11 +180,50 @@ namespace GrowthBook.Tests.CustomTests
         private class CapturingAttributesPlugin : IGrowthBookPlugin, IExperimentViewedPlugin, IFeatureEvaluatedPlugin
         {
             private readonly System.Action<JObject> _onFeature;
-            public CapturingAttributesPlugin(System.Action<JObject> onFeature) => _onFeature = onFeature;
+            private readonly System.Action<JObject> _onExperiment;
+            public CapturingAttributesPlugin(System.Action<JObject> onFeature, System.Action<JObject> onExperiment = null)
+            {
+                _onFeature = onFeature;
+                _onExperiment = onExperiment;
+            }
             public void Init() { }
-            public void OnExperimentViewed(Experiment e, ExperimentResult r, JObject a) { }
+            public void OnExperimentViewed(Experiment e, ExperimentResult r, JObject a) => _onExperiment?.Invoke(a);
             public void OnFeatureEvaluated(string k, FeatureResult r, JObject a) => _onFeature(a);
             public void Close() { }
+        }
+
+        /// <summary>
+        /// A plugin is told about an evaluation with the attributes it was made with. The tracking callback below
+        /// replaces them midway, as another thread calling UpdateAttributes could, and both events used to carry
+        /// the new user's attributes with the old user's result.
+        /// </summary>
+        [Fact]
+        public void EventsCarryTheAttributesTheEvaluationUsed()
+        {
+            JObject featureAttributes = null;
+            JObject experimentAttributes = null;
+            var plugin = new CapturingAttributesPlugin(a => featureAttributes = a, a => experimentAttributes = a);
+            GrowthBookSdk.GrowthBook gb = null;
+
+            gb = new GrowthBookSdk.GrowthBook(new Context
+            {
+                Enabled = true,
+                Attributes = new JObject { ["id"] = "u1" },
+                Features = ForcedRuleWithTrack(),
+                LoggerFactory = NullLoggerFactory.Instance,
+                Plugins = new List<IGrowthBookPlugin> { plugin },
+                TrackingCallback = (e, r) => gb.UpdateAttributes(new Dictionary<string, object> { ["id"] = "u2" }),
+            });
+
+            using (gb)
+            {
+                gb.EvalFeature("flag-a");
+            }
+
+            experimentAttributes.Should().NotBeNull("the rule's track reached the plugin");
+            featureAttributes.Should().NotBeNull("the check reached the plugin");
+            experimentAttributes["id"].Value<string>().Should().Be("u1", "the rule was evaluated for u1");
+            featureAttributes["id"].Value<string>().Should().Be("u1", "the flag was evaluated for u1");
         }
 
         /// <summary>

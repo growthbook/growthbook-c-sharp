@@ -573,15 +573,16 @@ namespace GrowthBook
         /// </remarks>
         private FeatureResult EvaluateFeatureForCaller(string featureId)
         {
-            var result = EvaluateFeature(featureId);
+            var context = BuildEvaluationContext();
+            var result = EvaluateFeature(featureId, context);
 
-            _pluginRegistry.FireFeatureEvaluated(featureId, result, Attributes);
+            _pluginRegistry.FireFeatureEvaluated(featureId, result, context.User.Attributes);
 
             return result;
         }
 
         /// <summary>
-        /// Evaluates a feature against this instance's current state.
+        /// Evaluates a feature against a snapshot of this instance's state, from <see cref="BuildEvaluationContext"/>.
         /// </summary>
         /// <remarks>
         /// The rules live in <see cref="FeatureEvaluationProvider"/>, which holds no state of its own and
@@ -589,9 +590,9 @@ namespace GrowthBook
         /// stay here, reached through the callbacks on that context, so what is reported and how often it
         /// is reported has not moved.
         /// </remarks>
-        private FeatureResult EvaluateFeature(string featureId)
+        private FeatureResult EvaluateFeature(string featureId, EvaluationContext context)
         {
-            return _featureEvaluator.EvaluateFeature(featureId, BuildEvaluationContext());
+            return _featureEvaluator.EvaluateFeature(featureId, context);
         }
 
         /// <inheritdoc />
@@ -723,6 +724,8 @@ namespace GrowthBook
         /// </remarks>
         private EvaluationContext BuildEvaluationContext()
         {
+            var attributes = Attributes;
+
             var global = new GlobalContext
             {
                 Features = Features,
@@ -731,7 +734,7 @@ namespace GrowthBook
                 Enabled = Enabled,
                 QaMode = _qaMode,
                 ForcedVariations = ForcedVariations,
-                TrackingCallback = TryToTrack,
+                TrackingCallback = (experiment, result) => TryToTrack(experiment, result, attributes),
                 OnExperimentAssigned = TryAssignExperimentResult,
                 OnSubscriberNotification = NotifySubscribers,
                 StickyBucketService = _stickyBucketService
@@ -739,7 +742,7 @@ namespace GrowthBook
 
             var user = new UserContext
             {
-                Attributes = Attributes,
+                Attributes = attributes,
                 StickyBucketAssignmentDocs = _stickyBucketAssignmentDocs,
                 Url = Url
             };
@@ -747,7 +750,7 @@ namespace GrowthBook
             return new EvaluationContext(global, user);
         }
 
-        private void TryToTrack(Experiment experiment, ExperimentResult result)
+        private void TryToTrack(Experiment experiment, ExperimentResult result, JObject attributes)
         {
             if (_trackingCallback == null && !_pluginRegistry.HasExperimentViewedListener)
             {
@@ -787,7 +790,7 @@ namespace GrowthBook
                         _logger.LogError(ex, "Encountered unhandled exception during tracking callback for experiment with combined key \'{Key}\'", key);
                     }
                 }
-                _pluginRegistry.FireExperimentViewed(experiment, result, Attributes);
+                _pluginRegistry.FireExperimentViewed(experiment, result, attributes);
 
             }
         }
