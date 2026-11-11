@@ -9,5 +9,10 @@ namespace GrowthBook
         public string Type { get; set; }
         public bool Include {  get; set; }
         public string Pattern { get; set; }
+
+        /// <summary>
+        /// A copy that shares nothing mutable with this one, for handing to a plugin.
+        /// </summary>
+        internal UrlPattern Copy() => (UrlPattern)MemberwiseClone();
     }
 }

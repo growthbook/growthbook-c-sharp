@@ -75,9 +75,9 @@ namespace GrowthBook.Plugin
             {
                 try
                 {
-                    // A copy each, so a plugin can alter neither the attributes the instance goes on
-                    // evaluating against nor what the plugins after it are told.
-                    plugin.OnExperimentViewed(experiment, result, attributes?.DeepClone() as JObject);
+                    // A copy each, so a plugin can alter neither what the caller is answered or the instance goes
+                    // on evaluating against, nor what the plugins after it are told.
+                    plugin.OnExperimentViewed(experiment?.Copy(), result?.Copy(), attributes?.DeepClone() as JObject);
                 }
                 catch (Exception ex)
                 {
@@ -97,7 +97,7 @@ namespace GrowthBook.Plugin
             {
                 try
                 {
-                    plugin.OnFeatureEvaluated(featureKey, result, attributes?.DeepClone() as JObject);
+                    plugin.OnFeatureEvaluated(featureKey, result?.Copy(), attributes?.DeepClone() as JObject);
                 }
                 catch (Exception ex)
                 {

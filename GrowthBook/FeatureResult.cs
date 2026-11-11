@@ -119,5 +119,18 @@ namespace GrowthBook
                 return hash;
             }
         }
+
+        /// <summary>
+        /// A copy that shares nothing mutable with this one, for handing to a plugin.
+        /// </summary>
+        internal FeatureResult Copy()
+        {
+            var copy = (FeatureResult)MemberwiseClone();
+            copy.Value = Value?.DeepClone();
+            copy.Experiment = Experiment?.Copy();
+            copy.ExperimentResult = ExperimentResult?.Copy();
+
+            return copy;
+        }
     }
 }

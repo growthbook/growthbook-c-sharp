@@ -204,5 +204,28 @@ namespace GrowthBook
                 return hash;
             }
         }
+
+        /// <summary>
+        /// A copy that shares nothing mutable with this one, for handing to a plugin.
+        /// </summary>
+        /// <remarks>
+        /// <see cref="Namespace"/> cannot be changed, so it is shared. A custom field that is not a JSON token is
+        /// shared as it is.
+        /// </remarks>
+        internal Experiment Copy()
+        {
+            var copy = (Experiment)MemberwiseClone();
+            copy.Variations = (JArray)Variations?.DeepClone();
+            copy.Weights = Weights?.ToList();
+            copy.Ranges = Ranges?.Select(range => range?.Copy()).ToList();
+            copy.Condition = (JObject)Condition?.DeepClone();
+            copy.ParentConditions = ParentConditions?.Select(condition => condition?.Copy()).ToList();
+            copy.Meta = Meta?.Select(meta => meta?.Copy()).ToList();
+            copy.Filters = Filters?.Select(filter => filter?.Copy()).ToList();
+            copy.UrlPatterns = UrlPatterns?.Select(pattern => pattern?.Copy()).ToList();
+            copy.CustomFields = CustomFields?.ToDictionary(field => field.Key, field => field.Value is JToken token ? token.DeepClone() : field.Value);
+
+            return copy;
+        }
     }
 }

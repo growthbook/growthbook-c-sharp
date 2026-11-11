@@ -454,6 +454,65 @@ namespace GrowthBook.Tests.CustomTests
         }
 
         /// <summary>
+        /// A plugin is handed a copy of the result. One that writes to it changes neither what the caller is
+        /// answered nor what the plugins after it are told.
+        /// </summary>
+        [Fact]
+        public void APluginCannotChangeTheAnswerTheCallerGets()
+        {
+            var recording = new RecordingPlugin();
+
+            using var gb = BuildGrowthBook(new List<IGrowthBookPlugin> { new RewritingPlugin(), recording });
+
+            var result = gb.EvalFeature("flag-b");
+
+            result.Value.ToString().Should().Be("x", "the plugin rewrote its own copy of the result");
+            recording.Features.Should().ContainSingle().Which.Item2.Value.ToString().Should().Be("x", "the next plugin is told the evaluated value");
+        }
+
+        /// <summary>
+        /// The same for an experiment: the experiment and the result a plugin is told about are copies.
+        /// </summary>
+        [Fact]
+        public void APluginCannotChangeTheExperimentOrItsResult()
+        {
+            var rewriting = new RewritingPlugin();
+
+            using var gb = new GrowthBookSdk.GrowthBook(new Context
+            {
+                Enabled = true,
+                Attributes = new JObject { ["id"] = "u1" },
+                LoggerFactory = NullLoggerFactory.Instance,
+                Plugins = new List<IGrowthBookPlugin> { rewriting },
+            });
+
+            var experiment = new Experiment { Key = "my-exp", Variations = JArray.Parse("[\"A\", \"B\"]") };
+            var result = gb.Run(experiment);
+
+            rewriting.ExperimentsSeen.Should().Be(1, "the plugin has to have been told, for this to show anything");
+            experiment.Variations.ToString(Newtonsoft.Json.Formatting.None).Should().Be("[\"A\",\"B\"]");
+            result.Value.ToString().Should().BeOneOf("A", "B");
+        }
+
+        private class RewritingPlugin : IGrowthBookPlugin, IExperimentViewedPlugin, IFeatureEvaluatedPlugin
+        {
+            public int ExperimentsSeen;
+
+            public void Init() { }
+
+            public void OnExperimentViewed(Experiment e, ExperimentResult r, JObject a)
+            {
+                Interlocked.Increment(ref ExperimentsSeen);
+                e.Variations = new JArray("rewritten");
+                r.Value = "rewritten";
+            }
+
+            public void OnFeatureEvaluated(string k, FeatureResult r, JObject a) => r.Value = "rewritten";
+
+            public void Close() { }
+        }
+
+        /// <summary>
         /// With nothing to report an assignment to, it must not be recorded as reported. The mark is
         /// shared through the feature repository, so a later instance that does have a callback would
         /// find the key already there and stay silent about an assignment nobody ever heard.
