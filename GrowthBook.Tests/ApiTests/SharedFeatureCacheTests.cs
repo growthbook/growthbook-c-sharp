@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using GrowthBook.Api;
+using GrowthBook.Api.SSE;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -81,6 +82,40 @@ public class SharedFeatureCacheTests
         SpinWait.SpinUntil(() => handler.Streams >= 2, TimeSpan.FromSeconds(5)).Should().BeTrue("the second worker has to open a stream of its own");
     }
 
+    /// <summary>
+    /// A 304 that leaves the streaming header out says nothing about streaming. Read as "no streaming", it closed a
+    /// stream that was working, and flag changes waited for the next HTTP refresh.
+    /// </summary>
+    [Fact]
+    public async Task AnUnchangedResponseWithoutTheStreamingHeaderKeepsTheStreamOpen()
+    {
+        var handler = new StreamingApiHandler();
+        using var worker = CreateWorker(handler, new InMemoryFeatureCache(60), preferStreaming: true);
+
+        await worker.RefreshCacheFromApi();
+        SpinWait.SpinUntil(() => handler.Streams >= 1, TimeSpan.FromSeconds(5)).Should().BeTrue("the worker opens a stream after its 200");
+
+        await worker.RefreshCacheFromApi();
+
+        handler.NotModifiedAnswers.Should().Be(1);
+        StreamStatus(worker).Should().NotBe(SSEConnectionStatus.Disconnected, "the 304 did not say streaming stopped");
+    }
+
+    /// <summary>
+    /// The worker's stream status, read by reflection. Disconnecting cancels the stream without closing it, so the
+    /// fake API cannot see it happen.
+    /// </summary>
+    private static SSEConnectionStatus StreamStatus(FeatureRefreshWorker worker)
+    {
+        var field = typeof(FeatureRefreshWorker).GetField("_sseClient", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        field.Should().NotBeNull("the test reads the worker's stream to see whether it was disconnected");
+
+        var client = (SSEClient)field.GetValue(worker);
+        client.Should().NotBeNull("the worker opened a stream after its 200");
+
+        return client.ConnectionStatus;
+    }
+
     private static bool IsOn(IDictionary<string, Feature> features) => features["flag"].DefaultValue.ToObject<bool>();
 
     private static FeatureRefreshWorker CreateWorker(HttpMessageHandler handler, IGrowthBookFeatureCache cache, bool preferStreaming = false) =>
@@ -125,8 +160,8 @@ public class SharedFeatureCacheTests
     }
 
     /// <summary>
-    /// Serves one payload with an ETag and streaming enabled, answers 304 to that ETag, and keeps every stream it
-    /// opens open, counting them.
+    /// Serves one payload with an ETag and streaming enabled, answers 304 to that ETag without the streaming header, as
+    /// some servers and proxies do, and keeps every stream it opens open, counting them.
     /// </summary>
     private sealed class StreamingApiHandler : HttpMessageHandler
     {
@@ -160,10 +195,10 @@ public class SharedFeatureCacheTests
             else
             {
                 response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(FlagOn, Encoding.UTF8, "application/json") };
+                response.Headers.Add("x-sse-support", "enabled");
             }
 
             response.Headers.ETag = tag;
-            response.Headers.Add("x-sse-support", "enabled");
 
             return Task.FromResult(response);
         }

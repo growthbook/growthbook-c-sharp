@@ -74,6 +74,12 @@ namespace GrowthBook.Api
             /// features, after which a cleared cache is indistinguishable from an empty one and the flags never come back.
             /// </summary>
             public int StoredFeatureCount = -1;
+
+            /// <summary>
+            /// Whether the server last said it streams, as a 200 reports it: 0 not yet known, 1 yes, 2 no. A 304 can come
+            /// back without the header, so it only ever confirms this and never clears it.
+            /// </summary>
+            public int StreamingSupport;
         }
 
         public FeatureRefreshWorker(ILogger<FeatureRefreshWorker> logger, IHttpClientFactory httpClientFactory, GrowthBookConfigurationOptions config, IGrowthBookFeatureCache cache)
@@ -144,9 +150,12 @@ namespace GrowthBook.Api
                         await expiringCache.RefreshExpiration(cancellationToken).ConfigureAwait(false);
                     }
 
-                    // A worker sharing its cache can be answered 304 on its very first request, with the ETag another
-                    // worker stored, and still has to open a stream of its own.
-                    ApplyStreamingSupport(response.IsServerSentEventsEnabled);
+                    if (response.IsServerSentEventsEnabled)
+                    {
+                        Volatile.Write(ref _cacheState.StreamingSupport, 1);
+                    }
+
+                    ApplyStreamingSupport(Volatile.Read(ref _cacheState.StreamingSupport) == 1);
 
                     return await _cache.GetFeatures(cancellationToken).ConfigureAwait(false);
                 }
@@ -156,6 +165,8 @@ namespace GrowthBook.Api
             {
                 return null;
             }
+
+            Volatile.Write(ref _cacheState.StreamingSupport, response.IsServerSentEventsEnabled ? 1 : 2);
 
             if (!await WriteCacheInOrder(response.Features, response.ETag, sequence, cancellationToken ?? _refreshWorkerCancellation.Token).ConfigureAwait(false))
             {
