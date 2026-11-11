@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using GrowthBook.Plugin;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json.Linq;
 
@@ -94,11 +95,21 @@ namespace GrowthBook
         }
 
         /// <summary>
-        /// Disposes of factory resources.
+        /// Disposes of factory resources, and closes the plugins of the context it was built from.
         /// </summary>
+        /// <remarks>
+        /// Every instance this factory creates gets a clone of that context, and an instance built from a
+        /// clone does not close the plugins it shares with the others. The factory is what they were
+        /// handed to, so it closes them - which flushes what a tracking plugin still holds. Dispose it
+        /// after the instances it created.
+        /// </remarks>
         public void Dispose()
         {
+            if (_disposed) return;
+
             _disposed = true;
+
+            new PluginRegistry(_baseContext.Plugins, logger: _baseContext.LoggerFactory?.CreateLogger<GrowthBookFactory>()).CloseAll();
         }
     }
 }

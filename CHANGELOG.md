@@ -21,6 +21,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     exists to prevent.
   - An experiment's prerequisites are evaluated against a snapshot of the features already being evaluated rather
     than an empty set, so a cycle reached through an experiment is detected.
+- Added a plugin system. `Context.Plugins` takes implementations of `IGrowthBookPlugin`, which carries the lifetime
+  only; the events a plugin wants are opted into by also implementing `IExperimentViewedPlugin` or
+  `IFeatureEvaluatedPlugin`. They are separate interfaces so that a hook added later cannot break plugins written
+  against this release - this library targets netstandard2.0 and has no default interface members. A feature
+  evaluation is reported once per call whichever public method the caller used, prerequisites evaluated on the way
+  to an answer are not reported, attributes are handed over as a copy, and anything a plugin throws is logged and
+  swallowed rather than allowed to change what an evaluation returns. Plugins belong to the context they were set
+  on: an instance built from `Context.Clone()` does not close them, since `GrowthBookFactory` clones once per user
+  and they are shared, and the factory closes them when it is disposed.
+- Added `GrowthBookTrackingPlugin`, which batches experiment and feature events and posts them to the GrowthBook
+  ingestor. It sends the user attributes from `Context.Attributes` with every event; see the README for what leaves
+  the process before enabling it. Batches are sent one at a time with a bounded queue, repeats are dropped against a
+  least-recently-used cache that tells users apart when the plugin is shared between them, and `Close` waits up to
+  `CloseTimeout` for sends already under way, the final batch included, before releasing its HTTP client. The
+  default ingestor host is `https://us-east-1.gb-ingest.com`, matching the other SDKs; set `IngestorHost` for the
+  eu-west-1 data region.
 
 ## [2.0.0] - 2026-10-30
 

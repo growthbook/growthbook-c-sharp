@@ -13,6 +13,7 @@ using GrowthBook.Providers;
 using GrowthBook.Services;
 using GrowthBook.Utilities;
 using GrowthBook.Exceptions;
+using GrowthBook.Plugin;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -38,6 +39,7 @@ namespace GrowthBook
         private readonly IStickyBucketService _stickyBucketService;
         private readonly IDictionary<string, StickyAssignmentsDocument> _stickyBucketAssignmentDocs;
         private readonly ILogger<GrowthBook> _logger;
+        private readonly PluginRegistry _pluginRegistry;
         private readonly JObject _savedGroups;
         private readonly ILoggerFactory _loggerFactory;
         private readonly bool _ownsLoggerFactory;
@@ -111,6 +113,8 @@ namespace GrowthBook
             _logger = _loggerFactory.CreateLogger<GrowthBook>();
             var conditionEvaluatorLogger = _loggerFactory.CreateLogger<ConditionEvaluationProvider>();
 
+            _pluginRegistry = new PluginRegistry(context.Plugins, sharedPlugins: context.SharedPlugins, logger: _logger);
+
             _conditionEvaluator = new ConditionEvaluationProvider(conditionEvaluatorLogger);
             _experimentEvaluator = new ExperimentEvaluationProvider(
                 _loggerFactory.CreateLogger<ExperimentEvaluationProvider>(),
@@ -147,6 +151,10 @@ namespace GrowthBook
 
                 _featureRepository = new FeatureRepository(featureRepositoryLogger, featureCache, featureRefreshWorker, remoteEvaluationService);
             }
+
+            // Last, once nothing above can throw. A constructor that fails returns no instance to
+            // dispose, so plugins started before the failure would never be closed.
+            _pluginRegistry.InitAll();
         }
 
         private void ApplyEncryptedFeatures(Context context)
@@ -227,6 +235,7 @@ namespace GrowthBook
                     _subscribers.Clear();
                     _asyncSubscribers.Clear();
                     _featureRepository.Cancel();
+                    _pluginRegistry.CloseAll();
 
                     if (_ownsLoggerFactory && _loggerFactory is IDisposable disposableFactory)
                     {
@@ -382,7 +391,7 @@ namespace GrowthBook
         public async Task<bool> IsOnAsync(string key, CancellationToken? cancellationToken = null)
         {
             await EnsureFeaturesLoaded(cancellationToken).ConfigureAwait(false);
-            var result = EvaluateFeature(key);
+            var result = EvaluateFeatureForCaller(key);
             var value = result.Value;
             return !value.IsNull() && value.ToObject<bool>();
         }
@@ -450,7 +459,7 @@ namespace GrowthBook
                 LoadFeaturesWithoutCapturingContext();
             }
 
-            var result = EvaluateFeature(key);
+            var result = EvaluateFeatureForCaller(key);
 
             return ConvertFeatureValue(key, result.Value, fallback);
         }
@@ -496,8 +505,7 @@ namespace GrowthBook
             {
                 LoadFeaturesWithoutCapturingContext();
             }
-
-            return EvaluateFeature(featureId);
+            return EvaluateFeatureForCaller(featureId);
         }
 
         /// <summary>
@@ -523,7 +531,7 @@ namespace GrowthBook
         {
             await EnsureFeaturesLoaded(cancellationToken).ConfigureAwait(false);
 
-            return EvaluateFeature(featureId);
+            return EvaluateFeatureForCaller(featureId);
         }
 
         /// <summary>
@@ -555,7 +563,26 @@ namespace GrowthBook
             return Task.Run(() => LoadFeatures(cancellationToken: cancellationToken));
         }
         /// <summary>
-        /// Evaluates a feature against this instance's current state.
+        /// Evaluates a feature a caller asked about, and tells the plugins once.
+        /// </summary>
+        /// <remarks>
+        /// Every public way of checking a flag goes through here, so what a plugin sees does not depend
+        /// on whether the caller reached for <see cref="EvalFeature"/>, <see cref="GetFeatureValue{T}"/>
+        /// or <see cref="IsOnAsync"/>. Prerequisites are evaluated inside the provider and raise nothing:
+        /// the caller asked about one feature.
+        /// </remarks>
+        private FeatureResult EvaluateFeatureForCaller(string featureId)
+        {
+            var context = BuildEvaluationContext();
+            var result = EvaluateFeature(featureId, context);
+
+            _pluginRegistry.FireFeatureEvaluated(featureId, result, context.User.Attributes);
+
+            return result;
+        }
+
+        /// <summary>
+        /// Evaluates a feature against a snapshot of this instance's state, from <see cref="BuildEvaluationContext"/>.
         /// </summary>
         /// <remarks>
         /// The rules live in <see cref="FeatureEvaluationProvider"/>, which holds no state of its own and
@@ -563,9 +590,9 @@ namespace GrowthBook
         /// stay here, reached through the callbacks on that context, so what is reported and how often it
         /// is reported has not moved.
         /// </remarks>
-        private FeatureResult EvaluateFeature(string featureId)
+        private FeatureResult EvaluateFeature(string featureId, EvaluationContext context)
         {
-            return _featureEvaluator.EvaluateFeature(featureId, BuildEvaluationContext());
+            return _featureEvaluator.EvaluateFeature(featureId, context);
         }
 
         /// <inheritdoc />
@@ -697,6 +724,8 @@ namespace GrowthBook
         /// </remarks>
         private EvaluationContext BuildEvaluationContext()
         {
+            var attributes = Attributes;
+
             var global = new GlobalContext
             {
                 Features = Features,
@@ -705,7 +734,7 @@ namespace GrowthBook
                 Enabled = Enabled,
                 QaMode = _qaMode,
                 ForcedVariations = ForcedVariations,
-                TrackingCallback = TryToTrack,
+                TrackingCallback = (experiment, result) => TryToTrack(experiment, result, attributes),
                 OnExperimentAssigned = TryAssignExperimentResult,
                 OnSubscriberNotification = NotifySubscribers,
                 StickyBucketService = _stickyBucketService
@@ -713,7 +742,7 @@ namespace GrowthBook
 
             var user = new UserContext
             {
-                Attributes = Attributes,
+                Attributes = attributes,
                 StickyBucketAssignmentDocs = _stickyBucketAssignmentDocs,
                 Url = Url
             };
@@ -721,10 +750,14 @@ namespace GrowthBook
             return new EvaluationContext(global, user);
         }
 
-        private void TryToTrack(Experiment experiment, ExperimentResult result)
+        private void TryToTrack(Experiment experiment, ExperimentResult result, JObject attributes)
         {
-            if (_trackingCallback == null)
+            if (_trackingCallback == null && !_pluginRegistry.HasExperimentViewedListener)
             {
+                // Nothing would be reported, so the assignment must not be marked as tracked either.
+                // The mark can be shared through the feature repository, and a later instance that does
+                // have a callback would find the key already there and stay silent about an assignment
+                // nobody ever heard.
                 return;
             }
 
@@ -746,14 +779,19 @@ namespace GrowthBook
 
             if (shouldTrack)
             {
-                try
+                if (_trackingCallback != null)
                 {
-                    _trackingCallback(experiment, result);
+                    try
+                    {
+                        _trackingCallback(experiment, result);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Encountered unhandled exception during tracking callback for experiment with combined key \'{Key}\'", key);
+                    }
                 }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Encountered unhandled exception during tracking callback for experiment with combined key \'{Key}\'", key);
-                }
+                _pluginRegistry.FireExperimentViewed(experiment, result, attributes);
+
             }
         }
 
