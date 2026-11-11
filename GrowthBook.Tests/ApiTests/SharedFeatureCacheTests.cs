@@ -145,6 +145,39 @@ public class SharedFeatureCacheTests
     }
 
     /// <summary>
+    /// A 304 that waits on the cache to renew its lifetime must not act on what it read about streaming before that
+    /// wait. A newer refresh can open a stream in the meantime, and the 304 used to close it when it resumed.
+    /// </summary>
+    [Fact]
+    public async Task A304WaitingOnTheCacheDoesNotCloseAStreamANewerRefreshOpened()
+    {
+        var handler = new ScriptedStreamingHandler(request => Task.FromResult(request switch
+        {
+            1 or 2 => (FlagOff, "\"v1\"", false),
+            _ => (FlagOn, "\"v2\"", true)
+        }));
+
+        var cache = new PausingExpirationCache();
+        using var worker = CreateWorker(handler, cache, preferStreaming: true);
+
+        await worker.RefreshCacheFromApi();
+        handler.Streams.Should().Be(0, "the first answer did not offer streaming");
+
+        cache.PauseNextRenewal();
+        var unchanged = Task.Run(() => worker.RefreshCacheFromApi());
+        (await cache.RenewalStarted.WaitAsync(TimeSpan.FromSeconds(10))).Should().BeTrue("the 304 renews the cache's lifetime");
+
+        await worker.RefreshCacheFromApi();
+        SpinWait.SpinUntil(() => handler.Streams >= 1, TimeSpan.FromSeconds(5)).Should().BeTrue("the newer 200 offers streaming");
+
+        cache.RenewalMayFinish.Release();
+        await unchanged;
+
+        handler.NotModifiedAnswers.Should().Be(1);
+        StreamStatus(worker).Should().NotBe(SSEConnectionStatus.Disconnected, "the newer refresh's decision to stream stands");
+    }
+
+    /// <summary>
     /// The worker's stream status, read by reflection. Disconnecting cancels the stream without closing it, so the
     /// fake API cannot see it happen.
     /// </summary>
@@ -332,6 +365,40 @@ public class SharedFeatureCacheTests
             }
 
             return response;
+        }
+    }
+
+    /// <summary>
+    /// An in-memory cache whose next lifetime renewal, once asked to, waits until the test lets it finish.
+    /// </summary>
+    private sealed class PausingExpirationCache : IGrowthBookFeatureCache, IFeatureCacheExpiration
+    {
+        private readonly InMemoryFeatureCache _inner = new InMemoryFeatureCache(60);
+        private int _pauseNextRenewal;
+
+        public SemaphoreSlim RenewalStarted { get; } = new SemaphoreSlim(0);
+
+        public SemaphoreSlim RenewalMayFinish { get; } = new SemaphoreSlim(0);
+
+        public int FeatureCount => _inner.FeatureCount;
+
+        public bool IsCacheExpired => _inner.IsCacheExpired;
+
+        public void PauseNextRenewal() => Volatile.Write(ref _pauseNextRenewal, 1);
+
+        public Task<IDictionary<string, Feature>> GetFeatures(CancellationToken? cancellationToken = null) => _inner.GetFeatures(cancellationToken);
+
+        public Task RefreshWith(IDictionary<string, Feature> features, CancellationToken? cancellationToken = null) => _inner.RefreshWith(features, cancellationToken);
+
+        public async Task RefreshExpiration(CancellationToken? cancellationToken = null)
+        {
+            if (Interlocked.Exchange(ref _pauseNextRenewal, 0) == 1)
+            {
+                RenewalStarted.Release();
+                await RenewalMayFinish.WaitAsync(TimeSpan.FromSeconds(10));
+            }
+
+            await _inner.RefreshExpiration(cancellationToken);
         }
     }
 

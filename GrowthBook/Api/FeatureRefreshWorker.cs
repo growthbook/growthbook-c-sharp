@@ -124,7 +124,6 @@ namespace GrowthBook.Api
             if (response.IsNotModified)
             {
                 bool cacheNoLongerHoldsThePayload;
-                bool streams;
 
                 await _cacheState.Lock.WaitAsync(cancellationToken ?? _refreshWorkerCancellation.Token).ConfigureAwait(false);
 
@@ -136,8 +135,6 @@ namespace GrowthBook.Api
                     {
                         _cacheState.StreamingSupport = 1;
                     }
-
-                    streams = _cacheState.StreamingSupport == 1;
                 }
                 finally
                 {
@@ -159,7 +156,7 @@ namespace GrowthBook.Api
                         await expiringCache.RefreshExpiration(cancellationToken).ConfigureAwait(false);
                     }
 
-                    ApplyStreamingSupport(streams);
+                    ApplyStreamingSupport();
 
                     return await _cache.GetFeatures(cancellationToken).ConfigureAwait(false);
                 }
@@ -172,26 +169,29 @@ namespace GrowthBook.Api
 
             if (!await WriteCacheInOrder(response.Features, response.ETag, response.IsServerSentEventsEnabled, sequence, cancellationToken ?? _refreshWorkerCancellation.Token).ConfigureAwait(false))
             {
-                ApplyStreamingSupport(Volatile.Read(ref _cacheState.StreamingSupport) == 1);
+                ApplyStreamingSupport();
 
                 return await _cache.GetFeatures(cancellationToken).ConfigureAwait(false);
             }
 
-            ApplyStreamingSupport(response.IsServerSentEventsEnabled);
+            ApplyStreamingSupport();
 
             return response.Features;
         }
 
         /// <summary>
         /// Now that the cache holds a payload, decides whether the server sent events listener should run, from what
-        /// the server said about streaming, and starts or stops it to match.
+        /// the server last said about streaming as it stands now, and starts or stops it to match.
         /// </summary>
-        private void ApplyStreamingSupport(bool isServerSentEventsEnabled)
+        private void ApplyStreamingSupport()
         {
             if (_config.PreferServerSentEvents)
             {
-                _isServerSentEventsEnabled = isServerSentEventsEnabled;
-                EnsureCorrectRefreshModeIsActive();
+                lock (_sseClientLock)
+                {
+                    _isServerSentEventsEnabled = Volatile.Read(ref _cacheState.StreamingSupport) == 1;
+                    EnsureCorrectRefreshModeIsActive();
+                }
             }
         }
 
