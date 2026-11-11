@@ -142,15 +142,16 @@ namespace GrowthBook
         public List<IGrowthBookPlugin> Plugins { get; set; }
 
         /// <summary>
-        /// Whether <see cref="Plugins"/> arrived here by cloning another context, and so are shared.
+        /// The plugin objects this context received from the one it was cloned from, which are shared with it.
         /// </summary>
         /// <remarks>
         /// <see cref="GrowthBookFactory.CreateForUser"/> clones its base context once per user, which
         /// copies the list but not the plugin objects in it. Without this, the first user disposed would
         /// close plugins that every other user is still sending events through, and their tracking would
-        /// stop with nothing said.
+        /// stop with nothing said. Kept per object rather than for the whole list, so a plugin added to or
+        /// swapped into a clone's list belongs to that clone and is closed with it.
         /// </remarks>
-        internal bool PluginsAreShared { get; private set; }
+        internal IReadOnlyList<IGrowthBookPlugin> SharedPlugins { get; private set; }
 
         /// <summary>
         /// A logger factory implementation that will enable logging throughout the SDK. Optional.
@@ -229,7 +230,7 @@ namespace GrowthBook
             };
 
             // The list is copied, the plugins in it are not - they stay shared with this context.
-            cloned.PluginsAreShared = cloned.Plugins?.Count > 0;
+            cloned.SharedPlugins = cloned.Plugins?.ToList();
 
             return cloned;
         }

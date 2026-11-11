@@ -494,6 +494,43 @@ namespace GrowthBook.Tests.CustomTests
             result.Value.ToString().Should().BeOneOf("A", "B");
         }
 
+        /// <summary>
+        /// Ownership is per plugin. A plugin swapped into or added to a clone's list was never shared, so the instance
+        /// built from that clone closes it; the plugins that came from the original stay open.
+        /// </summary>
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public void APluginPutOnACloneIsClosedWithIt(bool replaceTheList)
+        {
+            var fromOriginal = new RecordingPlugin();
+            var ownOfTheClone = new RecordingPlugin();
+
+            var original = new Context
+            {
+                Enabled = true,
+                Attributes = new JObject { ["id"] = "u1" },
+                LoggerFactory = NullLoggerFactory.Instance,
+                Plugins = new List<IGrowthBookPlugin> { fromOriginal },
+            };
+
+            var clone = original.Clone();
+
+            if (replaceTheList)
+            {
+                clone.Plugins = new List<IGrowthBookPlugin> { ownOfTheClone };
+            }
+            else
+            {
+                clone.Plugins.Add(ownOfTheClone);
+            }
+
+            new GrowthBookSdk.GrowthBook(clone).Dispose();
+
+            ownOfTheClone.CloseCount.Should().Be(1, "nothing else holds a plugin put on the clone");
+            fromOriginal.CloseCount.Should().Be(0, "the original's plugin is still shared with it");
+        }
+
         private class RewritingPlugin : IGrowthBookPlugin, IExperimentViewedPlugin, IFeatureEvaluatedPlugin
         {
             public int ExperimentsSeen;

@@ -113,7 +113,7 @@ namespace GrowthBook
             _logger = _loggerFactory.CreateLogger<GrowthBook>();
             var conditionEvaluatorLogger = _loggerFactory.CreateLogger<ConditionEvaluationProvider>();
 
-            _pluginRegistry = new PluginRegistry(context.Plugins, ownsPlugins: !context.PluginsAreShared, logger: _logger);
+            _pluginRegistry = new PluginRegistry(context.Plugins, sharedPlugins: context.SharedPlugins, logger: _logger);
 
             _conditionEvaluator = new ConditionEvaluationProvider(conditionEvaluatorLogger);
             _experimentEvaluator = new ExperimentEvaluationProvider(

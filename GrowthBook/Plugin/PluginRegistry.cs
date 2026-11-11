@@ -19,7 +19,7 @@ namespace GrowthBook.Plugin
         private readonly IList<IGrowthBookPlugin> _plugins;
         private readonly IList<IExperimentViewedPlugin> _experimentViewed;
         private readonly IList<IFeatureEvaluatedPlugin> _featureEvaluated;
-        private readonly bool _ownsPlugins;
+        private readonly IReadOnlyList<IGrowthBookPlugin> _sharedPlugins;
         private readonly ILogger _logger;
 
         public bool IsEmpty => _plugins.Count == 0;
@@ -29,15 +29,16 @@ namespace GrowthBook.Plugin
         /// </summary>
         public bool HasExperimentViewedListener => _experimentViewed.Count > 0;
 
-        /// <param name="ownsPlugins">
-        /// Whether disposing the owning instance should close these plugins. False when the context was
-        /// cloned, because the plugins belong to whoever built the original and other instances are still
-        /// using them. A plugin that implements <see cref="IMultiUserAwarePlugin"/> is told so on init.
+        /// <param name="sharedPlugins">
+        /// The plugins that came from the context this one was cloned from. Disposing the owning instance does
+        /// not close them, because they belong to whoever built the original and other instances are still
+        /// using them; a shared plugin that implements <see cref="IMultiUserAwarePlugin"/> is told so on init.
+        /// Every other plugin belongs to this instance.
         /// </param>
-        internal PluginRegistry(List<IGrowthBookPlugin> plugins, bool ownsPlugins = true, ILogger logger = null)
+        internal PluginRegistry(List<IGrowthBookPlugin> plugins, IReadOnlyList<IGrowthBookPlugin> sharedPlugins = null, ILogger logger = null)
         {
             _plugins = plugins ?? (IList<IGrowthBookPlugin>)Array.Empty<IGrowthBookPlugin>();
-            _ownsPlugins = ownsPlugins;
+            _sharedPlugins = sharedPlugins ?? Array.Empty<IGrowthBookPlugin>();
             _logger = logger;
 
             _experimentViewed = _plugins.OfType<IExperimentViewedPlugin>().ToList();
@@ -50,7 +51,7 @@ namespace GrowthBook.Plugin
             {
                 try
                 {
-                    if (!_ownsPlugins && plugin is IMultiUserAwarePlugin multiUserAware)
+                    if (IsShared(plugin) && plugin is IMultiUserAwarePlugin multiUserAware)
                     {
                         multiUserAware.MarkShared();
                     }
@@ -108,16 +109,16 @@ namespace GrowthBook.Plugin
 
         internal void CloseAll()
         {
-            if (!_ownsPlugins)
-            {
-                // The context was cloned, so these plugins are shared with instances that are still
-                // running. Closing them here would stop their tracking too. Whoever made the clones
-                // closes them: the original context's instance, or GrowthBookFactory.Dispose.
-                return;
-            }
-
             foreach (var plugin in _plugins)
             {
+                // A shared plugin is still serving instances that are running, and closing it here would stop
+                // their tracking too. Whoever made the clones closes it: the original context's instance, or
+                // GrowthBookFactory.Dispose.
+                if (IsShared(plugin))
+                {
+                    continue;
+                }
+
                 try
                 {
                     plugin.Close();
@@ -128,5 +129,7 @@ namespace GrowthBook.Plugin
                 }
             }
         }
+
+        private bool IsShared(IGrowthBookPlugin plugin) => _sharedPlugins.Any(shared => ReferenceEquals(shared, plugin));
     }
 }
