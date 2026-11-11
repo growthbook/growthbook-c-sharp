@@ -613,6 +613,67 @@ public class PushRefreshedFeaturesTests
         growthBook.IsOn("flag").Should().BeFalse("the shared definitions are not this user's remote answer");
     }
 
+    /// <summary>
+    /// A refresh can reach an instance the moment it subscribes, before its constructor has finished. The guard that
+    /// keeps a remotely evaluated instance off shared refreshes has to be in place by then.
+    /// </summary>
+    [Fact]
+    public void ARefreshArrivingAsTheInstanceSubscribesIsIgnoredWhenItEvaluatesRemotely()
+    {
+        var repository = new PushOnSubscribeRepository(FeatureSet(true));
+
+        using var growthBook = new GrowthBook(new Context
+        {
+            Attributes = JObject.FromObject(new { id = "user-1" }),
+            Features = FeatureSet(false),
+            RemoteEval = true,
+            ClientKey = "sdk-key",
+            ApiHost = "https://api.example.test",
+            FeatureRepository = repository
+        });
+
+        repository.Pushed.Should().BeTrue("the refresh has to reach the instance while it subscribes");
+        growthBook.IsOn("flag").Should().BeFalse("the shared definitions are not this user's remote answer");
+    }
+
+    /// <summary>
+    /// Pushes a refresh to each handler as it subscribes, as a shared repository can when a refresh lands at that moment.
+    /// </summary>
+    private sealed class PushOnSubscribeRepository : IGrowthBookFeatureRepository, IFeatureRefreshSource
+    {
+        private readonly IDictionary<string, Feature> _pushed;
+
+        public PushOnSubscribeRepository(IDictionary<string, Feature> pushed) => _pushed = pushed;
+
+        public bool Pushed { get; private set; }
+
+        public IDisposable SubscribeToRefresh(Action<FeatureRefresh> handler)
+        {
+            handler(new FeatureRefresh(1, _pushed));
+            Pushed = true;
+
+            return new NoUnsubscribe();
+        }
+
+        public Task<IDictionary<string, Feature>> GetFeatures(GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null) =>
+            new TaskCompletionSource<IDictionary<string, Feature>>().Task;
+
+        public Task<IDictionary<string, Feature>> GetFeaturesWithContext(Context context, GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null) =>
+            new TaskCompletionSource<IDictionary<string, Feature>>().Task;
+
+        public void Cancel() { }
+        public bool HasIdenticalAssignment(string experimentKey, ExperimentAssignment assignment) => false;
+        public void RecordAssignment(string experimentKey, ExperimentAssignment assignment) { }
+        public bool IsAlreadyTracked(string trackingKey) => false;
+        public void MarkAsTracked(string trackingKey) { }
+        public bool TryMarkAsTracked(string trackingKey) => true;
+
+        private sealed class NoUnsubscribe : IDisposable
+        {
+            public void Dispose() { }
+        }
+    }
+
     private sealed class CountingHandler : System.Net.Http.HttpMessageHandler
     {
         private int _requests;

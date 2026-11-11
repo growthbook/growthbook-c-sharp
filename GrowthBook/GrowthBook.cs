@@ -157,12 +157,12 @@ namespace GrowthBook
                 _featureRepository = new FeatureRepository(featureRepositoryLogger, featureCache, featureRefreshWorker, remoteEvaluationService);
             }
 
+            _canEvaluateRemotely = CanRepositoryEvaluateRemotely();
+
             if (_featureRepository is IFeatureRefreshSource refreshSource)
             {
                 _refreshSubscription = refreshSource.SubscribeToRefresh(OnFeaturesRefreshed);
             }
-
-            _canEvaluateRemotely = CanRepositoryEvaluateRemotely();
         }
 
         private bool CanRepositoryEvaluateRemotely()
