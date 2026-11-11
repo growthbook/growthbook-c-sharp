@@ -102,6 +102,49 @@ public class SharedFeatureCacheTests
     }
 
     /// <summary>
+    /// What the server said about streaming is kept only with a response the cache accepted. An older reply without
+    /// the header, turned away by the ordering check, used to overwrite it, and the newer worker's next 304 without the
+    /// header then closed its working stream.
+    /// </summary>
+    [Fact]
+    public async Task AnOlderReplyWithoutTheStreamingHeaderDoesNotStopTheNewerStream()
+    {
+        using var olderMayAnswer = new SemaphoreSlim(0);
+        using var olderStarted = new SemaphoreSlim(0);
+
+        var handler = new ScriptedStreamingHandler(async request =>
+        {
+            switch (request)
+            {
+                case 1:
+                    olderStarted.Release();
+                    await olderMayAnswer.WaitAsync(TimeSpan.FromSeconds(10));
+                    return (FlagOff, "\"v1\"", false);
+                default:
+                    return (FlagOn, "\"v2\"", true);
+            }
+        });
+
+        var cache = new InMemoryFeatureCache(60);
+        using var older = CreateWorker(handler, cache, preferStreaming: true);
+        using var newer = CreateWorker(handler, cache, preferStreaming: true);
+
+        var olderRefresh = Task.Run(() => older.RefreshCacheFromApi());
+        (await olderStarted.WaitAsync(TimeSpan.FromSeconds(10))).Should().BeTrue();
+
+        await newer.RefreshCacheFromApi();
+        SpinWait.SpinUntil(() => handler.Streams >= 1, TimeSpan.FromSeconds(5)).Should().BeTrue("the newer worker opens a stream after its 200");
+
+        olderMayAnswer.Release();
+        await olderRefresh;
+
+        await newer.RefreshCacheFromApi();
+
+        handler.NotModifiedAnswers.Should().Be(1, "the newer worker's second request was answered 304, without the header");
+        StreamStatus(newer).Should().NotBe(SSEConnectionStatus.Disconnected, "the older reply was turned away, so it says nothing about streaming");
+    }
+
+    /// <summary>
     /// The worker's stream status, read by reflection. Disconnecting cancels the stream without closing it, so the
     /// fake API cannot see it happen.
     /// </summary>
@@ -235,6 +278,60 @@ public class SharedFeatureCacheTests
         {
             _closed.TrySetResult(0);
             base.Dispose(disposing);
+        }
+    }
+
+    /// <summary>
+    /// Answers each features request with what the script returns for its number, sending the streaming header only
+    /// when the script says so, and 304 without it to a request holding that answer's ETag. Streams are kept open.
+    /// </summary>
+    private sealed class ScriptedStreamingHandler : HttpMessageHandler
+    {
+        private readonly Func<int, Task<(string Json, string ETag, bool Streams)>> _respond;
+        private int _requests;
+        private int _streams;
+        private int _notModified;
+
+        public ScriptedStreamingHandler(Func<int, Task<(string Json, string ETag, bool Streams)>> respond) => _respond = respond;
+
+        public int Streams => Volatile.Read(ref _streams);
+
+        public int NotModifiedAnswers => Volatile.Read(ref _notModified);
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            if (request.RequestUri.AbsolutePath.StartsWith("/sub/"))
+            {
+                Interlocked.Increment(ref _streams);
+
+                var stream = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(new OpenStream()) };
+                stream.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("text/event-stream");
+
+                return stream;
+            }
+
+            var (json, etag, streams) = await _respond(Interlocked.Increment(ref _requests));
+            var tag = new System.Net.Http.Headers.EntityTagHeaderValue(etag);
+
+            if (request.Headers.IfNoneMatch.Contains(tag))
+            {
+                Interlocked.Increment(ref _notModified);
+
+                var notModified = new HttpResponseMessage(HttpStatusCode.NotModified);
+                notModified.Headers.ETag = tag;
+
+                return notModified;
+            }
+
+            var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
+            response.Headers.ETag = tag;
+
+            if (streams)
+            {
+                response.Headers.Add("x-sse-support", "enabled");
+            }
+
+            return response;
         }
     }
 

@@ -76,8 +76,9 @@ namespace GrowthBook.Api
             public int StoredFeatureCount = -1;
 
             /// <summary>
-            /// Whether the server last said it streams, as a 200 reports it: 0 not yet known, 1 yes, 2 no. A 304 can come
-            /// back without the header, so it only ever confirms this and never clears it.
+            /// Whether the server last said it streams: 0 not yet known, 1 yes, 2 no. Written under <see cref="Lock"/> with
+            /// the response it came with, and only if that response was not overtaken: a 200 sets it from its header, and a
+            /// 304, which can come back without the header, only ever confirms it.
             /// </summary>
             public int StreamingSupport;
         }
@@ -123,12 +124,20 @@ namespace GrowthBook.Api
             if (response.IsNotModified)
             {
                 bool cacheNoLongerHoldsThePayload;
+                bool streams;
 
                 await _cacheState.Lock.WaitAsync(cancellationToken ?? _refreshWorkerCancellation.Token).ConfigureAwait(false);
 
                 try
                 {
                     cacheNoLongerHoldsThePayload = _cache.FeatureCount == 0 && _cacheState.StoredFeatureCount != 0;
+
+                    if (response.IsServerSentEventsEnabled && sequence > _cacheState.CachedSequence)
+                    {
+                        _cacheState.StreamingSupport = 1;
+                    }
+
+                    streams = _cacheState.StreamingSupport == 1;
                 }
                 finally
                 {
@@ -150,12 +159,7 @@ namespace GrowthBook.Api
                         await expiringCache.RefreshExpiration(cancellationToken).ConfigureAwait(false);
                     }
 
-                    if (response.IsServerSentEventsEnabled)
-                    {
-                        Volatile.Write(ref _cacheState.StreamingSupport, 1);
-                    }
-
-                    ApplyStreamingSupport(Volatile.Read(ref _cacheState.StreamingSupport) == 1);
+                    ApplyStreamingSupport(streams);
 
                     return await _cache.GetFeatures(cancellationToken).ConfigureAwait(false);
                 }
@@ -166,11 +170,9 @@ namespace GrowthBook.Api
                 return null;
             }
 
-            Volatile.Write(ref _cacheState.StreamingSupport, response.IsServerSentEventsEnabled ? 1 : 2);
-
-            if (!await WriteCacheInOrder(response.Features, response.ETag, sequence, cancellationToken ?? _refreshWorkerCancellation.Token).ConfigureAwait(false))
+            if (!await WriteCacheInOrder(response.Features, response.ETag, response.IsServerSentEventsEnabled, sequence, cancellationToken ?? _refreshWorkerCancellation.Token).ConfigureAwait(false))
             {
-                ApplyStreamingSupport(response.IsServerSentEventsEnabled);
+                ApplyStreamingSupport(Volatile.Read(ref _cacheState.StreamingSupport) == 1);
 
                 return await _cache.GetFeatures(cancellationToken).ConfigureAwait(false);
             }
@@ -193,7 +195,7 @@ namespace GrowthBook.Api
             }
         }
 
-        private async Task<bool> WriteCacheInOrder(IDictionary<string, Feature> features, string etag, long sequence, CancellationToken cancellationToken)
+        private async Task<bool> WriteCacheInOrder(IDictionary<string, Feature> features, string etag, bool? streamingSupported, long sequence, CancellationToken cancellationToken)
         {
             await _cacheState.Lock.WaitAsync(cancellationToken).ConfigureAwait(false);
 
@@ -207,6 +209,11 @@ namespace GrowthBook.Api
                 await _cache.RefreshWith(features, cancellationToken).ConfigureAwait(false);
                 _cacheState.CachedSequence = sequence;
                 _cacheState.StoredFeatureCount = features.Count;
+
+                if (streamingSupported.HasValue)
+                {
+                    Volatile.Write(ref _cacheState.StreamingSupport, streamingSupported.Value ? 1 : 2);
+                }
 
                 if (etag != null)
                 {
@@ -292,7 +299,7 @@ namespace GrowthBook.Api
                         var sequence = Interlocked.Increment(ref _cacheState.WriteSequence);
                         var features = GetFeaturesFrom(sseEvent.Data);
 
-                        if (features != null && await WriteCacheInOrder(features, null, sequence, _refreshWorkerCancellation.Token).ConfigureAwait(false))
+                        if (features != null && await WriteCacheInOrder(features, null, null, sequence, _refreshWorkerCancellation.Token).ConfigureAwait(false))
                         {
                             NotifyFeaturesStreamed(features);
 
