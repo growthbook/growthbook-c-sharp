@@ -1,3 +1,6 @@
+// GrowthBookFactory is deprecated in favour of GrowthBookClient, and these exercise plugins shared through it on
+// purpose: it still ships and still has to work.
+#pragma warning disable CS0618
 using System;
 using System.Collections.Generic;
 using System.Linq;
