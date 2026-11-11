@@ -21,6 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     exists to prevent.
   - An experiment's prerequisites are evaluated against a snapshot of the features already being evaluated rather
     than an empty set, so a cycle reached through an experiment is detected.
+- **Behaviour change:** `GrowthBook.Dispose()` no longer cancels a feature repository supplied on
+  `Context.FeatureRepository`. Such a repository is shared by every instance `GrowthBookFactory` creates, and
+  cancelling it when one of them was disposed stopped refreshing and streaming for all the others.
+  `GrowthBookFactory.Dispose()` now cancels it, once. If you supply a repository to a single instance and relied on
+  disposing the instance to stop it, call its `Cancel()` yourself.
+- Added `IGrowthBookState`, implemented by `GrowthBook`: `IsDestroyed` and `OnDestroy` observe an instance's
+  teardown, as in the JavaScript SDK.
+- `GetAllResults()` returns a snapshot, so it can be enumerated while evaluations continue.
 
 ## [2.0.0] - 2026-10-30
 
