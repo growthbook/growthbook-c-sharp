@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Net.Http;
 using System.Text;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Newtonsoft.Json.Linq;
@@ -31,7 +32,7 @@ namespace GrowthBook.Api
         private readonly IHttpClientFactory _httpClientFactory;
         private readonly GrowthBookConfigurationOptions _config;
         private readonly IGrowthBookFeatureCache _cache;
-        private readonly LruETagCache _etagCache;
+        private readonly CacheWriteState _cacheState;
         private readonly string _featuresApiEndpoint;
         private readonly string _serverSentEventsApiEndpoint;
         private volatile bool _isServerSentEventsEnabled;
@@ -39,10 +40,48 @@ namespace GrowthBook.Api
         private SSEClient _sseClient;
         private bool _isDisposed;
         private readonly Func<Func<Task>, Task> _startConnection = work => Task.Run(work);
-        private readonly SemaphoreSlim _cacheWriteLock = new SemaphoreSlim(1, 1);
-        private long _cacheWriteSequence;
-        private long _cachedSequence;
         private CancellationTokenSource _refreshWorkerCancellation = new CancellationTokenSource();
+
+        /// <summary>
+        /// One <see cref="CacheWriteState"/> per cache instance, however many workers write to it.
+        /// </summary>
+        private static readonly ConditionalWeakTable<IGrowthBookFeatureCache, CacheWriteState> CacheStates =
+            new ConditionalWeakTable<IGrowthBookFeatureCache, CacheWriteState>();
+
+        /// <summary>
+        /// What a worker knows about the cache it writes to: the order of the writes, the size of the payload last
+        /// written and the ETags describing it. It belongs to the cache, not to the worker. Instances sharing a cache,
+        /// as every instance a <see cref="GrowthBookFactory"/> creates from a context with a cache does, each build a
+        /// worker, and with this kept per worker one's older response could replace another's newer one, which a 304
+        /// against the other's ETag then marked fresh.
+        /// </summary>
+        private sealed class CacheWriteState
+        {
+            public CacheWriteState(int etagCacheSize) => ETags = new LruETagCache(etagCacheSize);
+
+            /// <summary>Held while the cache, <see cref="StoredFeatureCount"/> and the ETags are written, and while they are read together.</summary>
+            public readonly SemaphoreSlim Lock = new SemaphoreSlim(1, 1);
+
+            public readonly LruETagCache ETags;
+
+            public long WriteSequence;
+
+            public long CachedSequence;
+
+            /// <summary>
+            /// The size of the payload last written to the cache. It describes the same fact as the cache, and updating
+            /// them in separate steps let an overlapping refresh pair one payload's count with another payload's
+            /// features, after which a cleared cache is indistinguishable from an empty one and the flags never come back.
+            /// </summary>
+            public int StoredFeatureCount = -1;
+
+            /// <summary>
+            /// Whether the server last said it streams: 0 not yet known, 1 yes, 2 no. Written under <see cref="Lock"/> with
+            /// the response it came with, and only if that response was not overtaken: a 200 sets it from its header, and a
+            /// 304, which can come back without the header, only ever confirms it.
+            /// </summary>
+            public int StreamingSupport;
+        }
 
         public FeatureRefreshWorker(ILogger<FeatureRefreshWorker> logger, IHttpClientFactory httpClientFactory, GrowthBookConfigurationOptions config, IGrowthBookFeatureCache cache)
         {
@@ -50,7 +89,7 @@ namespace GrowthBook.Api
             _httpClientFactory = httpClientFactory;
             _config = config;
             _cache = cache;
-            _etagCache = new LruETagCache(config.EtagCacheSize);
+            _cacheState = cache is null ? new CacheWriteState(config.EtagCacheSize) : CacheStates.GetValue(cache, _ => new CacheWriteState(config.EtagCacheSize));
 
             var hostEndpoint = config.ApiHost;
             var trimmedHostEndpoint = new string(hostEndpoint?.Reverse().SkipWhile(x => x == '/').Reverse().ToArray());
@@ -74,22 +113,53 @@ namespace GrowthBook.Api
 
         public async Task<IDictionary<string, Feature>> RefreshCacheFromApi(CancellationToken? cancellationToken = null)
         {
-            var sequence = Interlocked.Increment(ref _cacheWriteSequence);
+            var sequence = Interlocked.Increment(ref _cacheState.WriteSequence);
 
             _logger.LogInformation("Making an HTTP request to the default Features API endpoint \'{FeaturesApiEndpoint}\'", _featuresApiEndpoint);
 
             var httpClient = _httpClientFactory.CreateClient(ConfiguredClients.DefaultApiClient);
 
-            var response = await httpClient.GetFeaturesFrom(_featuresApiEndpoint, _logger, _config, cancellationToken ?? _refreshWorkerCancellation.Token, _etagCache).ConfigureAwait(false);
+            var response = await httpClient.GetFeaturesFrom(_featuresApiEndpoint, _logger, _config, cancellationToken ?? _refreshWorkerCancellation.Token, _cacheState.ETags).ConfigureAwait(false);
 
             if (response.IsNotModified)
             {
-                if (_cache is InMemoryFeatureCache inMemoryCache)
+                bool cacheNoLongerHoldsThePayload;
+
+                await _cacheState.Lock.WaitAsync(cancellationToken ?? _refreshWorkerCancellation.Token).ConfigureAwait(false);
+
+                try
                 {
-                    await inMemoryCache.RefreshExpiration(cancellationToken).ConfigureAwait(false);
+                    cacheNoLongerHoldsThePayload = _cache.FeatureCount == 0 && _cacheState.StoredFeatureCount != 0;
+
+                    if (response.IsServerSentEventsEnabled && sequence > _cacheState.CachedSequence)
+                    {
+                        _cacheState.StreamingSupport = 1;
+                    }
+                }
+                finally
+                {
+                    _cacheState.Lock.Release();
                 }
 
-                return await _cache.GetFeatures(cancellationToken).ConfigureAwait(false);
+                if (cacheNoLongerHoldsThePayload)
+                {
+                    _logger.LogInformation("Server reported no change but the cache no longer holds the payload, discarding the stored ETag and asking for the whole payload");
+
+                    _cacheState.ETags.Remove(_featuresApiEndpoint);
+
+                    response = await httpClient.GetFeaturesFrom(_featuresApiEndpoint, _logger, _config, cancellationToken ?? _refreshWorkerCancellation.Token, _cacheState.ETags).ConfigureAwait(false);
+                }
+                else
+                {
+                    if (_cache is IFeatureCacheExpiration expiringCache)
+                    {
+                        await expiringCache.RefreshExpiration(cancellationToken).ConfigureAwait(false);
+                    }
+
+                    ApplyStreamingSupport();
+
+                    return await _cache.GetFeatures(cancellationToken).ConfigureAwait(false);
+                }
             }
 
             if (response.Features is null)
@@ -97,48 +167,64 @@ namespace GrowthBook.Api
                 return null;
             }
 
-            if (!await WriteCacheInOrder(response.Features, response.ETag, sequence, cancellationToken ?? _refreshWorkerCancellation.Token).ConfigureAwait(false))
+            if (!await WriteCacheInOrder(response.Features, response.ETag, response.IsServerSentEventsEnabled, sequence, cancellationToken ?? _refreshWorkerCancellation.Token).ConfigureAwait(false))
             {
+                ApplyStreamingSupport();
+
                 return await _cache.GetFeatures(cancellationToken).ConfigureAwait(false);
             }
 
-            // Now that the cache has been populated at least once, we need to see if we're allowed
-            // to kick off the server sent events listener and make sure we're in the intended mode
-            // of operating going forward.
-
-            if (_config.PreferServerSentEvents)
-            {
-                _isServerSentEventsEnabled = response.IsServerSentEventsEnabled;
-                EnsureCorrectRefreshModeIsActive();
-            }
+            ApplyStreamingSupport();
 
             return response.Features;
         }
 
-        private async Task<bool> WriteCacheInOrder(IDictionary<string, Feature> features, string etag, long sequence, CancellationToken cancellationToken)
+        /// <summary>
+        /// Now that the cache holds a payload, decides whether the server sent events listener should run, from what
+        /// the server last said about streaming as it stands now, and starts or stops it to match.
+        /// </summary>
+        private void ApplyStreamingSupport()
         {
-            await _cacheWriteLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+            if (_config.PreferServerSentEvents)
+            {
+                lock (_sseClientLock)
+                {
+                    _isServerSentEventsEnabled = Volatile.Read(ref _cacheState.StreamingSupport) == 1;
+                    EnsureCorrectRefreshModeIsActive();
+                }
+            }
+        }
+
+        private async Task<bool> WriteCacheInOrder(IDictionary<string, Feature> features, string etag, bool? streamingSupported, long sequence, CancellationToken cancellationToken)
+        {
+            await _cacheState.Lock.WaitAsync(cancellationToken).ConfigureAwait(false);
 
             try
             {
-                if (sequence <= _cachedSequence)
+                if (sequence <= _cacheState.CachedSequence)
                 {
                     return false;
                 }
 
                 await _cache.RefreshWith(features, cancellationToken).ConfigureAwait(false);
-                _cachedSequence = sequence;
+                _cacheState.CachedSequence = sequence;
+                _cacheState.StoredFeatureCount = features.Count;
+
+                if (streamingSupported.HasValue)
+                {
+                    Volatile.Write(ref _cacheState.StreamingSupport, streamingSupported.Value ? 1 : 2);
+                }
 
                 if (etag != null)
                 {
-                    _etagCache.Put(_featuresApiEndpoint, etag);
+                    _cacheState.ETags.Put(_featuresApiEndpoint, etag);
                 }
 
                 return true;
             }
             finally
             {
-                _cacheWriteLock.Release();
+                _cacheState.Lock.Release();
             }
         }
 
@@ -210,10 +296,10 @@ namespace GrowthBook.Api
                     {
                         _logger.LogDebug("Received SSE event: {Data}", sseEvent.Data?.Substring(0, Math.Min(sseEvent.Data?.Length ?? 0, 100)));
                         
-                        var sequence = Interlocked.Increment(ref _cacheWriteSequence);
+                        var sequence = Interlocked.Increment(ref _cacheState.WriteSequence);
                         var features = GetFeaturesFrom(sseEvent.Data);
 
-                        if (features != null && await WriteCacheInOrder(features, null, sequence, _refreshWorkerCancellation.Token).ConfigureAwait(false))
+                        if (features != null && await WriteCacheInOrder(features, null, null, sequence, _refreshWorkerCancellation.Token).ConfigureAwait(false))
                         {
                             NotifyFeaturesStreamed(features);
 
