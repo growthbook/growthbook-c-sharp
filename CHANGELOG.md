@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     exists to prevent.
   - An experiment's prerequisites are evaluated against a snapshot of the features already being evaluated rather
     than an empty set, so a cycle reached through an experiment is detected.
+- Fixed `$alli` comparing each item for plain equality, so an operator inside it, such as `{"$regex": ...}` or
+  `{"$gt": ...}`, never matched. Each item is now evaluated as under `$all`, with case ignored only where a string is
+  compared with a string, as in the JavaScript SDK. A targeting rule that nests an operator in `$alli` will now match
+  the users it describes.
 
 ## [2.0.0] - 2026-10-30
 
