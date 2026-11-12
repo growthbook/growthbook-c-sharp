@@ -251,10 +251,24 @@ public class SSELifecycleTests
             // Expected when cancelling mid-backoff.
         }
 
-        // The first reconnect waits out `_retryTimeMs * 2^1` plus jitter, i.e. at least 6s, so within 1.5s
-        // exactly one attempt is possible. Before the fix this number ran into the thousands.
-        handler.AttemptCount.Should().Be(1,
-            $"because a backoff has to sit between reconnects, but the transport was hit {handler.AttemptCount} times in 1.5s");
+        // Asserted on the gaps rather than on a count within the wait: a busy runner can resume this test
+        // seconds late, after a legitimate reconnect. The shortest backoff is _retryTimeMs (3s) times a jitter
+        // of at least 1, so no two attempts may be closer than that. Before the fix the gaps were near zero
+        // and the attempts ran into the thousands.
+        List<DateTime> attempts;
+
+        lock (handler.AttemptTimestamps)
+        {
+            attempts = handler.AttemptTimestamps.ToList();
+        }
+
+        attempts.Should().NotBeEmpty();
+
+        for (var i = 1; i < attempts.Count; i++)
+        {
+            (attempts[i] - attempts[i - 1]).Should().BeGreaterThan(TimeSpan.FromMilliseconds(2900),
+                $"because a backoff has to sit between reconnects, but attempts {i} and {i + 1} of {attempts.Count} came {(attempts[i] - attempts[i - 1]).TotalMilliseconds:F0}ms apart");
+        }
     }
 
     [Fact]
