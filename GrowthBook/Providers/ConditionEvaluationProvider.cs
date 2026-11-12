@@ -181,8 +181,12 @@ namespace GrowthBook.Providers
         /// </summary>
         /// <param name="conditionValue">The condition value to check.</param>
         /// <param name="attributeValue">The attribute value to check.</param>
+        /// <param name="stringComparison">
+        /// How a string condition value is compared with a string attribute value, for the case-insensitive
+        /// operators. Exact when null.
+        /// </param>
         /// <returns>True if the condition value matches the attribute value.</returns>
-        private bool? EvalConditionValue(JToken conditionValue, JToken attributeValue, EvalContext ctx)
+        private bool? EvalConditionValue(JToken conditionValue, JToken attributeValue, EvalContext ctx, StringComparison? stringComparison = null)
         {
             _logger.LogDebug("Evaluating condition value \'{ConditionValue}\'", conditionValue);
 
@@ -215,7 +219,7 @@ namespace GrowthBook.Providers
                 }
             }
 
-            return ValuesEqual(conditionValue, attributeValue);
+            return TokensEqual(conditionValue, attributeValue, stringComparison);
         }
 
         /// <summary>
@@ -1057,21 +1061,11 @@ namespace GrowthBook.Providers
 
             foreach (JToken condition in conditionList)
             {
-                if (stringComparison != null)
-                {
-                    if (!attributeList.Any(x => TokensEqual(condition, x, stringComparison)))
-                    {
-                        return false;
-                    }
-
-                    continue;
-                }
-
                 bool? passed = false;
 
                 foreach (JToken attribute in attributeList)
                 {
-                    var r = EvalConditionValue(condition, attribute, ctx);
+                    var r = EvalConditionValue(condition, attribute, ctx, stringComparison);
 
                     if (r == true)
                     {
