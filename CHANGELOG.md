@@ -21,6 +21,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     exists to prevent.
   - An experiment's prerequisites are evaluated against a snapshot of the features already being evaluated rather
     than an empty set, so a cycle reached through an experiment is detected.
+- Added `GetFeatures()` and `GetExperiments()` on the `GrowthBook` class, returning read-only snapshots
+  of the loaded state for debug, health and export use. Empty rather than null before the first load.
+  The snapshots are deep copies, so editing what one holds cannot change what the instance evaluates,
+  and they keep the key comparer the caller chose. The mutable `Features` and `Experiments` properties
+  are unchanged. `GrowthBookClient.GetFeatures()` hands out the same kind of copies.
+- They are deliberately not on `IGrowthBook`. The target is `netstandard2.0`, which has no default
+  interface members, so adding them there would stop every hand-written test double or wrapper
+  compiling until it implemented both. Nothing about this release is breaking; a consumer that needs
+  the snapshots reaches for the concrete type.
 
 ## [2.0.0] - 2026-10-30
 
