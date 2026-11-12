@@ -30,6 +30,18 @@ namespace GrowthBook.Evaluation
             return result;
         }
 
+        /// <summary>Looks a feature up among the forced values. User values take precedence.</summary>
+        public bool TryGetForcedFeature(string featureId, out JToken value)
+        {
+            if (User.ForcedFeatures != null && User.ForcedFeatures.TryGetValue(featureId, out value))
+                return true;
+            if (Global.ForcedFeatures != null && Global.ForcedFeatures.TryGetValue(featureId, out value))
+                return true;
+
+            value = null;
+            return false;
+        }
+
         /// <summary>
         /// Merges global and user attributes. User attributes and overrides take precedence.
         /// </summary>

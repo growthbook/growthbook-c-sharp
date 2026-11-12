@@ -20,6 +20,7 @@ namespace GrowthBook
             public const string Experiment = "experiment";
             public const string CyclicPrerequisite = "cyclicPrerequisite";
             public const string Prerequisite = "prerequisite";
+            public const string Override = "override";
         }
 
         /// <summary>

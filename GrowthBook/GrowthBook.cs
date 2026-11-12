@@ -49,6 +49,7 @@ namespace GrowthBook
         private readonly bool _canFetchFeatures;
         private JObject _previousAttributes;
         private IDictionary<string, int> _previousForcedVariations;
+        private volatile IDictionary<string, JToken> _forcedFeatures;
         private readonly List<Action<Experiment, ExperimentResult>> _subscribers
             = new List<Action<Experiment, ExperimentResult>>();
         private readonly List<Func<Experiment, ExperimentResult, Task>> _asyncSubscribers
@@ -70,6 +71,7 @@ namespace GrowthBook
             Features = context.Features?.ToDictionary(k => k.Key, v => v.Value) ?? new Dictionary<string, Feature>();
             Experiments = context.Experiments ?? new List<Experiment>();
             ForcedVariations = context.ForcedVariations;
+            _forcedFeatures = CopyForcedFeatures(context.ForcedFeatures);
 
             _qaMode = context.QaMode;
             _trackingCallback = context.TrackingCallback;
@@ -197,6 +199,24 @@ namespace GrowthBook
         /// Listing of specific experiments to always assign a specific variation (used for QA).
         /// </summary>
         public IDictionary<string, int> ForcedVariations { get; set; }
+
+        /// <summary>
+        /// Replaces the values features are forced to (used for QA). A forced feature is not evaluated: it
+        /// resolves to the given value with the <c>override</c> source, whether or not the payload defines it.
+        /// Passing null or an empty dictionary forces nothing.
+        /// </summary>
+        public void SetForcedFeatures(IDictionary<string, JToken> forcedFeatures)
+        {
+            _forcedFeatures = CopyForcedFeatures(forcedFeatures);
+        }
+
+        /// <summary>
+        /// The values features are currently forced to, by feature key.
+        /// </summary>
+        public IDictionary<string, JToken> GetForcedFeatures() => CopyForcedFeatures(_forcedFeatures);
+
+        private static IDictionary<string, JToken> CopyForcedFeatures(IDictionary<string, JToken> forcedFeatures) =>
+            forcedFeatures?.ToDictionary(k => k.Key, v => v.Value?.DeepClone()) ?? new Dictionary<string, JToken>();
 
         /// <summary>
         /// The URL of the current page.
@@ -705,6 +725,7 @@ namespace GrowthBook
                 Enabled = Enabled,
                 QaMode = _qaMode,
                 ForcedVariations = ForcedVariations,
+                ForcedFeatures = _forcedFeatures,
                 TrackingCallback = TryToTrack,
                 OnExperimentAssigned = TryAssignExperimentResult,
                 OnSubscriberNotification = NotifySubscribers,
@@ -843,6 +864,7 @@ namespace GrowthBook
                 CacheKeyAttributes = _context.CacheKeyAttributes,
                 Attributes = Attributes,
                 ForcedVariations = ForcedVariations,
+                ForcedFeatures = _forcedFeatures,
                 Url = Url
             };
         }

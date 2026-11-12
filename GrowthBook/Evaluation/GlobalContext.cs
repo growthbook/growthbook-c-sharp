@@ -14,6 +14,7 @@ namespace GrowthBook.Evaluation
         public bool Enabled { get; set; } = true;
         public bool QaMode { get; set; }
         public IDictionary<string, int> ForcedVariations { get; set; } = new Dictionary<string, int>();
+        public IDictionary<string, JToken> ForcedFeatures { get; set; }
         public JObject Attributes { get; set; }
         public Action<Experiment, ExperimentResult> TrackingCallback { get; set; }
         /// <summary>Records the assignment and notifies subscribers if it changed.</summary>

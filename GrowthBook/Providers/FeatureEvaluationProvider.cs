@@ -37,6 +37,13 @@ namespace GrowthBook.Providers
 
                 context.Stack.EvaluatedFeatures.Add(featureId);
 
+                if (context.TryGetForcedFeature(featureId, out JToken forcedValue))
+                {
+                    _logger.LogDebug("Feature '{FeatureId}' is forced to a value", featureId);
+
+                    return GetFeatureResult(forcedValue, FeatureResult.SourceId.Override);
+                }
+
                 if (!context.Global.Features.TryGetValue(featureId, out Feature feature))
                 {
                     return GetFeatureResult(null, FeatureResult.SourceId.UnknownFeature);

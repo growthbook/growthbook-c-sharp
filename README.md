@@ -287,6 +287,9 @@ public class Context
     /// Forces specific experiments to always assign a specific variation (used for QA).
     public IDictionary<string, int> ForcedVariations { get; set; } = new Dictionary<string, int>();
 
+    /// Values to force features to, by feature key (used for QA).
+    public IDictionary<string, JToken> ForcedFeatures { get; set; } = new Dictionary<string, JToken>();
+
     /// Saved groups for sticky bucketing or other purposes. Optional.
     public JObject SavedGroups { get; set; }
 
