@@ -21,6 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     exists to prevent.
   - An experiment's prerequisites are evaluated against a snapshot of the features already being evaluated rather
     than an empty set, so a cycle reached through an experiment is detected.
+- Fixed remote evaluation writing user data to debug logs. The request, which is built from the user's attributes, and
+  the response, which can carry saved groups, were logged in full. Both are now described by counts only. The body of
+  a failed response is still logged at error level, since it is the API explaining what it rejected.
 
 ## [2.0.0] - 2026-10-30
 
