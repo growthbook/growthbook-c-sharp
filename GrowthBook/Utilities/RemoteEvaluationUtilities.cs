@@ -30,11 +30,17 @@ namespace GrowthBook.Utilities
             // Get forced variations
             var forcedVariations = context.ForcedVariations ?? new Dictionary<string, int>();
 
+            // The server evaluates with the forced values, so a response depends on them too
+            var forcedFeatures = context.ForcedFeatures?.Count > 0
+                ? new SortedDictionary<string, JToken>(context.ForcedFeatures, System.StringComparer.Ordinal)
+                : null;
+
             // Create cache context
             var cacheContext = new
             {
                 attributes = relevantAttributes,
                 forcedVariations = forcedVariations.Count > 0 ? forcedVariations : null,
+                forcedFeatures,
                 url = !string.IsNullOrEmpty(context.Url) ? context.Url : null
             };
 

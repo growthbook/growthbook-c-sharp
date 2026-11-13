@@ -30,7 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of `IDictionary<string, Feature>`. The property was never read during evaluation and never reached a remote
   evaluation request, so nothing could have depended on it.
 - Fixed forced features never reaching the remote evaluation request. They are now sent as `[key, value]` pairs, as
-  the endpoint expects.
+  the endpoint expects, and `RemoteEvaluationUtilities.GenerateCacheKey` includes them, so a cache keyed with it does
+  not return the response made for an override that has since changed. The key is unchanged when nothing is forced.
 - Added `FeatureResult.RuleId`, as `ruleId` in the JavaScript SDK: the id of the rule that decided the value when the
   source is `force` or `experiment`, and empty for every other source. `FeatureRule.Id` was already read from the
   payload and is now reported.
