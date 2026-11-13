@@ -26,6 +26,9 @@ namespace GrowthBook.Evaluation
         /// <summary>Force specific experiments to always assign a specific variation for this user. Used for QA.</summary>
         public IDictionary<string, int>   ForcedVariations { get; set; }
 
+        /// <summary>Values to force features to for this user, by feature key. Used for QA.</summary>
+        public IDictionary<string, JToken> ForcedFeatures { get; set; }
+
         /// <summary>
         /// Per-request tracking callback. Runs in addition to <see cref="Options.TrackingCallback"/>, which is not
         /// replaced: setting both means both are invoked for the same exposure, so do not send both to the same

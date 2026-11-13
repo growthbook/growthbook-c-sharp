@@ -75,10 +75,11 @@ namespace GrowthBook
         /// </summary>
         public IDictionary<string, Feature> Features { get; set; } = new Dictionary<string, Feature>();
 
-                /// <summary>
-        /// Feature definitions (usually pulled from an API or cache).
+        /// <summary>
+        /// Values to force features to, by feature key (used for QA). A forced feature is not evaluated: it
+        /// resolves to this value with the <c>override</c> source, whether or not the payload defines it.
         /// </summary>
-        public IDictionary<string, Feature> ForcedFeatures { get; set; } = new Dictionary<string, Feature>();
+        public IDictionary<string, JToken> ForcedFeatures { get; set; } = new Dictionary<string, JToken>();
 
 
         /// <summary>
@@ -200,7 +201,7 @@ namespace GrowthBook
                 CachePath = this.CachePath,
                 RemoteEval = this.RemoteEval,
                 CacheKeyAttributes = this.CacheKeyAttributes?.ToArray(),
-                ForcedFeatures = this.ForcedFeatures
+                ForcedFeatures = this.ForcedFeatures?.ToDictionary(k => k.Key, v => v.Value?.DeepClone())
             };
             return cloned;
         }

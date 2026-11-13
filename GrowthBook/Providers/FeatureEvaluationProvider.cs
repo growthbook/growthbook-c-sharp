@@ -37,6 +37,13 @@ namespace GrowthBook.Providers
 
                 context.Stack.EvaluatedFeatures.Add(featureId);
 
+                if (context.TryGetForcedFeature(featureId, out JToken forcedValue))
+                {
+                    _logger.LogDebug("Feature '{FeatureId}' is forced to a value", featureId);
+
+                    return GetFeatureResult(forcedValue, FeatureResult.SourceId.Override);
+                }
+
                 if (!context.Global.Features.TryGetValue(featureId, out Feature feature))
                 {
                     return GetFeatureResult(null, FeatureResult.SourceId.UnknownFeature);
@@ -150,7 +157,7 @@ namespace GrowthBook.Providers
 
                         _logger.LogDebug("Rule {RuleIndex}: returning forced value for feature '{FeatureId}'",
                             ruleIndex, featureId);
-                        return GetFeatureResult(rule.Force, FeatureResult.SourceId.Force);
+                        return GetFeatureResult(rule.Force, FeatureResult.SourceId.Force, ruleId: rule.Id);
                     }
 
                     var experiment = new Experiment
@@ -186,7 +193,7 @@ namespace GrowthBook.Providers
 
                     context.Global.OnSubscriberNotification?.Invoke(experiment, result);
 
-                    return GetFeatureResult(result.Value, FeatureResult.SourceId.Experiment, experiment, result);
+                    return GetFeatureResult(result.Value, FeatureResult.SourceId.Experiment, experiment, result, rule.Id);
                 }
 
                 _logger.LogDebug("No rules matched for feature '{FeatureId}', returning default value", featureId);
@@ -222,11 +229,12 @@ namespace GrowthBook.Providers
         }
 
         private FeatureResult GetFeatureResult(JToken value, string source, Experiment experiment = null,
-            ExperimentResult experimentResult = null)
+            ExperimentResult experimentResult = null, string ruleId = null)
         {
             return new FeatureResult
             {
-                Value = value, Source = source, Experiment = experiment, ExperimentResult = experimentResult
+                Value = value, Source = source, Experiment = experiment, ExperimentResult = experimentResult,
+                RuleId = ruleId ?? string.Empty
             };
         }
     }

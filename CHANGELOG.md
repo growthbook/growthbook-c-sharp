@@ -21,6 +21,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     exists to prevent.
   - An experiment's prerequisites are evaluated against a snapshot of the features already being evaluated rather
     than an empty set, so a cycle reached through an experiment is detected.
+- Added forced feature values, as `forcedFeatureValues` in the JavaScript SDK. A forced feature is not evaluated: it
+  resolves to the given value with the new `override` source, whether or not the payload defines it. Set them through
+  `Context.ForcedFeatures` or `GrowthBook.SetForcedFeatures`, and for the multi-user client through
+  `Options.GlobalForcedFeatures`, `GrowthBookClient.SetGlobalForcedFeatures` or `UserContext.ForcedFeatures`, where a
+  user's own value takes precedence.
+- **Breaking:** `Context.ForcedFeatures` is now `IDictionary<string, JToken>`, the values to force features to, instead
+  of `IDictionary<string, Feature>`. The property was never read during evaluation and never reached a remote
+  evaluation request, so nothing could have depended on it.
+- Fixed forced features never reaching the remote evaluation request. They are now sent as `[key, value]` pairs, as
+  the endpoint expects, and `RemoteEvaluationUtilities.GenerateCacheKey` includes them, so a cache keyed with it does
+  not return the response made for an override that has since changed. The key is unchanged when nothing is forced.
+- Added `FeatureResult.RuleId`, as `ruleId` in the JavaScript SDK: the id of the rule that decided the value when the
+  source is `force` or `experiment`, and empty for every other source. `FeatureRule.Id` was already read from the
+  payload and is now reported.
 
 ## [2.0.0] - 2026-10-30
 
