@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     exists to prevent.
   - An experiment's prerequisites are evaluated against a snapshot of the features already being evaluated rather
     than an empty set, so a cycle reached through an experiment is detected.
+- Added `RedisStickyBucketService`, which keeps sticky bucket assignments in Redis in the same format as the JavaScript
+  SDK's, so services written in either SDK can share one Redis. It reads every identifier a user needs with one `MGET`.
+  The SDK takes no dependency on a Redis client: `IRedisCompatibleClient` is implemented over the one the application
+  uses, and the README shows it for StackExchange.Redis.
 
 ## [2.0.0] - 2026-10-30
 
