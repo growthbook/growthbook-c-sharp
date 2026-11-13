@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     exists to prevent.
   - An experiment's prerequisites are evaluated against a snapshot of the features already being evaluated rather
     than an empty set, so a cycle reached through an experiment is detected.
+- Fixed `MergeAttributes` writing into the attributes in place. An evaluation running at the same time could see some
+  keys from before the merge and some from after it, concurrent merges could lose keys, and the object passed in as
+  `Context.Attributes` was changed too. The merge now builds a copy and publishes it in one assignment, as
+  `updateAttributes` does in the JavaScript SDK. It also no longer throws when the attributes are null or a merged
+  value is null; such a key is kept with a null value.
 
 ## [2.0.0] - 2026-10-30
 
