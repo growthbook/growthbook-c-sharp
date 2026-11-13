@@ -21,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     exists to prevent.
   - An experiment's prerequisites are evaluated against a snapshot of the features already being evaluated rather
     than an empty set, so a cycle reached through an experiment is detected.
+- Fixed `GrowthBook` never reading sticky bucket assignments from `Context.StickyBucketService`. An instance held only
+  the documents handed over on the context and the ones it saved itself, so a user seen before by another instance,
+  or in an earlier process, was hashed again and could change variation once the weights changed. Assignments are now
+  loaded from the service when the instance is built, when features are loaded or remotely evaluated, and when the
+  attributes are updated or merged, as `refreshStickyBuckets` does in the JavaScript SDK. They are merged into the
+  documents already held, and a service that cannot be read is logged and leaves them as they are.
 
 ## [2.0.0] - 2026-10-30
 
