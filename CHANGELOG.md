@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     exists to prevent.
   - An experiment's prerequisites are evaluated against a snapshot of the features already being evaluated rather
     than an empty set, so a cycle reached through an experiment is detected.
+- Fixed remote evaluation after `UpdateAttributes` being made for the previous attributes: the request was built
+  before the new ones were assigned. Also fixed an older remote evaluation answered last replacing a newer one's
+  features. Only the newest evaluation started installs its features now, and a `LoadFeatures` call overtaken by an
+  attribute change waits for the newer evaluation, or for its cancellation token, instead of installing features for
+  attributes the instance no longer has.
 
 ## [2.0.0] - 2026-10-30
 
