@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -101,5 +102,55 @@ public class MergeAttributesTests
 
         gb.Attributes["id"].Value<string>().Should().Be("u2");
         gb.Attributes["plan"].Value<string>().Should().Be("pro");
+    }
+
+    /// <summary>
+    /// An update and a merge started together must end as one of them followed by the other: the update's attributes,
+    /// with or without the merged key. A merge that read the attributes before the update and published after it
+    /// would bring the old user's attributes back. Large attributes keep the merge copying long enough for an update
+    /// that ignored the lock to land in between.
+    /// </summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void AnUpdateAndAMergeAtOnceEndAsOneAfterTheOther(bool updateWithDictionary)
+    {
+        var previous = new JObject { ["id"] = "old-user" };
+
+        for (var i = 0; i < 2000; i++)
+        {
+            previous[$"old-{i}"] = i;
+        }
+
+        for (var round = 0; round < 200; round++)
+        {
+            using var gb = Create((JObject)previous.DeepClone());
+            using var start = new Barrier(2);
+
+            var update = Task.Run(() =>
+            {
+                start.SignalAndWait();
+
+                if (updateWithDictionary)
+                {
+                    gb.UpdateAttributes(new Dictionary<string, object> { ["id"] = "new-user" });
+                }
+                else
+                {
+                    gb.UpdateAttributes(new { id = "new-user" });
+                }
+            });
+
+            var merge = Task.Run(() =>
+            {
+                start.SignalAndWait();
+                gb.MergeAttributes(new Dictionary<string, object> { ["plan"] = "pro" });
+            });
+
+            Task.WaitAll(update, merge);
+
+            gb.Attributes["id"].Value<string>().Should().Be("new-user", $"the update completed in round {round}, so the old user cannot come back");
+            gb.Attributes.Should().NotContainKey("old-0", $"in round {round} a merge built on the old attributes was published over the update");
+        }
     }
 }
