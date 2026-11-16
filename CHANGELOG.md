@@ -25,7 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before the new ones were assigned. Also fixed an older remote evaluation answered last replacing a newer one's
   features. Only the newest evaluation started installs its features now, and a `LoadFeatures` call overtaken by an
   attribute change waits for the newer evaluation, or for its cancellation token, instead of installing features for
-  attributes the instance no longer has.
+  attributes the instance no longer has. An overtaken request that fails no longer fails the load either, and a
+  repository that throws before returning a task no longer leaves a waiting load hanging.
 
 ## [2.0.0] - 2026-10-30
 

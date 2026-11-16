@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using FluentAssertions;
+using GrowthBook.Exceptions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Newtonsoft.Json.Linq;
 using NSubstitute;
@@ -25,6 +26,12 @@ public class RemoteEvaluationOrderingTests
 
         public IGrowthBookFeatureRepository Repository { get; } = Substitute.For<IGrowthBookFeatureRepository>();
 
+        /// <summary>Run inside the next request, on the thread that made it, before it returns.</summary>
+        public Action OnNextRequest { get; set; }
+
+        /// <summary>When set, the next request throws before returning a task.</summary>
+        public bool ThrowOnNextRequest { get; set; }
+
         public ControlledRepository()
         {
             Repository.GetFeaturesWithContext(Arg.Any<Context>(), Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken?>())
@@ -32,6 +39,17 @@ public class RemoteEvaluationOrderingTests
                 {
                     var answer = new TaskCompletionSource<IDictionary<string, Feature>>(TaskCreationOptions.RunContinuationsAsynchronously);
                     lock (_calls) _calls.Add((call.Arg<Context>(), answer));
+
+                    var onRequest = OnNextRequest;
+                    OnNextRequest = null;
+                    onRequest?.Invoke();
+
+                    if (ThrowOnNextRequest)
+                    {
+                        ThrowOnNextRequest = false;
+                        throw new InvalidOperationException("repository failed before returning a task");
+                    }
+
                     return answer.Task;
                 });
         }
@@ -45,6 +63,15 @@ public class RemoteEvaluationOrderingTests
             TaskCompletionSource<IDictionary<string, Feature>> answer;
             lock (_calls) answer = _calls[index].Answer;
             answer.SetResult(new Dictionary<string, Feature> { ["flag"] = new Feature { DefaultValue = value } });
+        }
+
+        public void AnswerForItsUser(int index) => Answer(index, "for-" + Request(index).Attributes["id"].Value<string>());
+
+        public void Fail(int index)
+        {
+            TaskCompletionSource<IDictionary<string, Feature>> answer;
+            lock (_calls) answer = _calls[index].Answer;
+            answer.SetException(new FeatureLoadException("remote evaluation failed", 503));
         }
 
         public void WaitFor(int count) =>
@@ -166,6 +193,82 @@ public class RemoteEvaluationOrderingTests
         var result = await load.WaitAsync(TimeSpan.FromSeconds(5));
 
         result.Success.Should().BeFalse("the caller gave up before the newer evaluation answered");
+    }
+
+    /// <summary>
+    /// A load started while an update's request is being made, before the update had published its attributes, read
+    /// the old ones and took a higher number, so the old user's answer was installed over the new user's.
+    /// </summary>
+    [Fact]
+    public async Task ALoadStartedDuringAnUpdatesRequestCarriesTheUpdatedAttributes()
+    {
+        var controlled = new ControlledRepository();
+        using var gb = Create(controlled, "user-1");
+        Task<FeatureLoadResult> load = null;
+
+        controlled.OnNextRequest = () => load = gb.LoadFeaturesWithResult();
+        gb.UpdateAttributes(new Dictionary<string, object> { ["id"] = "user-2" });
+
+        controlled.WaitFor(2);
+        controlled.Request(1).Attributes["id"].Value<string>().Should().Be("user-2", "the update published its attributes before its request");
+
+        controlled.AnswerForItsUser(0);
+        controlled.AnswerForItsUser(1);
+
+        (await load.WaitAsync(TimeSpan.FromSeconds(5))).Success.Should().BeTrue();
+        Flag(gb).Should().Be("for-user-2");
+    }
+
+    /// <summary>
+    /// A repository that throws before returning a task left the newest evaluation unfinished, and a load waiting for
+    /// it never returned.
+    /// </summary>
+    [Fact]
+    public async Task ALoadWaitingForAnEvaluationWhoseRepositoryThrewReturns()
+    {
+        var controlled = new ControlledRepository();
+        using var gb = Create(controlled, "user-1");
+
+        var load = gb.LoadFeaturesWithResult();
+        controlled.WaitFor(1);
+
+        controlled.ThrowOnNextRequest = true;
+        gb.UpdateAttributes(new Dictionary<string, object> { ["id"] = "user-2" });
+        controlled.WaitFor(2);
+
+        controlled.Answer(0, "for-user-1");
+
+        var result = await load.WaitAsync(TimeSpan.FromSeconds(5));
+
+        result.Success.Should().BeFalse("the newest evaluation, for user-2, failed");
+        Flag(gb).Should().Be("none", "the answer for user-1 was overtaken");
+    }
+
+    /// <summary>
+    /// An overtaken request that fails says nothing about the current attributes. Its failure used to end the load
+    /// instead of the load waiting for the newer evaluation.
+    /// </summary>
+    [Fact]
+    public async Task AnOvertakenRequestThatFailsWaitsForTheNewerEvaluation()
+    {
+        var controlled = new ControlledRepository();
+        using var gb = Create(controlled, "user-1");
+
+        var load = gb.LoadFeaturesWithResult();
+        controlled.WaitFor(1);
+
+        gb.UpdateAttributes(new Dictionary<string, object> { ["id"] = "user-2" });
+        controlled.WaitFor(2);
+
+        controlled.Fail(0);
+        await Task.Delay(200);
+        load.IsCompleted.Should().BeFalse("the failure was for user-1, and the instance now has user-2");
+
+        controlled.Answer(1, "for-user-2");
+        var result = await load.WaitAsync(TimeSpan.FromSeconds(5));
+
+        result.Success.Should().BeTrue();
+        Flag(gb).Should().Be("for-user-2");
     }
 
     [Fact]

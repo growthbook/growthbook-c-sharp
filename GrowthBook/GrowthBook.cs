@@ -264,24 +264,23 @@ namespace GrowthBook
         public void UpdateAttributes(IDictionary<string, object> attributes)
         {
             var newAttributes = attributes != null ? JObject.FromObject(attributes) : new JObject();
+            var reevaluate = _context.RemoteEval && ShouldTriggerRemoteEvaluation(newAttributes);
 
-            if (_context.RemoteEval && ShouldTriggerRemoteEvaluation(newAttributes))
-            {
-                _ = TriggerRemoteEvaluationAsync(newAttributes);
-            }
-
-            Attributes = newAttributes;
-            _previousAttributes = newAttributes?.DeepClone() as JObject;
+            PublishAttributes(newAttributes);
+            _previousAttributes = newAttributes.DeepClone() as JObject;
 
             if (attributes != null)
             {
-                Attributes = JObject.FromObject(attributes);
                 _logger?.LogDebug("Updated attributes with {Count} properties", attributes.Count);
             }
             else
             {
-                Attributes = new JObject();
                 _logger?.LogDebug("Cleared attributes");
+            }
+
+            if (reevaluate)
+            {
+                _ = TriggerRemoteEvaluationAsync();
             }
         }
 
@@ -292,24 +291,23 @@ namespace GrowthBook
         public void UpdateAttributes(object attributes)
         {
             var newAttributes = attributes != null ? JObject.FromObject(attributes) : new JObject();
+            var reevaluate = _context.RemoteEval && ShouldTriggerRemoteEvaluation(newAttributes);
 
-            if (_context.RemoteEval && ShouldTriggerRemoteEvaluation(newAttributes))
-            {
-                _ = TriggerRemoteEvaluationAsync(newAttributes);
-            }
-
-            Attributes = newAttributes;
-            _previousAttributes = newAttributes?.DeepClone() as JObject;
+            PublishAttributes(newAttributes);
+            _previousAttributes = newAttributes.DeepClone() as JObject;
 
             if (attributes != null)
             {
-                Attributes = JObject.FromObject(attributes);
                 _logger?.LogDebug("Updated attributes from object");
             }
             else
             {
-                Attributes = new JObject();
                 _logger?.LogDebug("Cleared attributes");
+            }
+
+            if (reevaluate)
+            {
+                _ = TriggerRemoteEvaluationAsync();
             }
         }
 
@@ -330,7 +328,7 @@ namespace GrowthBook
 
             if (_context.RemoteEval && ShouldTriggerRemoteEvaluation(Attributes))
             {
-                _ = TriggerRemoteEvaluationAsync(Attributes);
+                _ = TriggerRemoteEvaluationAsync();
             }
 
             _previousAttributes = Attributes?.DeepClone() as JObject;
@@ -356,7 +354,7 @@ namespace GrowthBook
 
             if (_context.RemoteEval && ShouldTriggerRemoteEvaluation(Attributes))
             {
-                _ = TriggerRemoteEvaluationAsync(Attributes);
+                _ = TriggerRemoteEvaluationAsync();
             }
 
             _previousAttributes = Attributes?.DeepClone() as JObject;
@@ -614,7 +612,7 @@ namespace GrowthBook
                 // Use remote evaluation if enabled and configured
                 if (_context.RemoteEval && RemoteEvaluationUtilities.IsValidForRemoteEvaluation(_context))
                 {
-                    var outcome = await EvaluateRemotelyAsync(Attributes, options, cancellationToken).ConfigureAwait(false);
+                    var outcome = await EvaluateRemotelyAsync(options, cancellationToken).ConfigureAwait(false);
 
                     while (outcome == RemoteEvaluationOutcome.Superseded)
                     {
@@ -825,16 +823,28 @@ namespace GrowthBook
         }
 
         /// <summary>
-        /// Triggers remote evaluation asynchronously when attribute changes are detected.
+        /// Replaces the attributes under the lock remote evaluations are numbered under. A request takes the attributes
+        /// under that lock too, so one numbered after an update can only carry the update's attributes.
         /// </summary>
-        /// <param name="newAttributes">The new attributes</param>
-        private async Task TriggerRemoteEvaluationAsync(JObject newAttributes)
+        private void PublishAttributes(JObject attributes)
+        {
+            lock (_remoteEvaluationLock)
+            {
+                Attributes = attributes;
+            }
+        }
+
+        /// <summary>
+        /// Triggers remote evaluation asynchronously when attribute changes are detected, for the attributes as they are
+        /// now. Called once the change is published.
+        /// </summary>
+        private async Task TriggerRemoteEvaluationAsync()
         {
             try
             {
                 _logger?.LogDebug("Triggering remote evaluation due to attribute changes");
 
-                var outcome = await EvaluateRemotelyAsync(newAttributes, null, null).ConfigureAwait(false);
+                var outcome = await EvaluateRemotelyAsync(null, null).ConfigureAwait(false);
 
                 if (outcome == RemoteEvaluationOutcome.Installed)
                 {
@@ -855,14 +865,16 @@ namespace GrowthBook
         }
 
         /// <summary>
-        /// Evaluates remotely for the given attributes. Only the newest evaluation started installs its features: one
+        /// Evaluates remotely for the current attributes. Only the newest evaluation started installs its features: one
         /// answered after a newer one began was made for attributes the instance no longer has, whichever finishes first.
         /// </summary>
         /// <remarks>
-        /// The number and the request are taken under one lock, so the evaluations are numbered in the order they are
-        /// made, and the features are installed under it only if no newer one has started since.
+        /// The number, the attributes and the request are taken under one lock, the one attributes are published under,
+        /// so the evaluations are numbered in the order they are made, and the features are installed under it only if
+        /// no newer one has started since. An overtaken evaluation that fails is superseded too: its failure was for
+        /// attributes the instance no longer has.
         /// </remarks>
-        private async Task<RemoteEvaluationOutcome> EvaluateRemotelyAsync(JObject attributes, GrowthBookRetrievalOptions options, CancellationToken? cancellationToken)
+        private async Task<RemoteEvaluationOutcome> EvaluateRemotelyAsync(GrowthBookRetrievalOptions options, CancellationToken? cancellationToken)
         {
             long generation;
             Task<IDictionary<string, Feature>> request;
@@ -872,7 +884,15 @@ namespace GrowthBook
             {
                 generation = ++_remoteEvaluationGeneration;
                 _latestRemoteEvaluation = completion.Task;
-                request = _featureRepository.GetFeaturesWithContext(CreateCurrentContext(attributes), options, cancellationToken);
+
+                try
+                {
+                    request = _featureRepository.GetFeaturesWithContext(CreateCurrentContext(), options, cancellationToken);
+                }
+                catch (Exception ex)
+                {
+                    request = Task.FromException<IDictionary<string, Feature>>(ex);
+                }
             }
 
             try
@@ -903,6 +923,20 @@ namespace GrowthBook
             }
             catch (Exception ex)
             {
+                bool superseded;
+
+                lock (_remoteEvaluationLock)
+                {
+                    superseded = generation != _remoteEvaluationGeneration;
+                }
+
+                if (superseded && !(cancellationToken?.IsCancellationRequested ?? false))
+                {
+                    completion.TrySetResult(RemoteEvaluationOutcome.Superseded);
+
+                    return RemoteEvaluationOutcome.Superseded;
+                }
+
                 completion.TrySetException(ex);
 
                 throw;
@@ -926,7 +960,13 @@ namespace GrowthBook
 
             if (token.CanBeCanceled)
             {
-                await Task.WhenAny(newest, Task.Delay(Timeout.Infinite, token)).ConfigureAwait(false);
+                var cancelled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+                using (token.Register(() => cancelled.TrySetResult(true)))
+                {
+                    await Task.WhenAny(newest, cancelled.Task).ConfigureAwait(false);
+                }
+
                 token.ThrowIfCancellationRequested();
             }
 
@@ -936,9 +976,8 @@ namespace GrowthBook
         /// <summary>
         /// Creates a context object with current state for remote evaluation.
         /// </summary>
-        /// <param name="attributes">The attributes to evaluate for; the current ones when not given.</param>
         /// <returns>A context object with current state</returns>
-        private Context CreateCurrentContext(JObject attributes = null)
+        private Context CreateCurrentContext()
         {
             return new Context
             {
@@ -946,7 +985,7 @@ namespace GrowthBook
                 ApiHost = _context.ApiHost,
                 ClientKey = _context.ClientKey,
                 CacheKeyAttributes = _context.CacheKeyAttributes,
-                Attributes = attributes ?? Attributes,
+                Attributes = Attributes,
                 ForcedVariations = ForcedVariations,
                 Url = Url
             };
