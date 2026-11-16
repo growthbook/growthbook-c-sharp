@@ -76,6 +76,23 @@ public class RedisStickyBucketServiceTests
     }
 
     /// <summary>
+    /// The prefix is taken as given, so a Redis Cluster hash tag in it reaches every key and keeps a user's keys in one
+    /// slot for the multi-key read.
+    /// </summary>
+    [Fact]
+    public void AHashTagInThePrefixReachesEveryKey()
+    {
+        var redis = new FakeRedis();
+        var service = new RedisStickyBucketService(redis, "{gb_sticky}:");
+
+        service.SaveAssignments(Document("user-1", "0"));
+        service.SaveAssignments(new StickyAssignmentsDocument("deviceId", "device-9", new Dictionary<string, string> { ["exp__0"] = "1" }));
+
+        redis.Values.Keys.Should().BeEquivalentTo("{gb_sticky}:id||user-1", "{gb_sticky}:deviceId||device-9");
+        service.GetAllAssignments(new[] { "id||user-1", "deviceId||device-9" }).Should().HaveCount(2);
+    }
+
+    /// <summary>
     /// A value the service cannot use is skipped rather than failing the read, and so is a document naming another
     /// identifier than its key: published, it would hand one user another user's variation.
     /// </summary>

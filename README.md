@@ -260,7 +260,20 @@ context.StickyBucketService = new RedisStickyBucketService(
     prefix: "gb_sticky_");
 ```
 
-Each user identifier is one key, `{prefix}{attributeName}||{attributeValue}`. A document that cannot be read, or that names another identifier than its key, is skipped; a client that fails throws.
+Each user identifier is one key, `<prefix><attributeName>||<attributeValue>`. A document that cannot be read, or that names another identifier than its key, is skipped; a client that fails throws.
+
+**Redis Cluster.** All of a user's identifiers are read with one `MGET`, and Redis Cluster rejects a multi-key command whose keys are in different hash slots. A user with more than one identifier, such as `id` and `deviceId`, then gets an error instead of their assignments. Either put a hash tag in the prefix, so every key is hashed on it and lands in one slot:
+
+```csharp
+prefix: "{gb_sticky}:"
+```
+
+This keeps all sticky bucket keys on one node. If that is too much for one node, read the keys one at a time in the adapter instead, at the cost of a round trip per identifier:
+
+```csharp
+public string[] MultiGet(string[] keys) =>
+    keys.Select(key => (string)_database.StringGet(key)).ToArray();
+```
 
 ---
 

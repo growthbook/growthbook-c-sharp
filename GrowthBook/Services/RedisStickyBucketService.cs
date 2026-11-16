@@ -9,7 +9,7 @@ namespace GrowthBook.Services
 {
     /// <summary>
     /// Keeps sticky bucket assignments in Redis, as <c>RedisStickyBucketService</c> in the JavaScript SDK: one key per
-    /// user identifier, <c>{prefix}{attributeName}||{attributeValue}</c>, holding the document as
+    /// user identifier, <c>&lt;prefix&gt;&lt;attributeName&gt;||&lt;attributeValue&gt;</c>, holding the document as
     /// <c>{"attributeName", "attributeValue", "assignments"}</c>. The format is the same, so services written in either
     /// SDK can share one Redis.
     /// </summary>
@@ -23,7 +23,10 @@ namespace GrowthBook.Services
         private readonly string _prefix;
 
         /// <param name="client">The Redis client to read and write through.</param>
-        /// <param name="prefix">Prepended to every key, to keep these apart from the application's own.</param>
+        /// <param name="prefix">
+        /// Prepended to every key, to keep these apart from the application's own. On Redis Cluster, a hash tag such as
+        /// <c>{gb_sticky}:</c> keeps a user's keys in one slot, which the multi-key read needs.
+        /// </param>
         public RedisStickyBucketService(IRedisCompatibleClient client, string prefix = "")
         {
             _client = client ?? throw new ArgumentNullException(nameof(client));
