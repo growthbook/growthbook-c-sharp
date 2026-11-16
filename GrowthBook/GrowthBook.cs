@@ -29,6 +29,8 @@ namespace GrowthBook
         private readonly bool _qaMode;
         private readonly Dictionary<string, ExperimentAssignment> _assigned;
         private readonly ConcurrentDictionary<string, byte> _tracked;
+        private readonly ConcurrentDictionary<string, string> _trackedFeatureUsage = new ConcurrentDictionary<string, string>();
+        private volatile Action<string, FeatureResult> _featureUsageCallback;
         private Action<Experiment, ExperimentResult> _trackingCallback;
         private bool _disposedValue;
         private readonly IConditionEvaluationProvider _conditionEvaluator;
@@ -73,6 +75,7 @@ namespace GrowthBook
 
             _qaMode = context.QaMode;
             _trackingCallback = context.TrackingCallback;
+            _featureUsageCallback = context.OnFeatureUsage;
             _assigned = new Dictionary<string, ExperimentAssignment>();
             _tracked = new ConcurrentDictionary<string, byte>();
             _stickyBucketService = context.StickyBucketService;
@@ -199,6 +202,16 @@ namespace GrowthBook
         public IDictionary<string, int> ForcedVariations { get; set; }
 
         /// <summary>
+        /// Replaces the callback told a feature's value when it is first seen or changes, as <c>setFeatureUsageCallback</c>
+        /// in the JavaScript SDK. Null stops reporting. Values already reported stay recorded, so the new callback hears
+        /// about a feature once its value changes.
+        /// </summary>
+        public void SetFeatureUsageCallback(Action<string, FeatureResult> callback)
+        {
+            _featureUsageCallback = callback;
+        }
+
+        /// <summary>
         /// The URL of the current page.
         /// </summary>
         public string Url { get; set; }
@@ -222,6 +235,8 @@ namespace GrowthBook
                     Features.Clear();
                     ForcedVariations = null;
                     _trackingCallback = null;
+                    _featureUsageCallback = null;
+                    _trackedFeatureUsage.Clear();
                     _assigned.Clear();
                     _tracked.Clear();
                     _subscribers.Clear();
@@ -715,7 +730,9 @@ namespace GrowthBook
             {
                 Attributes = Attributes,
                 StickyBucketAssignmentDocs = _stickyBucketAssignmentDocs,
-                Url = Url
+                Url = Url,
+                OnFeatureUsage = _featureUsageCallback,
+                TrackedFeatureUsage = _trackedFeatureUsage
             };
 
             return new EvaluationContext(global, user);

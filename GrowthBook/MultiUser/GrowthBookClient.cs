@@ -159,6 +159,12 @@ namespace GrowthBook.MultiUser
         public void SetTrackingCallback(Action<Experiment, ExperimentResult> callback)
             => _options.TrackingCallback = callback;
 
+        /// <summary>
+        /// Replaces the callback told a feature's value, with the user it was evaluated for, when it is first seen or changes.
+        /// </summary>
+        public void SetFeatureUsageCallback(Action<string, FeatureResult, UserContext> callback)
+            => _options.OnFeatureUsage = callback;
+
         /// <summary>Returns the current global attributes, or null if none are set.</summary>
         public JObject GetGlobalAttributes()
             => _options.GlobalAttributes;
@@ -283,6 +289,7 @@ namespace GrowthBook.MultiUser
                 Enabled = _options.Enabled,
                 QaMode = _options.QaMode,
                 TrackingCallback = _options.TrackingCallback,
+                OnFeatureUsage = _options.OnFeatureUsage,
                 StickyBucketService = stickyBucketService,
                 ForcedVariations = _options.GlobalForcedVariations,
                 Attributes = _options.GlobalAttributes,
@@ -295,6 +302,8 @@ namespace GrowthBook.MultiUser
                 AttributeOverrides = userContext?.AttributeOverrides,
                 ForcedVariations = userContext?.ForcedVariations,
                 TrackingCallback = userContext?.TrackingCallback,
+                OnFeatureUsage = userContext?.OnFeatureUsage,
+                TrackedFeatureUsage = userContext?.TrackedFeatureUsage ?? new Dictionary<string, string>(),
                 StickyBucketService = stickyBucketService,
                 Url = userContext?.Url,
                 StickyBucketAssignmentDocs = stickyBucketDocs ?? new Dictionary<string, StickyAssignmentsDocument>(),

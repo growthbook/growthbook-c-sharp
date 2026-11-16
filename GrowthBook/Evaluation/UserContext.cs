@@ -35,6 +35,19 @@ namespace GrowthBook.Evaluation
         public Action<Experiment, ExperimentResult> TrackingCallback { get; set; }
 
         /// <summary>
+        /// Per-request feature usage callback, told a feature's value when it is first seen or changes. Runs in addition
+        /// to <see cref="Options.OnFeatureUsage"/>.
+        /// </summary>
+        public Action<string, FeatureResult> OnFeatureUsage { get; set; }
+
+        /// <summary>
+        /// The value last reported to the feature usage callbacks for each feature, so an unchanged value is not reported
+        /// again. Left null, <see cref="MultiUser.GrowthBookClient"/> deduplicates within a single call only. Supply a
+        /// dictionary - and keep it for as long as the request lives - to deduplicate across every evaluation it makes.
+        /// </summary>
+        public IDictionary<string, string> TrackedFeatureUsage { get; set; }
+
+        /// <summary>
         /// Sticky bucket service for this call. <see cref="MultiUser.GrowthBookClient"/> uses it instead of
         /// <see cref="Options.StickyBucketService"/> when set.
         /// </summary>
