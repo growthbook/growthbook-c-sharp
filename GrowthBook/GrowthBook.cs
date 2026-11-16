@@ -152,21 +152,24 @@ namespace GrowthBook
 
         /// <summary>
         /// Loads the user's sticky assignments from the service, as <c>refreshStickyBuckets</c> does in the JavaScript
-        /// SDK: when the instance is built, when features are loaded, and when the attributes change.
+        /// SDK: when the instance is built, when features are loaded, and when the attributes change. <see cref="Run"/>
+        /// loads them for the experiment it is given.
         /// </summary>
         /// <remarks>
         /// Merged into the documents held rather than replacing them: those handed over on the context may not be in
         /// the service, and an assignment saved while the service was being read is not in its answer. What is held
         /// takes precedence, as when an assignment is saved. A service that cannot be read leaves them as they are.
         /// </remarks>
-        private void RefreshStickyBuckets()
+        private void RefreshStickyBuckets() => RefreshStickyBuckets(Features, Experiments);
+
+        private void RefreshStickyBuckets(IDictionary<string, Feature> features, IList<Experiment> experiments)
         {
             if (_stickyBucketService is null)
             {
                 return;
             }
 
-            var identifiers = ExperimentUtilities.DeriveIdentifierAttributes(Features, Experiments, Attributes ?? new JObject()).ToList();
+            var identifiers = ExperimentUtilities.DeriveIdentifierAttributes(features, experiments, Attributes ?? new JObject()).ToList();
 
             if (identifiers.Count == 0)
             {
@@ -647,6 +650,11 @@ namespace GrowthBook
         {
             try
             {
+                if (experiment != null && !experiment.DisableStickyBucketing)
+                {
+                    RefreshStickyBuckets(null, new[] { experiment });
+                }
+
                 ExperimentResult result = _experimentEvaluator.RunExperiment(experiment, null, BuildEvaluationContext());
 
                 TryAssignExperimentResult(experiment, result);

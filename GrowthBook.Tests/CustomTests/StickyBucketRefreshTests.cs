@@ -23,20 +23,22 @@ public class StickyBucketRefreshTests
     /// <summary>Hashing picks the first variation whose weight is 1, so any other answer came from a saved assignment.</summary>
     private static Dictionary<string, Feature> Features(double firstWeight, double secondWeight) => new Dictionary<string, Feature>
     {
-        ["feature"] = new Feature
+        ["feature"] = ExperimentFeature("exp", firstWeight, secondWeight)
+    };
+
+    private static Feature ExperimentFeature(string experimentKey, double firstWeight, double secondWeight) => new Feature
+    {
+        DefaultValue = JToken.FromObject(-1),
+        Rules = new List<FeatureRule>
         {
-            DefaultValue = JToken.FromObject(-1),
-            Rules = new List<FeatureRule>
+            new FeatureRule
             {
-                new FeatureRule
-                {
-                    Key = "exp",
-                    Variations = new JArray(0, 1),
-                    Weights = new List<double> { firstWeight, secondWeight },
-                    Coverage = 1,
-                    HashAttribute = "id",
-                    Meta = new List<VariationMeta> { new VariationMeta { Key = "0" }, new VariationMeta { Key = "1" } }
-                }
+                Key = experimentKey,
+                Variations = new JArray(0, 1),
+                Weights = new List<double> { firstWeight, secondWeight },
+                Coverage = 1,
+                HashAttribute = "id",
+                Meta = new List<VariationMeta> { new VariationMeta { Key = "0" }, new VariationMeta { Key = "1" } }
             }
         }
     };
@@ -143,10 +145,41 @@ public class StickyBucketRefreshTests
         service.SaveAssignments(new StickyAssignmentsDocument("id", "user-1", new Dictionary<string, string> { ["other__0"] = "1" }));
 
         var documents = new Dictionary<string, StickyAssignmentsDocument> { ["id||user-1"] = Stored("user-1", "0") };
+        var features = Features(0, 1);
+        features["other-feature"] = ExperimentFeature("other", 1, 0);
 
-        using var gb = Create(service, "user-1", Features(0, 1), documents);
+        using var gb = Create(service, "user-1", features, documents);
 
+        // The stored experiment first: saving the held one reads the service again, which would load it anyway.
+        gb.GetFeatureValue("other-feature", -1).Should().Be(1, "the stored assignment is loaded alongside the held one, though hashing would pick 0");
         gb.GetFeatureValue("feature", -1).Should().Be(0, "the held assignment survives loading the stored document");
+    }
+
+    /// <summary>
+    /// An experiment passed to <c>Run</c> directly is in neither the features nor the experiments, so nothing else names
+    /// its identifier. It used to be hashed again, and the new choice saved over the stored one.
+    /// </summary>
+    [Fact]
+    public void AnExperimentRunDirectlyFindsItsStoredAssignment()
+    {
+        var service = new InMemoryStickyBucketService();
+        service.SaveAssignments(new StickyAssignmentsDocument("id", "user-1", new Dictionary<string, string> { ["direct__0"] = "0" }));
+
+        using var gb = Create(service, "user-1", new Dictionary<string, Feature>());
+
+        var result = gb.Run(new Experiment
+        {
+            Key = "direct",
+            Variations = new JArray(0, 1),
+            Weights = new List<double> { 0, 1 },
+            Coverage = 1,
+            HashAttribute = "id",
+            Meta = new List<VariationMeta> { new VariationMeta { Key = "0" }, new VariationMeta { Key = "1" } }
+        });
+
+        result.Value.Value<int>().Should().Be(0, "the user was assigned 0 before, though hashing now picks 1");
+        result.StickyBucketUsed.Should().BeTrue();
+        service.GetAssignments("id", "user-1").Assignments["direct__0"].Should().Be("0", "the stored choice is not overwritten");
     }
 
     /// <summary>
