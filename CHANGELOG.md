@@ -10,8 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [2.1.0] - 2026-11-17
 
 - Added `GrowthBookClient`, which loads features once and evaluates for a `UserContext` passed to each call, so one
-  instance serves many users. `UserContext` is now public, and `GrowthBookConfigurationOptions` has an
-  `OnFeaturesRefreshed` callback that runs after a background refresh.
+  instance serves many users. `UserContext` is now public.
 - Added `AddGrowthBookClient` to register `GrowthBookClient` as a singleton with dependency injection. It loads features
   before the first use. The package now depends on `Microsoft.Extensions.DependencyInjection.Abstractions`.
 - `GrowthBookFactory` is obsolete. Use `GrowthBookClient` instead.
@@ -20,8 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `BucketRange`, `Namespace`, `Experiment`, `ExperimentResult` and `FeatureResult` no longer throw from `GetHashCode`,
   so they work in a `HashSet`, as dictionary keys and with `Distinct`. `Equals(null)` returns `false` instead of
   throwing.
-- A streaming (SSE) connection that the server closes cleanly now waits before reconnecting, with the same backoff and
-  attempt limit as a failed connection. Before, it reconnected immediately in a loop.
+- A streaming (SSE) connection that the server closes cleanly now waits before reconnecting, with the same backoff as
+  a failed connection. Before, it reconnected immediately in a loop.
 - Concurrent evaluations sharing an `InMemoryStickyBucketService` no longer miss saved assignments, and the background
   refresh no longer races `Dispose` over the streaming connection.
 - The feature repository takes the cache lock once per call instead of twice.
