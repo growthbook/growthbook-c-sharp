@@ -413,6 +413,29 @@ namespace GrowthBook.Tests.CustomTests
             SentEvents(handler).Should().Be(2, "user-a and user-b once each, and user-a's second exposure is a repeat");
         }
 
+        /// <summary>
+        /// A forced rule's <c>tracks</c> can carry a result with a variation index and no key. It was sent with a null
+        /// variation, and two different variations of one experiment were taken for each other's repeats.
+        /// </summary>
+        [Fact]
+        public void AResultWithoutAKeyIsSentWithItsVariationIndex()
+        {
+            var handler = new CapturingHandler();
+            var plugin = NewPlugin(handler);
+
+            plugin.OnExperimentViewed(MakeExperiment("exp-1"), new ExperimentResult { VariationId = 1, HashAttribute = "id", HashValue = "user-1" }, null);
+            plugin.OnExperimentViewed(MakeExperiment("exp-1"), new ExperimentResult { VariationId = 2, HashAttribute = "id", HashValue = "user-1" }, null);
+            plugin.OnFeatureEvaluated("flag", new FeatureResult { Value = new JValue(true), Source = FeatureResult.SourceId.Force, ExperimentResult = new ExperimentResult { VariationId = 3 } }, null);
+
+            plugin.Close();
+
+            List<JArray> posts;
+            lock (handler.Posts) posts = handler.Posts.ToList();
+            var variations = posts.SelectMany(p => p).Select(e => e["properties_json"]?["variationId"]?.Value<string>()).ToList();
+
+            variations.Should().BeEquivalentTo(new[] { "1", "2", "3" }, "each result is sent with its variation, and the two exposures are not taken for repeats");
+        }
+
         [Fact]
         public void AFeatureEventCarriesTheVariationOfTheExperimentThatDecidedIt()
         {

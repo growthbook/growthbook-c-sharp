@@ -105,7 +105,7 @@ namespace GrowthBook.Plugin
             return Create(EventExperimentViewed, new JObject
             {
                 ["experimentId"] = experiment?.Key,
-                ["variationId"] = result?.Key,
+                ["variationId"] = result == null ? null : VariationKey(result),
                 ["hashAttribute"] = result?.HashAttribute,
                 ["hashValue"] = result?.HashValue
             }, attributes);
@@ -124,7 +124,7 @@ namespace GrowthBook.Plugin
                 ["feature"] = featureKey,
                 ["source"] = result?.Source,
                 ["value"] = result?.Value,
-                ["variationId"] = result?.ExperimentResult?.Key ?? string.Empty
+                ["variationId"] = result?.ExperimentResult == null ? string.Empty : VariationKey(result.ExperimentResult)
             }, attributes);
         }
 
@@ -157,6 +157,13 @@ namespace GrowthBook.Plugin
                 Context = context
             };
         }
+
+        /// <summary>
+        /// The variation's key, or its index when the result carries none, as a forced rule's <c>tracks</c> may: the
+        /// same key the evaluator gives a variation without one.
+        /// </summary>
+        private static string VariationKey(ExperimentResult result) =>
+            string.IsNullOrEmpty(result.Key) ? result.VariationId.ToString() : result.Key;
 
         /// <summary>The value if it is a string, as <c>parseString</c> in the JavaScript SDK; null otherwise.</summary>
         private static string AsString(JToken token) => token?.Type == JTokenType.String ? token.Value<string>() : null;
