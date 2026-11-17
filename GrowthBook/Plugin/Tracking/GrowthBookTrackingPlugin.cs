@@ -287,10 +287,10 @@ namespace GrowthBook.Plugin
         /// again the moment anything unrelated about that user changed.
         /// <para>
         /// A plugin shared by instances for different users - <see cref="GrowthBookFactory"/> builds one
-        /// per user from the same context - takes every attribute into account instead, as the
-        /// JavaScript SDK does on a multi-user client. Otherwise the second user to see a value would be
-        /// taken for a repeat of the first. That covers experiment events too, because their properties
-        /// here do not carry the unit's hash value.
+        /// per user from the same context - takes every attribute into account for feature events instead,
+        /// as the JavaScript SDK does on a multi-user client. Otherwise the second user to see a value would
+        /// be taken for a repeat of the first. Experiment events need no help: their properties carry the
+        /// hash value the user was assigned by.
         /// </para>
         /// </remarks>
         private string BuildDedupeKey(TrackingEvent trackingEvent)
@@ -303,7 +303,7 @@ namespace GrowthBook.Plugin
 
             var identity = _config.DedupeKeyAttributes?.Count > 0
                 ? _config.DedupeKeyAttributes
-                : _sharedAcrossUsers && trackingEvent.Attributes != null
+                : _sharedAcrossUsers && trackingEvent.EventName == TrackingEvent.EventFeatureEvaluated && trackingEvent.Attributes != null
                     ? trackingEvent.Attributes.Properties().Select(property => property.Name).ToList()
                     : (IList<string>)Array.Empty<string>();
 
@@ -383,7 +383,8 @@ namespace GrowthBook.Plugin
             {
                 request.Headers.TryAddWithoutValidation("User-Agent", SdkMetadata.UserAgent);
 
-                using (var response = await _httpClient.SendAsync(request).ConfigureAwait(false))
+                using (var timeout = new CancellationTokenSource(_config.ResolvedRequestTimeout()))
+                using (var response = await _httpClient.SendAsync(request, timeout.Token).ConfigureAwait(false))
                 {
                     if (!response.IsSuccessStatusCode)
                     {

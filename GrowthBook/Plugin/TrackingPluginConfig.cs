@@ -29,6 +29,9 @@ namespace GrowthBook.Plugin
         /// <summary>Default time <see cref="GrowthBookTrackingPlugin.Close"/> waits for sends in flight.</summary>
         public static readonly TimeSpan DefaultCloseTimeout = TimeSpan.FromSeconds(5);
 
+        /// <summary>Default for <see cref="RequestTimeout"/>.</summary>
+        public static readonly TimeSpan DefaultRequestTimeout = TimeSpan.FromSeconds(10);
+
         /// <summary>Default number of recently sent events remembered for deduplication.</summary>
         public const int DefaultDedupeCacheSize = 1000;
 
@@ -73,6 +76,13 @@ namespace GrowthBook.Plugin
         public TimeSpan? CloseTimeout { get; set; }
 
         /// <summary>
+        /// How long one batch may take to send before it is given up as failed. Batches are sent one at a time, so
+        /// without a limit one unanswered request would hold every batch behind it. Applies to a supplied
+        /// <see cref="HttpClient"/> as well. Defaults to <see cref="DefaultRequestTimeout"/>.
+        /// </summary>
+        public TimeSpan? RequestTimeout { get; set; }
+
+        /// <summary>
         /// How many recently sent events are remembered so that repeats are not sent again.
         /// Defaults to <see cref="DefaultDedupeCacheSize"/>.
         /// </summary>
@@ -87,10 +97,11 @@ namespace GrowthBook.Plugin
         /// Attributes that make two otherwise identical events distinct.
         /// </summary>
         /// <remarks>
-        /// Empty by default, because an instance already belongs to one user. Name attributes here
-        /// when one instance serves more than one identity and the same evaluation for two of them
-        /// has to be reported twice. A plugin shared by several instances, as <see cref="GrowthBookFactory"/>
-        /// shares it between users, already takes every attribute into account when none are named.
+        /// Empty by default, because an instance already belongs to one user and an experiment event already
+        /// carries the hash value it was assigned by. Name attributes here when one instance serves more than one
+        /// identity and the same feature evaluation for two of them has to be reported twice. A plugin shared by
+        /// several instances, as <see cref="GrowthBookFactory"/> shares it between users, already takes every
+        /// attribute into account for feature events when none are named, as the JavaScript SDK does.
         /// </remarks>
         public IList<string> DedupeKeyAttributes { get; set; }
 
@@ -125,6 +136,12 @@ namespace GrowthBook.Plugin
             DedupeCacheSize == null || DedupeCacheSize <= 0
                 ? DefaultDedupeCacheSize
                 : DedupeCacheSize.Value;
+
+        /// <summary>Returns the effective request timeout, falling back to <see cref="DefaultRequestTimeout"/>.</summary>
+        public TimeSpan ResolvedRequestTimeout() =>
+            RequestTimeout == null || RequestTimeout <= TimeSpan.Zero
+                ? DefaultRequestTimeout
+                : RequestTimeout.Value;
 
         /// <summary>Returns the effective close timeout, falling back to <see cref="DefaultCloseTimeout"/>.</summary>
         public TimeSpan ResolvedCloseTimeout() =>

@@ -311,15 +311,20 @@ Leaving `ClientKey` null or empty disables it: no HTTP calls are made at all.
 
 This plugin sends data out of your process. Read this before enabling it.
 
-Each event is posted to `{IngestorHost}/track?client_key={ClientKey}` as JSON:
+Each event is posted to `{IngestorHost}/track?client_key={ClientKey}` as JSON, in the shape the
+JavaScript SDK's tracking plugin sends:
 
 | Field | Contents |
 |---|---|
 | `event_name` | `"Experiment Viewed"` or `"Feature Evaluated"` |
-| `properties` | for an experiment, its key and the assigned variation id; for a feature, its key, the resolved value and the source |
-| `attributes` | **the user attributes you set on `Context.Attributes`**, plus `sdk_language` and `sdk_version` |
+| `properties_json` | for an experiment, its key, the assigned variation's key, and the hash attribute and value it was assigned by; for a feature, its key, the source, the resolved value and the variation of the experiment that decided it, if any |
+| `user_id`, `session_id`, `page_id` | **the `user_id`, `session_id` and `page_id` attributes**, or null |
+| `device_id` | **the `device_id` attribute, or else `anonymous_id`, or else `id`**, or null |
+| `utm_source`, `utm_medium`, `utm_campaign`, `utm_term`, `utm_content`, `page_title` | the `utmSource`, `utmMedium`, `utmCampaign`, `utmTerm`, `utmContent` and `pageTitle` attributes, when set |
+| `context_json` | **every other attribute you set on `Context.Attributes`** |
+| `sdk_language`, `sdk_version`, `url` | the SDK's language and package version; `url` is empty |
 
-The attributes field is the one to think about. Whatever your application put in
+The attribute fields are the ones to think about. Whatever your application put in
 `Context.Attributes` - an account id, an email address, a country, a plan - is sent to the ingestor
 with every event. If any of it identifies a person, enabling this plugin is a transfer of personal
 data to a third party, and whether that is lawful where you operate is a question for whoever owns
@@ -351,21 +356,24 @@ new TrackingPluginConfig
 | `DedupeKeyAttributes` | none | Attributes that make two otherwise identical events distinct. |
 | `MaxPendingBatches` | 10 | Batches allowed to queue before further ones are dropped with a warning. |
 | `CloseTimeout` | 5s | How long `Close` waits for sends already under way. |
+| `RequestTimeout` | 10s | How long one batch may take to send before it is given up as failed, for your own `HttpClient` too. |
 | `HttpClient` | - | Your own client. When not supplied the plugin creates and owns one. |
 
 Repeats are not sent twice. A feature is evaluated wherever it is checked, so in a hot path the same
 fact would otherwise reach the ingestor on every request. Events are identified by name and
-properties; attributes are deliberately left out of that identity, because one instance belongs to
-one user. If a single instance serves more than one identity, name the attributes that separate them
-in `DedupeKeyAttributes`. A plugin shared between instances - `GrowthBookFactory` shares it between
-users - takes every attribute into account when none are named, so one user's events are not taken
-for another's repeats.
+properties. An experiment event's properties carry the hash value the user was assigned by, so two
+users are never taken for each other. Attributes are left out of a feature event's identity, because
+one instance belongs to one user. If a single instance serves more than one identity, name the
+attributes that separate them in `DedupeKeyAttributes`. A plugin shared between instances -
+`GrowthBookFactory` shares it between users - takes every attribute into account for feature events
+when none are named, as the JavaScript SDK does on a multi-user client.
 
 A batch dropped because the queue is full is forgotten by that cache as well, so the events in it are
 sent the next time they happen rather than treated as repeats of something that never left.
 
 Batches are sent one at a time, so a slow ingestor costs one request in flight rather than a thread
-per batch. Once `MaxPendingBatches` are waiting, further batches are dropped and a warning logged
+per batch. A send that takes longer than `RequestTimeout` is given up and its events forgotten, like a
+failed one, so an ingestor that never answers cannot hold the queue. Once `MaxPendingBatches` are waiting, further batches are dropped and a warning logged
 rather than queued without limit.
 
 Disposing the GrowthBook instance closes the plugin, which flushes what is buffered and waits for

@@ -94,7 +94,7 @@ namespace GrowthBook.Tests.CustomTests
             events.Count.Should().Be(2);
 
             var experimentIds = events
-                .Select(e => e["properties"]?["experimentId"]?.Value<string>())
+                .Select(e => e["properties_json"]?["experimentId"]?.Value<string>())
                 .ToList();
             experimentIds.Should().Contain("exp1");
             experimentIds.Should().Contain("exp2");
@@ -121,7 +121,7 @@ namespace GrowthBook.Tests.CustomTests
             events.Should().NotBeNull("timer-based flush should fire within 5s");
             events.Count.Should().Be(1);
             events[0]["event_name"]?.Value<string>().Should().Be(TrackingEvent.EventFeatureEvaluated);
-            events[0]["properties"]?["feature"]?.Value<string>().Should().Be("flag1");
+            events[0]["properties_json"]?["feature"]?.Value<string>().Should().Be("flag1");
 
             plugin.Close();
         }
@@ -277,10 +277,12 @@ namespace GrowthBook.Tests.CustomTests
             var events = handler.WaitForPost();
             events.Should().NotBeNull();
 
-            var eventAttrs = events[0]["attributes"] as JObject;
-            eventAttrs.Should().NotBeNull("attributes should be present in event");
-            eventAttrs["id"]?.Value<string>().Should().Be("u1");
-            eventAttrs["plan"]?.Value<string>().Should().Be("pro");
+            events[0]["device_id"]?.Value<string>().Should().Be("u1", "id identifies the device when nothing more specific is given");
+
+            var context = events[0]["context_json"] as JObject;
+            context.Should().NotBeNull("the other attributes are sent as the event's context");
+            context["plan"]?.Value<string>().Should().Be("pro");
+            context.Should().NotContainKey("id", "it was lifted to device_id");
 
             plugin.Close();
         }
@@ -301,12 +303,173 @@ namespace GrowthBook.Tests.CustomTests
             var events = handler.WaitForPost();
             events.Should().NotBeNull();
 
-            var attrs = events[0]["attributes"] as JObject;
-            attrs.Should().NotBeNull();
-            attrs["sdk_language"]?.Value<string>().Should().Be(SdkMetadata.Language);
-            attrs["sdk_version"]?.Value<string>().Should().Be(SdkMetadata.Version);
+            events[0]["sdk_language"]?.Value<string>().Should().Be(SdkMetadata.Language);
+            events[0]["sdk_version"]?.Value<string>().Should().Be(SdkMetadata.Version);
 
             plugin.Close();
+        }
+
+        /// <summary>
+        /// The ingestor reads the shape the JavaScript SDK's plugin sends (<c>getEventPayload</c>). Properties went out as
+        /// <c>properties</c> and every attribute as <c>attributes</c>, so it found no properties and no user or device.
+        /// </summary>
+        [Fact]
+        public void AnEventHasTheShapeTheIngestorReads()
+        {
+            var handler = new CapturingHandler();
+            var plugin = NewPlugin(handler, c => c.BatchSize = 1);
+
+            plugin.OnFeatureEvaluated("flag", MakeFeatureResult(), new JObject
+            {
+                ["user_id"] = "user-1",
+                ["anonymous_id"] = "anon-1",
+                ["id"] = "id-1",
+                ["page_id"] = "page-1",
+                ["session_id"] = "session-1",
+                ["utmSource"] = "newsletter",
+                ["utmCampaign"] = "",
+                ["pageTitle"] = "Checkout",
+                ["plan"] = "pro"
+            });
+
+            var sent = (JObject)handler.WaitForPost()[0];
+            plugin.Close();
+
+            sent.Properties().Select(p => p.Name).Should().BeEquivalentTo(
+                "event_name", "properties_json", "user_id", "device_id", "page_id", "session_id",
+                "utm_source", "page_title", "sdk_language", "sdk_version", "url", "context_json");
+
+            sent["event_name"].Value<string>().Should().Be(TrackingEvent.EventFeatureEvaluated);
+            sent["properties_json"]["feature"].Value<string>().Should().Be("flag");
+            sent["user_id"].Value<string>().Should().Be("user-1");
+            sent["device_id"].Value<string>().Should().Be("anon-1", "anonymous_id comes before id, as in the JavaScript SDK");
+            sent["page_id"].Value<string>().Should().Be("page-1");
+            sent["session_id"].Value<string>().Should().Be("session-1");
+            sent["utm_source"].Value<string>().Should().Be("newsletter");
+            sent["page_title"].Value<string>().Should().Be("Checkout");
+            sent["sdk_language"].Value<string>().Should().Be(SdkMetadata.Language);
+            sent["url"].Value<string>().Should().BeEmpty();
+            sent["context_json"].ToString(Newtonsoft.Json.Formatting.None).Should().Be(@"{""plan"":""pro""}",
+                "the identifying attributes were lifted out, and an empty UTM field is left out rather than sent");
+        }
+
+        /// <summary>
+        /// The identifying fields take strings only, and a missing one is sent as null, as in the JavaScript SDK.
+        /// </summary>
+        [Theory]
+        [InlineData(@"{""device_id"":""d"",""anonymous_id"":""a"",""id"":""i""}", "d")]
+        [InlineData(@"{""anonymous_id"":""a"",""id"":""i""}", "a")]
+        [InlineData(@"{""device_id"":"""",""id"":""i""}", "i")]
+        [InlineData(@"{""id"":42}", null)]
+        [InlineData(@"{}", null)]
+        public void TheDeviceIdFallsBackAsInTheJavaScriptSdk(string attributes, string expected)
+        {
+            var handler = new CapturingHandler();
+            var plugin = NewPlugin(handler, c => c.BatchSize = 1);
+
+            plugin.OnFeatureEvaluated("flag", MakeFeatureResult(), JObject.Parse(attributes));
+
+            var sent = (JObject)handler.WaitForPost()[0];
+            plugin.Close();
+
+            sent.Should().ContainKey("device_id");
+            sent["device_id"].Type.Should().Be(expected == null ? JTokenType.Null : JTokenType.String);
+            sent["device_id"].Value<string>().Should().Be(expected);
+            sent["user_id"].Type.Should().Be(JTokenType.Null);
+        }
+
+        [Fact]
+        public void AnExperimentEventCarriesTheVariationKeyAndTheHash()
+        {
+            var handler = new CapturingHandler();
+            var plugin = NewPlugin(handler, c => c.BatchSize = 1);
+
+            plugin.OnExperimentViewed(MakeExperiment("exp-1"),
+                new ExperimentResult { VariationId = 1, Key = "treatment", HashAttribute = "id", HashValue = "user-1" }, null);
+
+            var properties = handler.WaitForPost()[0]["properties_json"];
+            plugin.Close();
+
+            properties.ToString(Newtonsoft.Json.Formatting.None).Should().Be(
+                @"{""experimentId"":""exp-1"",""variationId"":""treatment"",""hashAttribute"":""id"",""hashValue"":""user-1""}");
+        }
+
+        /// <summary>
+        /// Two users in the same variation are two exposures. Without the hash value in the event, a plugin not shared
+        /// through a factory took the second for a repeat of the first and never sent it.
+        /// </summary>
+        [Fact]
+        public void TwoUsersInTheSameVariationAreBothSent()
+        {
+            var handler = new CapturingHandler();
+            var plugin = NewPlugin(handler);
+
+            plugin.OnExperimentViewed(MakeExperiment("exp-1"), new ExperimentResult { VariationId = 1, Key = "1", HashAttribute = "id", HashValue = "user-a" }, new JObject { ["id"] = "user-a" });
+            plugin.OnExperimentViewed(MakeExperiment("exp-1"), new ExperimentResult { VariationId = 1, Key = "1", HashAttribute = "id", HashValue = "user-b" }, new JObject { ["id"] = "user-b" });
+            plugin.OnExperimentViewed(MakeExperiment("exp-1"), new ExperimentResult { VariationId = 1, Key = "1", HashAttribute = "id", HashValue = "user-a" }, new JObject { ["id"] = "user-a" });
+
+            plugin.Close();
+
+            SentEvents(handler).Should().Be(2, "user-a and user-b once each, and user-a's second exposure is a repeat");
+        }
+
+        [Fact]
+        public void AFeatureEventCarriesTheVariationOfTheExperimentThatDecidedIt()
+        {
+            var handler = new CapturingHandler();
+            var plugin = NewPlugin(handler, c => c.BatchSize = 1);
+
+            plugin.OnFeatureEvaluated("flag", new FeatureResult
+            {
+                Value = new JValue("blue"),
+                Source = FeatureResult.SourceId.Experiment,
+                ExperimentResult = new ExperimentResult { Key = "blue-variant" }
+            }, null);
+
+            var properties = handler.WaitForPost()[0]["properties_json"];
+            plugin.Close();
+
+            properties["variationId"].Value<string>().Should().Be("blue-variant");
+        }
+
+        /// <summary>
+        /// Batches are sent one at a time, so a request that never answered held every batch behind it. It is now given
+        /// up after the request timeout, and its events are sent again the next time they happen.
+        /// </summary>
+        [Fact]
+        public void ARequestThatNeverAnswersIsGivenUp()
+        {
+            var handler = new HangsFirstHandler();
+            var plugin = NewPlugin(handler, c =>
+            {
+                c.BatchSize = 1;
+                c.RequestTimeout = TimeSpan.FromMilliseconds(200);
+            });
+
+            plugin.OnFeatureEvaluated("hot", MakeFeatureResult(), null);
+
+            var sent = false;
+
+            for (var attempt = 0; attempt < 250 && !sent; attempt++)
+            {
+                plugin.OnFeatureEvaluated("hot", MakeFeatureResult(), null);
+
+                sent = SpinWait.SpinUntil(() => handler.Sent("hot"), TimeSpan.FromMilliseconds(20));
+            }
+
+            plugin.Close();
+
+            sent.Should().BeTrue("the hung request was given up, so the queue moved on and the event was sent again");
+        }
+
+        [Theory]
+        [InlineData("2.0.0+e7e90b06bae3b50e5e996a67a364e90d20704b1a", "2.0.0")]
+        [InlineData("2.1.0-beta.1+abc", "2.1.0-beta.1")]
+        [InlineData("2.0.0", "2.0.0")]
+        [InlineData(null, "unknown")]
+        public void TheReportedVersionLeavesOutTheCommit(string informationalVersion, string expected)
+        {
+            SdkMetadata.PackageVersion(informationalVersion).Should().Be(expected);
         }
 
         [Fact]
@@ -815,7 +978,7 @@ namespace GrowthBook.Tests.CustomTests
 
                 _gate.Wait(TimeSpan.FromSeconds(10));
 
-                lock (_features) _features.AddRange(events.Select(e => e["properties"]?["feature"]?.Value<string>()));
+                lock (_features) _features.AddRange(events.Select(e => e["properties_json"]?["feature"]?.Value<string>()));
 
                 return new HttpResponseMessage(HttpStatusCode.OK);
             }
@@ -853,7 +1016,36 @@ namespace GrowthBook.Tests.CustomTests
                     return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
                 }
 
-                lock (_features) _features.AddRange(events.Select(e => e["properties"]?["feature"]?.Value<string>()));
+                lock (_features) _features.AddRange(events.Select(e => e["properties_json"]?["feature"]?.Value<string>()));
+
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            }
+        }
+
+        /// <summary>
+        /// Holds the first send until it is cancelled, as an ingestor that accepts the connection and never answers
+        /// would, and records which features every later one carried.
+        /// </summary>
+        private sealed class HangsFirstHandler : HttpMessageHandler
+        {
+            private readonly List<string> _features = new List<string>();
+            private int _attempts;
+
+            public bool Sent(string feature)
+            {
+                lock (_features) return _features.Contains(feature);
+            }
+
+            protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                var events = JArray.Parse(await request.Content.ReadAsStringAsync());
+
+                if (Interlocked.Increment(ref _attempts) == 1)
+                {
+                    await Task.Delay(Timeout.Infinite, cancellationToken);
+                }
+
+                lock (_features) _features.AddRange(events.Select(e => e["properties_json"]?["feature"]?.Value<string>()));
 
                 return new HttpResponseMessage(HttpStatusCode.OK);
             }
