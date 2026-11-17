@@ -271,6 +271,58 @@ public class RemoteEvaluationOrderingTests
         Flag(gb).Should().Be("for-user-2");
     }
 
+    /// <summary>
+    /// Two updates at once, one to user-2 and one back to user-1. Deciding whether to evaluate, publishing the
+    /// attributes and starting the request were separate steps, so the second update could compare against attributes
+    /// the first had not recorded yet, decide nothing had changed, and leave the instance with user-1's attributes and
+    /// user-2's features. Holding the ordering lock while both updates queue up makes them interleave.
+    /// </summary>
+    [Fact]
+    public void UpdatesAtOnceEndWithFeaturesForTheAttributesThatWon()
+    {
+        var lockField = typeof(GrowthBookSdk.GrowthBook).GetField("_remoteEvaluationLock", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        lockField.Should().NotBeNull("the test holds the ordering lock to line the updates up");
+
+        for (var round = 0; round < 50; round++)
+        {
+            var controlled = new ControlledRepository();
+            using var gb = Create(controlled, "user-1");
+            var gate = lockField.GetValue(gb);
+
+            Task toUser2, backToUser1;
+
+            Monitor.Enter(gate);
+
+            try
+            {
+                toUser2 = Task.Run(() => gb.UpdateAttributes(new Dictionary<string, object> { ["id"] = "user-2" }));
+                backToUser1 = Task.Run(() => gb.UpdateAttributes(new Dictionary<string, object> { ["id"] = "user-1" }));
+                Thread.Sleep(20);
+            }
+            finally
+            {
+                Monitor.Exit(gate);
+            }
+
+            Task.WaitAll(new[] { toUser2, backToUser1 }, TimeSpan.FromSeconds(5)).Should().BeTrue();
+
+            for (var i = 0; i < controlled.Count; i++)
+            {
+                controlled.AnswerForItsUser(i);
+            }
+
+            var expected = "for-" + gb.Attributes["id"].Value<string>();
+            var installed = controlled.Count == 0 ? "none" : null;
+
+            SpinWait.SpinUntil(() => Flag(gb) == (installed ?? expected), TimeSpan.FromSeconds(2));
+
+            if (controlled.Count > 0)
+            {
+                Flag(gb).Should().Be(expected, $"in round {round} the instance holds {gb.Attributes["id"]}, so its features have to be for that user");
+            }
+        }
+    }
+
     [Fact]
     public async Task ALoadNobodyOvertakesInstallsItsAnswer()
     {

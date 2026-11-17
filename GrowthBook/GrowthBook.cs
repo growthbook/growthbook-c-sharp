@@ -264,10 +264,15 @@ namespace GrowthBook
         public void UpdateAttributes(IDictionary<string, object> attributes)
         {
             var newAttributes = attributes != null ? JObject.FromObject(attributes) : new JObject();
-            var reevaluate = _context.RemoteEval && ShouldTriggerRemoteEvaluation(newAttributes);
 
-            PublishAttributes(newAttributes);
-            _previousAttributes = newAttributes.DeepClone() as JObject;
+            ApplyAttributeChange(() =>
+            {
+                var reevaluate = _context.RemoteEval && ShouldTriggerRemoteEvaluation(newAttributes);
+
+                Attributes = newAttributes;
+
+                return reevaluate;
+            });
 
             if (attributes != null)
             {
@@ -276,11 +281,6 @@ namespace GrowthBook
             else
             {
                 _logger?.LogDebug("Cleared attributes");
-            }
-
-            if (reevaluate)
-            {
-                _ = TriggerRemoteEvaluationAsync();
             }
         }
 
@@ -291,10 +291,15 @@ namespace GrowthBook
         public void UpdateAttributes(object attributes)
         {
             var newAttributes = attributes != null ? JObject.FromObject(attributes) : new JObject();
-            var reevaluate = _context.RemoteEval && ShouldTriggerRemoteEvaluation(newAttributes);
 
-            PublishAttributes(newAttributes);
-            _previousAttributes = newAttributes.DeepClone() as JObject;
+            ApplyAttributeChange(() =>
+            {
+                var reevaluate = _context.RemoteEval && ShouldTriggerRemoteEvaluation(newAttributes);
+
+                Attributes = newAttributes;
+
+                return reevaluate;
+            });
 
             if (attributes != null)
             {
@@ -303,11 +308,6 @@ namespace GrowthBook
             else
             {
                 _logger?.LogDebug("Cleared attributes");
-            }
-
-            if (reevaluate)
-            {
-                _ = TriggerRemoteEvaluationAsync();
             }
         }
 
@@ -321,17 +321,15 @@ namespace GrowthBook
             var oldAttributes = Attributes?.DeepClone() as JObject;
 
 
-            foreach (var kvp in additionalAttributes)
+            ApplyAttributeChange(() =>
             {
-                Attributes[kvp.Key] = JToken.FromObject(kvp.Value);
-            }
+                foreach (var kvp in additionalAttributes)
+                {
+                    Attributes[kvp.Key] = JToken.FromObject(kvp.Value);
+                }
 
-            if (_context.RemoteEval && ShouldTriggerRemoteEvaluation(Attributes))
-            {
-                _ = TriggerRemoteEvaluationAsync();
-            }
-
-            _previousAttributes = Attributes?.DeepClone() as JObject;
+                return _context.RemoteEval && ShouldTriggerRemoteEvaluation(Attributes);
+            });
 
             _logger?.LogDebug("Merged {Count} additional attributes", additionalAttributes.Count);
         }
@@ -347,17 +345,16 @@ namespace GrowthBook
             var oldAttributes = Attributes?.DeepClone() as JObject;
 
             var additionalJObject = JObject.FromObject(additionalAttributes);
-            foreach (var property in additionalJObject.Properties())
-            {
-                Attributes[property.Name] = property.Value;
-            }
 
-            if (_context.RemoteEval && ShouldTriggerRemoteEvaluation(Attributes))
+            ApplyAttributeChange(() =>
             {
-                _ = TriggerRemoteEvaluationAsync();
-            }
+                foreach (var property in additionalJObject.Properties())
+                {
+                    Attributes[property.Name] = property.Value;
+                }
 
-            _previousAttributes = Attributes?.DeepClone() as JObject;
+                return _context.RemoteEval && ShouldTriggerRemoteEvaluation(Attributes);
+            });
 
             _logger?.LogDebug("Merged additional attributes from object");
         }
@@ -823,20 +820,31 @@ namespace GrowthBook
         }
 
         /// <summary>
-        /// Replaces the attributes under the lock remote evaluations are numbered under. A request takes the attributes
-        /// under that lock too, so one numbered after an update can only carry the update's attributes.
+        /// Changes the attributes, records them as the ones last evaluated for, and starts the remote evaluation the
+        /// change calls for, all under the lock remote evaluations are numbered under. Done in separate steps, a second
+        /// change could compare against attributes the first had not recorded yet, decide nothing had changed, and leave
+        /// the instance with its attributes and the first change's features. The lock is reentrant, so the evaluation is
+        /// numbered and its request started before it is released.
         /// </summary>
-        private void PublishAttributes(JObject attributes)
+        /// <param name="change">Changes the attributes and says whether remote evaluation has to run again.</param>
+        private void ApplyAttributeChange(Func<bool> change)
         {
             lock (_remoteEvaluationLock)
             {
-                Attributes = attributes;
+                var reevaluate = change();
+
+                _previousAttributes = Attributes?.DeepClone() as JObject;
+
+                if (reevaluate)
+                {
+                    _ = TriggerRemoteEvaluationAsync();
+                }
             }
         }
 
         /// <summary>
         /// Triggers remote evaluation asynchronously when attribute changes are detected, for the attributes as they are
-        /// now. Called once the change is published.
+        /// now. Called under the lock the change was made under.
         /// </summary>
         private async Task TriggerRemoteEvaluationAsync()
         {
