@@ -790,8 +790,15 @@ namespace GrowthBook.Providers
             // Remove build info and leading `v` if any
             // Split version into parts (both core version numbers and pre-release tags)
             // "v1.2.3-rc.1+build123" -> ["1","2","3","rc","1"]
+            // Build metadata starts at the first `+`. No regex here: `\+.*$` is quadratic on many `+`s then a newline.
 
-            var trimmedVersion = Regex.Replace(input, @"(^v|\+.*$)", string.Empty);
+            var trimmedVersion = input[0] == 'v' ? input.Substring(1) : input;
+            var buildIndex = trimmedVersion.IndexOf('+');
+            if (buildIndex >= 0)
+            {
+                trimmedVersion = trimmedVersion.Substring(0, buildIndex);
+            }
+
             var versionParts = Regex.Split(trimmedVersion, "[-.]").ToList();
 
             // If it's SemVer without a pre-release, add `~` to the end
@@ -806,7 +813,8 @@ namespace GrowthBook.Providers
             // Left pad each numeric part with spaces so string comparisons will work ("9">"10", but " 9"<"10")
             // Then, join back together into a single string
 
-            var paddedVersionParts = versionParts.Select(x => Regex.IsMatch(x, "^[0-9]+$") ? x.PadLeft(5, ' ') : x);
+            // `\z`, not `$`: .NET's `$` also matches before a final newline, so "3\n" would count as numeric
+            var paddedVersionParts = versionParts.Select(x => Regex.IsMatch(x, @"^[0-9]+\z") ? x.PadLeft(5, ' ') : x);
 
             return string.Join("-", paddedVersionParts);
         }
