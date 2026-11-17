@@ -22,8 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - An experiment's prerequisites are evaluated against a snapshot of the features already being evaluated rather
     than an empty set, so a cycle reached through an experiment is detected.
 - Added a feature usage callback, as `onFeatureUsage` in the JavaScript SDK. It is told a feature's key and result when
-  the feature is first evaluated and again whenever its value changes, prerequisites included, and is never told a
-  forced value. Set it through `Context.OnFeatureUsage` or `GrowthBook.SetFeatureUsageCallback`; replacing it keeps what
+  the feature is first evaluated and again whenever its value changes, prerequisites and rules that force a value
+  included. A value forced from outside the payload, with the `override` source, is not reported. Set it through `Context.OnFeatureUsage` or `GrowthBook.SetFeatureUsageCallback`; replacing it keeps what
   was already reported. On the multi-user client, `Options.OnFeatureUsage` is also told the user, `UserContext.OnFeatureUsage`
   adds a per-request callback, and `UserContext.TrackedFeatureUsage` carries the deduplication across a request's calls.
   `IGrowthBook` is unchanged.

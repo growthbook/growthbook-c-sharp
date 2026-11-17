@@ -28,7 +28,8 @@ namespace GrowthBook.Providers
 
         /// <summary>
         /// Evaluates a feature, and reports its value to the feature usage callbacks, as <c>getFeatureResult</c> does in
-        /// the JavaScript SDK: prerequisites included, since they are evaluated through here too, and forced values not.
+        /// the JavaScript SDK: prerequisites included, since they are evaluated through here too, and so are rules that force
+        /// a value. Only a value forced from outside the payload, with the <c>override</c> source, is left out.
         /// </summary>
         public FeatureResult EvaluateFeature(string featureId, EvaluationContext context)
         {

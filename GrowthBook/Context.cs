@@ -124,7 +124,8 @@ namespace GrowthBook
 
         /// <summary>
         /// Callback told a feature's key and result when the feature is first evaluated and again whenever its value
-        /// changes, as <c>onFeatureUsage</c> in the JavaScript SDK. Prerequisites are reported too; forced values are not.
+        /// changes, as <c>onFeatureUsage</c> in the JavaScript SDK. Prerequisites and rules that force a value are reported
+        /// too; only a value forced from outside the payload, with the <c>override</c> source, is not.
         /// </summary>
         public Action<string, FeatureResult> OnFeatureUsage { get; set; }
 
