@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- With sticky bucketing on, a user who already has a sticky assignment keeps it after they stop matching an
+  experiment rule's `condition`, instead of falling back to the default value or a later rule, matching the
+  JavaScript SDK. The condition is now checked up front only for force rules; experiment rules check it inside the
+  experiment, after the sticky bucket lookup. A forced variation (`ForcedVariations` or the query string) now applies
+  even when the user fails the rule's condition. Experiments whose condition fails are now recorded in
+  `GetAllResults()` and passed to `Subscribe` callbacks with `InExperiment = false`; no exposure is tracked for them.
+
 ## [2.1.0] - 2026-11-17
 
 - Added `GrowthBookClient`, which loads features once and evaluates for a `UserContext` passed to each call, so one

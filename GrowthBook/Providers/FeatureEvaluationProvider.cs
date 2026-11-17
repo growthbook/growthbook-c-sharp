@@ -107,15 +107,15 @@ namespace GrowthBook.Providers
                         continue;
                     }
 
-                    if (!rule.Condition.IsNull() &&
-                        !EvalConditionSafely(context.GetAttributes(), rule.Condition, context.Global.SavedGroups))
-                    {
-                        _logger.LogDebug("Rule {RuleIndex}: attribute condition did not match, continuing", ruleIndex);
-                        continue;
-                    }
-
                     if (!rule.Force.IsNull())
                     {
+                        if (!rule.Condition.IsNull() &&
+                            !EvalConditionSafely(context.GetAttributes(), rule.Condition, context.Global.SavedGroups))
+                        {
+                            _logger.LogDebug("Rule {RuleIndex}: attribute condition did not match, continuing", ruleIndex);
+                            continue;
+                        }
+
                         // The fallback attribute is only used along with sticky bucketing, as in the JS SDK
                         var rolloutFallbackAttribute = context.Global.StickyBucketService != null && !rule.DisableStickyBucketing ? rule.FallbackAttribute : null;
 
