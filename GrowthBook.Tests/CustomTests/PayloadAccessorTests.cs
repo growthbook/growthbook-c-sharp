@@ -205,6 +205,40 @@ public class PayloadAccessorTests : UnitTest
     }
 
     [Fact]
+    public void TheDecryptedPayloadKeepsTimestampStringsAsTheInstanceEvaluatesThem()
+    {
+        const string Timestamp = "2026-10-20T00:00:00.000Z";
+
+        using var growthBook = new GrowthBook(new Context
+        {
+            EncryptedFeatures = EncryptWith($"{{\"launch\": {{\"defaultValue\": \"{Timestamp}\"}}}}", DecryptionKey),
+            DecryptionKey = DecryptionKey
+        });
+
+        var exported = growthBook.GetDecryptedPayload()["features"]["launch"]["defaultValue"];
+
+        exported.Type.Should().Be(JTokenType.String);
+        exported.ToString(Newtonsoft.Json.Formatting.None).Should().Be($"\"{Timestamp}\"");
+        exported.Value<string>().Should().Be(growthBook.GetFeatureValue("launch", string.Empty));
+    }
+
+    [Fact]
+    public void ADecryptedNullIsExportedAsTheEmptyFeaturesTheInstanceEvaluates()
+    {
+        using var growthBook = new GrowthBook(new Context
+        {
+            EncryptedFeatures = EncryptWith("null", DecryptionKey),
+            DecryptionKey = DecryptionKey
+        });
+
+        growthBook.Features.Should().BeEmpty();
+        var features = growthBook.GetDecryptedPayload()["features"];
+
+        features.Type.Should().Be(JTokenType.Object);
+        features.Children().Should().BeEmpty();
+    }
+
+    [Fact]
     public void ReplacingTheFeaturesStopsTheStaleCiphertextBeingExported()
     {
         using var growthBook = Encrypted();

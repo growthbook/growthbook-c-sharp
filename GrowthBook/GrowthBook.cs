@@ -567,7 +567,12 @@ namespace GrowthBook
 
             try
             {
-                features = JObject.Parse(encryptedFeatures.DecryptWith(_context.DecryptionKey));
+                features = JsonConvert.DeserializeObject<JObject>(encryptedFeatures.DecryptWith(_context.DecryptionKey), JsonUtilities.PayloadSettings);
+
+                if (features == null)
+                {
+                    features = new JObject();
+                }
             }
             catch (DecryptionException)
             {
