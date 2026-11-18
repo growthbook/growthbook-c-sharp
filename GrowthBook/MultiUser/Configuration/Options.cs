@@ -16,6 +16,24 @@ namespace GrowthBook.MultiUser.Configuration
         /// <summary>The GrowthBook API host. Defaults to https://cdn.growthbook.io.</summary>
         public string ApiHost { get; set; } = "https://cdn.growthbook.io";
 
+        /// <summary>
+        /// Headers to attach to the features request, as <c>apiHostRequestHeaders</c> in the JavaScript SDK. Optional.
+        /// <c>User-Agent</c>, <c>If-None-Match</c> and <c>Cache-Control</c> are managed by the SDK and rejected here.
+        /// </summary>
+        public IDictionary<string, string> ApiHostRequestHeaders { get; set; }
+
+        /// <summary>
+        /// A separate host for the streaming connection, as <c>streamingHost</c> in the JavaScript SDK. Optional;
+        /// <see cref="ApiHost"/> is used when it is not set. Must be an absolute http or https URL.
+        /// </summary>
+        public string StreamingHost { get; set; }
+
+        /// <summary>
+        /// Headers to attach to the streaming connection, as <c>streamingHostRequestHeaders</c> in the JavaScript SDK.
+        /// Optional, with the same reserved names as <see cref="ApiHostRequestHeaders"/>.
+        /// </summary>
+        public IDictionary<string, string> StreamingHostRequestHeaders { get; set; }
+
         /// <summary>Optional decryption key. If set, the features payload is expected to be encrypted.</summary>
         public string DecryptionKey { get; set; }
 
@@ -114,6 +132,9 @@ namespace GrowthBook.MultiUser.Configuration
         {
             ClientKey = ClientKey,
             ApiHost = ApiHost,
+            ApiHostRequestHeaders = ApiHostRequestHeaders is null ? null : new Dictionary<string, string>(ApiHostRequestHeaders),
+            StreamingHost = StreamingHost,
+            StreamingHostRequestHeaders = StreamingHostRequestHeaders is null ? null : new Dictionary<string, string>(StreamingHostRequestHeaders),
             DecryptionKey = DecryptionKey,
             Enabled = Enabled,
             QaMode = QaMode,

@@ -154,9 +154,12 @@ public class ApiHostRequestHeadersTests
 
         var endpoint = "https://cdn.growthbook.io/api/features/sdk-test";
 
-        await httpClient.GetFeaturesFrom(endpoint, logger, config, CancellationToken.None, etagCache);
+        var first = await httpClient.GetFeaturesFrom(endpoint, logger, config, CancellationToken.None, etagCache);
         handler.LastRequest.Headers.GetValues("X-Custom").Should().ContainSingle().Which.Should().Be("value");
         handler.LastRequest.Headers.IfNoneMatch.Should().BeEmpty("because the first request has no cached ETag yet");
+
+        // The worker stores the ETag together with the features it accepted; the request only returns it.
+        etagCache.Put(endpoint, first.ETag);
 
         await httpClient.GetFeaturesFrom(endpoint, logger, config, CancellationToken.None, etagCache);
         handler.LastRequest.Headers.GetValues("X-Custom").Should().ContainSingle().Which.Should().Be("value");

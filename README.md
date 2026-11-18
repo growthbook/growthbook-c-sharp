@@ -264,6 +264,7 @@ var context = new Context
 - `StreamingHost` is used for the Server-Sent Events connection instead of `ApiHost` when set; if not set, streaming falls back to `ApiHost`.
 - `StreamingHostRequestHeaders` are attached to the Server-Sent Events connection.
 - Header names managed by the SDK itself (`User-Agent`, `If-None-Match`, `Cache-Control`) are reserved and will throw an `ArgumentException` at construction if included, case-insensitively. `StreamingHost`, if set, must be a well-formed absolute `http`/`https` URL or construction will throw.
+- `GrowthBookClient` takes the same three settings on its `Options`, with the same checks when the client is created.
 
 ---
 
