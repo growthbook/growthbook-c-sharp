@@ -513,7 +513,12 @@ namespace GrowthBook
             }
         }
 
-        /// <inheritdoc />
+        /// <summary>
+        /// Returns the payload as this instance holds it, as <c>getPayload</c> in the JavaScript SDK: <c>features</c>
+        /// (or <c>encryptedFeatures</c> when the payload arrived encrypted, left as received), <c>experiments</c>, and
+        /// <c>savedGroups</c> when one was supplied. Never null; the feature map is empty before the first load. A fresh object
+        /// every call, so mutating it does not affect the instance.
+        /// </summary>
         public JObject GetPayload()
         {
             var payload = new JObject();
@@ -538,7 +543,13 @@ namespace GrowthBook
             return payload;
         }
 
-        /// <inheritdoc />
+        /// <summary>
+        /// Returns the same payload as <see cref="GetPayload"/> with <c>encryptedFeatures</c> replaced by the
+        /// decrypted <c>features</c>. Identical to <see cref="GetPayload"/> when nothing was encrypted.
+        /// </summary>
+        /// <exception cref="Exceptions.DecryptionException">
+        /// The payload could not be decrypted with the configured key. The message never contains the key.
+        /// </exception>
         public JObject GetDecryptedPayload()
         {
             var encryptedFeatures = _encryptedFeatures;

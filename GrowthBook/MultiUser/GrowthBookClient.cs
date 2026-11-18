@@ -180,6 +180,37 @@ namespace GrowthBook.MultiUser
             return new Dictionary<string, Feature>(features);
         }
 
+        /// <summary>
+        /// Returns the payload the client evaluates against, as <c>getPayload</c> on the JavaScript SDK's client:
+        /// <c>features</c>, <c>experiments</c> (always empty: the client takes no experiment list of its own), and
+        /// <c>savedGroups</c> when they are set. Never null; the feature map is empty before the first load. A fresh
+        /// object every call, so changing it does not affect the client.
+        /// </summary>
+        public JObject GetPayload()
+        {
+            var payload = new JObject
+            {
+                ["features"] = JObject.FromObject(GetFeatures()),
+                ["experiments"] = new JArray()
+            };
+
+            var savedGroups = _options.SavedGroups;
+
+            if (savedGroups != null)
+            {
+                payload["savedGroups"] = savedGroups.DeepClone();
+            }
+
+            return payload;
+        }
+
+        /// <summary>
+        /// The same as <see cref="GetPayload"/>. The client's repository decrypts an encrypted payload when it loads
+        /// it, so the client never holds ciphertext; as in the JavaScript SDK, the decrypted payload falls back to the
+        /// payload when there is nothing to decrypt.
+        /// </summary>
+        public JObject GetDecryptedPayload() => GetPayload();
+
         /// <summary>Cancels the background feature refresh worker and releases resources.</summary>
         public void Dispose()
         {

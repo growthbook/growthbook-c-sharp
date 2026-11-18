@@ -154,13 +154,16 @@ public class PayloadAccessorTests : UnitTest
             "nor should a fragment of the garbage plaintext leak out through the JSON parser's message");
     }
 
+    /// <summary>
+    /// The accessors live on <see cref="GrowthBook"/>, not on <see cref="IGrowthBook"/>: the library targets
+    /// netstandard2.0, which has no default interface members, so a new interface member would stop every existing
+    /// implementation compiling.
+    /// </summary>
     [Fact]
-    public void BothAccessorsAreReachableThroughTheInterface()
+    public void TheAccessorsAreNotRequiredOfIGrowthBookImplementations()
     {
-        using IGrowthBook growthBook = Unencrypted();
-
-        growthBook.GetPayload().Should().NotBeNull();
-        growthBook.GetDecryptedPayload().Should().NotBeNull();
+        typeof(IGrowthBook).GetMethod(nameof(GrowthBook.GetPayload)).Should().BeNull();
+        typeof(IGrowthBook).GetMethod(nameof(GrowthBook.GetDecryptedPayload)).Should().BeNull();
     }
 
     private static string EncryptWith(string plaintext, string key)
