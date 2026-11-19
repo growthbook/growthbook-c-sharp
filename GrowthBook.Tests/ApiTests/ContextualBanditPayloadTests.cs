@@ -36,11 +36,12 @@ public class ContextualBanditPayloadTests
     [Fact]
     public async Task RefreshCacheFromApi_ShouldExposeTheContextualBanditsFromThePayload()
     {
-        var worker = CreateWorker(PayloadWithBandits);
+        var cache = new InMemoryFeatureCache(60);
+        var worker = CreateWorker(PayloadWithBandits, cache);
 
         await worker.RefreshCacheFromApi();
 
-        var bandits = ((IFeaturePayloadSource)worker).Payload.ContextualBandits;
+        var bandits = (await cache.GetPayload()).ContextualBandits;
 
         bandits.Should().ContainKey("cb-bandit");
         bandits["cb-bandit"].BanditVersion.Should().Be(7);
@@ -54,14 +55,15 @@ public class ContextualBanditPayloadTests
         const string payload = @"{ ""features"": { ""a"": { ""defaultValue"": true } },
                                    ""encryptedContextualBandits"": ""not-actually-encrypted"" }";
 
-        var worker = CreateWorker(payload);
+        var cache = new InMemoryFeatureCache(60);
+        var worker = CreateWorker(payload, cache);
 
         var features = await worker.RefreshCacheFromApi();
 
         // Losing the bandits must not cost the caller their features: every rule referencing one just falls back to
         // its own marginal weights.
         features.Should().ContainKey("a");
-        ((IFeaturePayloadSource)worker).Payload.ContextualBandits.Should().BeNull();
+        (await cache.GetPayload()).ContextualBandits.Should().BeNull();
     }
 
     /// <summary>
@@ -328,20 +330,13 @@ public class ContextualBanditPayloadTests
     }
 
     [Fact]
-    public async Task ThePublishedPayloadShouldPairFeaturesWithTheWeightsTheyArrivedWith()
+    public async Task TheCacheIsHandedTheFeaturesAndTheWeightsInOneWrite()
     {
-        // The worker writes the cache after publishing, and the cache write is where a reader is most likely to
-        // arrive. Blocking inside it puts a reader exactly in that window and asserts what it can see there.
-        var cacheWriteStarted = new ManualResetEventSlim(false);
-        var releaseCacheWrite = new ManualResetEventSlim(false);
-        var cache = Substitute.For<IGrowthBookFeatureCache>();
+        var cache = Substitute.For<IGrowthBookFeatureCache, IGrowthBookPayloadCache>();
+        FeaturePayload stored = null;
 
-        cache.RefreshWith(Arg.Any<IDictionary<string, Feature>>(), Arg.Any<CancellationToken?>())
-            .Returns(_ => Task.Run(() =>
-            {
-                cacheWriteStarted.Set();
-                releaseCacheWrite.Wait(TimeSpan.FromSeconds(5));
-            }));
+        ((IGrowthBookPayloadCache)cache).RefreshWith(Arg.Do<FeaturePayload>(payload => stored = payload), Arg.Any<CancellationToken?>())
+            .Returns(Task.CompletedTask);
 
         var worker = new FeatureRefreshWorker(
             Substitute.For<ILogger<FeatureRefreshWorker>>(),
@@ -349,20 +344,12 @@ public class ContextualBanditPayloadTests
             new GrowthBookConfigurationOptions { PreferServerSentEvents = false },
             cache);
 
-        var refresh = worker.RefreshCacheFromApi();
+        await worker.RefreshCacheFromApi();
 
-        cacheWriteStarted.Wait(TimeSpan.FromSeconds(5)).Should().BeTrue();
-
-        var observed = ((IFeaturePayloadSource)worker).Payload;
-
-        releaseCacheWrite.Set();
-        await refresh;
-
-        observed.Should().NotBeNull("the payload is published before the cache write, so a reader in that window has one to read");
-        observed.Features.Should().ContainKey("bandit-feature");
-        observed.ContextualBandits.Should().ContainKey("cb-bandit");
-        observed.ContextualBandits["cb-bandit"].BanditVersion.Should().Be(7,
-            "the features and the weights have to be the ones that arrived together, not one from each of two payloads");
+        await cache.DidNotReceive().RefreshWith(Arg.Any<IDictionary<string, Feature>>(), Arg.Any<CancellationToken?>());
+        stored.Features.Should().ContainKey("bandit-feature");
+        stored.ContextualBandits["cb-bandit"].BanditVersion.Should().Be(7,
+            "the features and the weights have to be stored as the pair they arrived as, not written one after the other");
     }
 
     [Fact]
@@ -401,12 +388,9 @@ public class ContextualBanditPayloadTests
         public IDictionary<string, ContextualBanditDefinition> ContextualBandits { get; set; }
     }
 
-    private static FeatureRefreshWorker CreateWorker(string payloadJson)
+    private static FeatureRefreshWorker CreateWorker(string payloadJson, IGrowthBookFeatureCache cache)
     {
         var config = new GrowthBookConfigurationOptions { PreferServerSentEvents = false };
-        var cache = Substitute.For<IGrowthBookFeatureCache>();
-
-        cache.RefreshWith(Arg.Any<IDictionary<string, Feature>>(), Arg.Any<CancellationToken?>()).Returns(Task.CompletedTask);
 
         return new FeatureRefreshWorker(
             Substitute.For<ILogger<FeatureRefreshWorker>>(),
@@ -439,62 +423,26 @@ public class ContextualBanditPayloadTests
     }
 
     /// <summary>
-    /// With a cache shared between processes, another one can refresh it with a payload this worker never
-    /// saw. Replacing those features with the worker's older local copy means the SDK serves values the
-    /// cache has already moved past.
+    /// A cache written before bandits existed holds features alone, and another process may have refreshed it with a
+    /// payload this one never saw. Nothing there says which payload the features came from, so they are served as
+    /// they are and no definitions are paired with them.
     /// </summary>
     [Fact]
-    public async Task NewerCachedFeaturesAreNotReplacedByTheWorkersOlderCopy()
+    public async Task AFeaturesOnlyCacheServesItsFeaturesWithNoDefinitions()
     {
-        var payload = JsonConvert.DeserializeObject<PayloadShape>(PayloadWithBandits);
-        var newerFromAnotherProcess = new Dictionary<string, Feature> { ["cache-flag"] = new Feature { DefaultValue = true } };
-
-        var worker = Substitute.For<IGrowthBookFeatureRefreshWorker, IFeaturePayloadSource>();
-        ((IFeaturePayloadSource)worker).Payload.Returns(new FeaturePayload(payload.Features, payload.ContextualBandits));
+        var cached = new Dictionary<string, Feature> { ["cache-flag"] = new Feature { DefaultValue = true } };
 
         var cache = Substitute.For<IGrowthBookFeatureCache>();
         cache.IsCacheExpired.Returns(false);
-        cache.FeatureCount.Returns(newerFromAnotherProcess.Count);
-        cache.GetFeatures(Arg.Any<CancellationToken?>()).Returns(newerFromAnotherProcess);
+        cache.FeatureCount.Returns(cached.Count);
+        cache.GetFeatures(Arg.Any<CancellationToken?>()).Returns(cached);
 
-        var repository = new FeatureRepository(Substitute.For<ILogger<FeatureRepository>>(), cache, worker);
+        var repository = new FeatureRepository(Substitute.For<ILogger<FeatureRepository>>(), cache, Substitute.For<IGrowthBookFeatureRefreshWorker>());
 
         var result = await ((IGrowthBookContextualBanditSource)repository).GetPayload();
 
         result.Features.Should().ContainKey("cache-flag", "the cache is what is being served, so it decides");
-        result.Features.Should().NotContainKey("bandit-feature");
-        result.ContextualBandits.Should().BeNull(
-            "the definitions this worker holds belong to a payload the cache has moved past, so there is no matching pair to hand over");
-    }
-
-    /// <summary>
-    /// The same shared cache, but the newer payload keeps the feature keys and changes what they contain - a
-    /// revision that edits a bandit's variation list rather than adding or removing flags. That is the ordinary
-    /// shape of a change, and matching keys say nothing about whether these are the features those weights were
-    /// published with.
-    /// </summary>
-    [Fact]
-    public async Task CachedFeaturesFromAnotherPayloadDoNotBorrowTheWorkersWeights()
-    {
-        var payload = JsonConvert.DeserializeObject<PayloadShape>(PayloadWithBandits);
-        var sameKeysDifferentPayload = payload.Features.Keys.ToDictionary(
-            key => key,
-            _ => new Feature { DefaultValue = "from a payload this worker never saw" });
-
-        var worker = Substitute.For<IGrowthBookFeatureRefreshWorker, IFeaturePayloadSource>();
-        ((IFeaturePayloadSource)worker).Payload.Returns(new FeaturePayload(payload.Features, payload.ContextualBandits));
-
-        var cache = Substitute.For<IGrowthBookFeatureCache>();
-        cache.IsCacheExpired.Returns(false);
-        cache.FeatureCount.Returns(sameKeysDifferentPayload.Count);
-        cache.GetFeatures(Arg.Any<CancellationToken?>()).Returns(sameKeysDifferentPayload);
-
-        var repository = new FeatureRepository(Substitute.For<ILogger<FeatureRepository>>(), cache, worker);
-
-        var result = await ((IGrowthBookContextualBanditSource)repository).GetPayload();
-
-        result.ContextualBandits.Should().BeNull(
-            "a cache holding features alone cannot say which payload they came from, and matching keys are not evidence that it was this one");
+        result.ContextualBandits.Should().BeNull();
     }
 
     /// <summary>

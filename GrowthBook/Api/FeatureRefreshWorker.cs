@@ -18,7 +18,7 @@ using GrowthBook.Api.SSE;
 
 namespace GrowthBook.Api
 {
-    public class FeatureRefreshWorker : IGrowthBookFeatureRefreshWorker, IFeaturePayloadSource, IDisposable
+    public class FeatureRefreshWorker : IGrowthBookFeatureRefreshWorker, IDisposable
     {
         private readonly ILogger<FeatureRefreshWorker> _logger;
         private readonly IHttpClientFactory _httpClientFactory;
@@ -29,7 +29,6 @@ namespace GrowthBook.Api
         private readonly string _serverSentEventsApiEndpoint;
         private volatile bool _isServerSentEventsEnabled;
         private readonly object _sseClientLock = new object();
-        private FeaturePayload _payload;
         private SSEClient _sseClient;
         private bool _isDisposed;
         private readonly Func<Func<Task>, Task> _startConnection = work => Task.Run(work);
@@ -55,14 +54,6 @@ namespace GrowthBook.Api
             _logger.LogDebug("Features GrowthBook API endpoint: \'{FeaturesApiEndpoint}\'", _featuresApiEndpoint);
             _logger.LogDebug("Features GrowthBook API endpoint (Server Sent Events): \'{FeaturesApiEndpoint}\'", _featuresApiEndpoint);
         }
-
-        /// <inheritdoc/>
-        /// <remarks>
-        /// Read on the evaluation path while a refresh may be replacing it, so the whole payload is swapped as one
-        /// reference and read through <see cref="Volatile"/> - a reader sees either the previous payload or the new
-        /// one, never this payload's features beside the previous payload's weights.
-        /// </remarks>
-        public FeaturePayload Payload => Volatile.Read(ref _payload);
 
         public void Cancel()
         {
@@ -128,11 +119,8 @@ namespace GrowthBook.Api
                     return false;
                 }
 
-                // Published as one reference so that an evaluation cannot pick up these features beside the previous
-                // payload's weights, before the cache so that whatever the cache then serves has its own weights
-                // already available, and only by the write that wins, so an overtaken response can't replace either.
-                Volatile.Write(ref _payload, payload);
-
+                // Stored as one pair, and only by the write that wins, so an overtaken response can replace neither the
+                // features nor the weights that belong beside them.
                 await StoreInCache(payload, cancellationToken).ConfigureAwait(false);
                 _cachedSequence = sequence;
 
