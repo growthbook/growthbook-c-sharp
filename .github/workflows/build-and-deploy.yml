@@ -1,11 +1,19 @@
 # yaml-language-server: $schema=https://json.schemastore.org/github-workflow.json
 
-name: Build, Package, and Deploy On Release
+# Release-please opens a release PR after each merge to main. Merging that PR creates the tag and the
+# GitHub release, and this workflow then publishes to NuGet. Run it manually to retry a failed publish
+# of the version on the chosen branch or tag.
+# Publishing stays in this file because the NuGet Trusted Publishing policy names it. Releases created
+# with GITHUB_TOKEN don't trigger other workflows, so a separate release workflow couldn't start it.
+name: Release
 on:
-  workflow_dispatch: # Allow running the workflow manually from the GitHub UI
-  release:
-    types:
-      - published    # Run the workflow when a new GitHub release is published
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: release-please-main
+  cancel-in-progress: false
 
 env:
   DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
@@ -17,11 +25,35 @@ defaults:
     shell: pwsh
 
 jobs:
+  release-please:
+    if: ${{ github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4.4.1
+        id: release
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          target-branch: main
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
   create_nuget:
+    needs: release-please
+    # `!cancelled()` lets a manual run continue past the skipped release-please job
+    if: ${{ !cancelled() && (needs.release-please.outputs.release_created == 'true' || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
       with:
+        ref: ${{ needs.release-please.outputs.tag_name || github.ref }}
         fetch-depth: 0 # Get all history
 
     - name: Setup .NET
@@ -41,9 +73,13 @@ jobs:
         path: ${{ env.NuGetDirectory }}/*.nupkg
 
   run_test:
+    needs: release-please
+    if: ${{ !cancelled() && (needs.release-please.outputs.release_created == 'true' || github.event_name == 'workflow_dispatch') }}
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
+      with:
+        ref: ${{ needs.release-please.outputs.tag_name || github.ref }}
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
@@ -52,9 +88,7 @@ jobs:
       run: dotnet test --configuration Release ./GrowthBook.Tests/GrowthBook.Tests.csproj --logger:"console;verbosity=normal"
 
   deploy:
-    # Publish only when creating a GitHub Release
-    # https://docs.github.com/en/repositories/releasing-projects-on-github/managing-releases-in-a-repository
-    if: ${{ github.event_name == 'release' || github.event_name == 'workflow_dispatch' }}
+    if: ${{ !cancelled() && needs.create_nuget.result == 'success' && needs.run_test.result == 'success' }}
     runs-on: ubuntu-latest
     needs: [ create_nuget, run_test ]
     permissions:
