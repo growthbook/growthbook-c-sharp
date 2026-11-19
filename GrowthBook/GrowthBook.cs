@@ -40,7 +40,7 @@ namespace GrowthBook
         private readonly ILogger<GrowthBook> _logger;
         private readonly JObject _savedGroups;
         private readonly IDictionary<string, ContextualBanditDefinition> _contextContextualBandits;
-        private IDictionary<string, ContextualBanditDefinition> _payloadContextualBandits;
+        private FeaturePayload _adoptedPayload;
         private readonly ILoggerFactory _loggerFactory;
         private readonly bool _ownsLoggerFactory;
         private readonly Context _context;
@@ -704,14 +704,44 @@ namespace GrowthBook
         /// rather than moved, so deduplication stays where it was - in <see cref="TryToTrack"/>, keyed
         /// the same way and shared through the feature repository exactly as before.
         /// </remarks>
+        private EvaluationContext BuildEvaluationContext()
+        {
+            var features = Features;
+
+            var global = new GlobalContext
+            {
+                Features = features,
+                SavedGroups = _savedGroups,
+                ContextualBandits = _contextContextualBandits,
+                PayloadContextualBandits = PayloadContextualBanditsFor(features),
+                Experiments = Experiments,
+                Enabled = Enabled,
+                QaMode = _qaMode,
+                ForcedVariations = ForcedVariations,
+                TrackingCallback = TryToTrack,
+                OnExperimentAssigned = TryAssignExperimentResult,
+                OnSubscriberNotification = NotifySubscribers,
+                StickyBucketService = _stickyBucketService
+            };
+
+            var user = new UserContext
+            {
+                Attributes = Attributes,
+                StickyBucketAssignmentDocs = _stickyBucketAssignmentDocs,
+                Url = Url
+            };
+
+            return new EvaluationContext(global, user);
+        }
+
         /// <summary>
         /// Takes on the features and the bandit definitions the repository last published, together.
         /// </summary>
         /// <remarks>
-        /// Both halves come from one reference read once. Taking the features from the repository and the
-        /// definitions from a second read leaves a window where a refresh lands between them, which pairs this
-        /// payload's rules with the previous payload's weights - and a rule supplies its own variation list, so
-        /// the weights can belong to a list that no longer exists.
+        /// Both halves are kept as one snapshot. Holding them in two fields leaves a window where an evaluation on
+        /// another thread reads one new and one old, which pairs this payload's rules with the previous payload's
+        /// weights - and a rule supplies its own variation list, so the weights can belong to a list that no longer
+        /// exists. Evaluation uses the snapshot's definitions only beside the very features it holds.
         /// <para>
         /// The definitions are replaced on every adoption, including when the payload carries none. Keeping the
         /// previous payload's in that case would let a withdrawn bandit go on bucketing new rules under a version
@@ -719,12 +749,25 @@ namespace GrowthBook
         /// affected, since they are the caller's configuration rather than anything a payload delivered.
         /// </para>
         /// </remarks>
-        /// <param name="features">The features the repository returned, used when it publishes no payload.</param>
         private void AdoptPayload(FeaturePayload payload)
         {
-            Features = new Dictionary<string, Feature>(payload.Features);
+            var features = new Dictionary<string, Feature>(payload.Features);
 
-            Volatile.Write(ref _payloadContextualBandits, payload.ContextualBandits);
+            Volatile.Write(ref _adoptedPayload, new FeaturePayload(features, payload.ContextualBandits));
+
+            Features = features;
+        }
+
+        /// <summary>
+        /// The definitions the adopted payload carried, when the features about to be evaluated are the ones that
+        /// payload delivered. Features replaced since - by the caller, or by an adoption still in progress - are
+        /// not vouched for by those definitions, so none are returned for them.
+        /// </summary>
+        private IDictionary<string, ContextualBanditDefinition> PayloadContextualBanditsFor(IDictionary<string, Feature> features)
+        {
+            var adopted = Volatile.Read(ref _adoptedPayload);
+
+            return adopted != null && ReferenceEquals(adopted.Features, features) ? adopted.ContextualBandits : null;
         }
 
         /// <summary>
@@ -748,34 +791,6 @@ namespace GrowthBook
             }
 
             return new FeaturePayload(features, null);
-        }
-
-        private EvaluationContext BuildEvaluationContext()
-        {
-            var global = new GlobalContext
-            {
-                Features = Features,
-                SavedGroups = _savedGroups,
-                ContextualBandits = _contextContextualBandits,
-                PayloadContextualBandits = Volatile.Read(ref _payloadContextualBandits),
-                Experiments = Experiments,
-                Enabled = Enabled,
-                QaMode = _qaMode,
-                ForcedVariations = ForcedVariations,
-                TrackingCallback = TryToTrack,
-                OnExperimentAssigned = TryAssignExperimentResult,
-                OnSubscriberNotification = NotifySubscribers,
-                StickyBucketService = _stickyBucketService
-            };
-
-            var user = new UserContext
-            {
-                Attributes = Attributes,
-                StickyBucketAssignmentDocs = _stickyBucketAssignmentDocs,
-                Url = Url
-            };
-
-            return new EvaluationContext(global, user);
         }
 
         private void TryToTrack(Experiment experiment, ExperimentResult result)

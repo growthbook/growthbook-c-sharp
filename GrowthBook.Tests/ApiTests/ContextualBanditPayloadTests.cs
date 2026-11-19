@@ -169,6 +169,28 @@ public class ContextualBanditPayloadTests
     }
 
     [Fact]
+    public async Task ThePayloadsWeightsAreOnlyUsedBesideTheFeaturesTheyCameWith()
+    {
+        var payload = JsonConvert.DeserializeObject<PayloadShape>(PayloadWithBandits);
+        var repository = Substitute.For<IGrowthBookFeatureRepository, IGrowthBookContextualBanditSource>();
+
+        ((IGrowthBookContextualBanditSource)repository)
+            .GetPayload(Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken?>())
+            .Returns(Task.FromResult(new FeaturePayload(payload.Features, payload.ContextualBandits)));
+
+        using var growthBook = new GrowthBook(new Context(new { id = "1" }) { FeatureRepository = repository });
+
+        await growthBook.LoadFeatures();
+
+        growthBook.EvalFeature("bandit-feature").ExperimentResult.BanditVersion.Should().Be(7);
+
+        growthBook.Features = JsonConvert.DeserializeObject<PayloadShape>(PayloadWithBandits).Features;
+
+        growthBook.EvalFeature("bandit-feature").ExperimentResult.BanditVersion.Should().BeNull(
+            "these features did not arrive with those weights, so nothing vouches that they belong together");
+    }
+
+    [Fact]
     public async Task LoadFeatures_WhenThePayloadHasNoBandits_ShouldKeepTheOnesFromTheContext()
     {
         var payload = JsonConvert.DeserializeObject<PayloadShape>(PayloadWithBandits);
