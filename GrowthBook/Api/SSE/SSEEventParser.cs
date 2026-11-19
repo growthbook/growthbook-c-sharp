@@ -36,8 +36,8 @@ namespace GrowthBook.Api.SSE
         /// <returns>Parsed SSEEvent or null if invalid</returns>
         public static SSEEvent ParseEvent(string eventString)
         {
-            if (string.IsNullOrEmpty(eventString) || eventString.StartsWith(":"))
-                return null; // Comments start with ":"
+            if (string.IsNullOrEmpty(eventString))
+                return null;
 
             var eventData = new Dictionary<string, string>();
             var lines = eventString.Split(new[] { "\r\n", "\n", "\r" }, StringSplitOptions.None);
@@ -61,6 +61,10 @@ namespace GrowthBook.Api.SSE
                     eventData[key] = value ?? "";
                 }
             }
+
+            // Comment lines have no field name; ignore blocks containing only comments.
+            if (eventData.Count == 0)
+                return null;
 
             // Create SSEEvent from parsed fields
             var sseEvent = new SSEEvent
