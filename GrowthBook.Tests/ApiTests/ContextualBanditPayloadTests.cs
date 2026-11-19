@@ -382,6 +382,44 @@ public class ContextualBanditPayloadTests
         features.Should().BeNull("a failed load is reported as no features, as GetFeatures reports it");
     }
 
+    [Fact]
+    public async Task ACacheThatCannotStoreBanditsIsReportedOnce()
+    {
+        var logger = new CapturingLogger();
+        var cache = Substitute.For<IGrowthBookFeatureCache>();
+
+        cache.RefreshWith(Arg.Any<IDictionary<string, Feature>>(), Arg.Any<CancellationToken?>()).Returns(Task.CompletedTask);
+
+        var worker = new FeatureRefreshWorker(
+            logger,
+            new StubHttpClientFactory(PayloadWithBandits),
+            new GrowthBookConfigurationOptions { PreferServerSentEvents = false },
+            cache);
+
+        await worker.RefreshCacheFromApi();
+        await worker.RefreshCacheFromApi();
+
+        logger.Warnings.Should().ContainSingle(message => message.Contains(nameof(IGrowthBookPayloadCache)),
+            "the definitions are being dropped, which a Debug line about a missing bandit does not explain");
+    }
+
+    private sealed class CapturingLogger : ILogger<FeatureRefreshWorker>
+    {
+        public List<string> Warnings { get; } = new List<string>();
+
+        public IDisposable BeginScope<TState>(TState state) => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception exception, Func<TState, Exception, string> formatter)
+        {
+            if (logLevel == LogLevel.Warning)
+            {
+                Warnings.Add(formatter(state, exception));
+            }
+        }
+    }
+
     private sealed class PayloadShape
     {
         public IDictionary<string, Feature> Features { get; set; }

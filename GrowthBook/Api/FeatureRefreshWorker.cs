@@ -35,6 +35,7 @@ namespace GrowthBook.Api
         private readonly SemaphoreSlim _cacheWriteLock = new SemaphoreSlim(1, 1);
         private long _cacheWriteSequence;
         private long _cachedSequence;
+        private int _warnedAboutUnstoredBandits;
         private CancellationTokenSource _refreshWorkerCancellation = new CancellationTokenSource();
 
         public FeatureRefreshWorker(ILogger<FeatureRefreshWorker> logger, IHttpClientFactory httpClientFactory, GrowthBookConfigurationOptions config, IGrowthBookFeatureCache cache)
@@ -272,6 +273,11 @@ namespace GrowthBook.Api
             if (_cache is IGrowthBookPayloadCache payloadCache)
             {
                 return payloadCache.RefreshWith(payload, cancellationToken);
+            }
+
+            if (payload.ContextualBandits?.Count > 0 && Interlocked.Exchange(ref _warnedAboutUnstoredBandits, 1) == 0)
+            {
+                _logger.LogWarning("The payload carries contextual bandits, but the feature cache does not implement {Interface}, so they are not stored and bandit rules use their own weights", nameof(IGrowthBookPayloadCache));
             }
 
             return _cache.RefreshWith(payload.Features, cancellationToken);
