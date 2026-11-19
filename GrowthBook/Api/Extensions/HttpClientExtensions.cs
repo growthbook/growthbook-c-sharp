@@ -157,7 +157,7 @@ namespace GrowthBook.Api.Extensions
         /// </summary>
         internal static ParsedPayload ParsePayloadFrom(string json, ILogger logger, GrowthBookConfigurationOptions config)
         {
-            var featuresResponse = JsonConvert.DeserializeObject<FeaturesResponse>(json);
+            var featuresResponse = JsonConvert.DeserializeObject<FeaturesResponse>(json, JsonUtilities.PayloadSettings);
 
             return new ParsedPayload
             {
@@ -182,7 +182,7 @@ namespace GrowthBook.Api.Extensions
             {
                 var decrypted = featuresResponse.EncryptedContextualBandits.DecryptWith(config.DecryptionKey);
 
-                return JsonConvert.DeserializeObject<Dictionary<string, ContextualBanditDefinition>>(decrypted);
+                return JsonConvert.DeserializeObject<Dictionary<string, ContextualBanditDefinition>>(decrypted, JsonUtilities.PayloadSettings);
             }
             catch (Exception ex)
             {
