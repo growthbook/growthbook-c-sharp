@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). From 2.2.0 on,
 [release-please](https://github.com/googleapis/release-please) writes the entries from merged PR titles.
 
+## [2.1.1](https://github.com/growthbook/growthbook-c-sharp/compare/v2.1.0...v2.1.1) (2026-11-19)
+
+
+### Bug Fixes
+
+* preserve SSE data following heartbeat comments ([#132](https://github.com/growthbook/growthbook-c-sharp/issues/132)) ([5e62be8](https://github.com/growthbook/growthbook-c-sharp/commit/5e62be881e34f3cd1e6655af9d57094b5db10967))
+
 ## [2.1.0] - 2026-11-17
 
 - Added `GrowthBookClient`, which loads features once and evaluates for a `UserContext` passed to each call, so one
