@@ -309,12 +309,6 @@ namespace GrowthBook.Providers
         }
 
         /// <summary>
-        /// Reports the exposure to the tracking callbacks. It is reported once per unique assignment when the
-        /// user context carries a set to record them in, and every callback is guarded separately: the
-        /// assignment is already decided and may already be saved, so neither a throwing callback nor another
-        /// callback having thrown may change what the user is shown.
-        /// </summary>
-        /// <summary>
         /// Records which bandit leaf an exposure was bucketed on, so that tracking carries it.
         /// </summary>
         /// <remarks>
@@ -335,6 +329,12 @@ namespace GrowthBook.Providers
             result.BanditVersion = experiment.ContextualBandit.BanditVersion;
         }
 
+        /// <summary>
+        /// Reports the exposure to the tracking callbacks. It is reported once per unique assignment when the
+        /// user context carries a set to record them in, and every callback is guarded separately: the
+        /// assignment is already decided and may already be saved, so neither a throwing callback nor another
+        /// callback having thrown may change what the user is shown.
+        /// </summary>
         internal void TrackExposure(Experiment experiment, ExperimentResult result, EvaluationContext context)
         {
             var trackedExperiments = context.User.TrackedExperiments;
