@@ -420,6 +420,27 @@ public class ContextualBanditPayloadTests
         }
     }
 
+    [Fact]
+    public void ABanditRulesHashAttributeIsAStickyBucketIdentifier()
+    {
+        var features = new Dictionary<string, Feature>
+        {
+            ["bandit-feature"] = new Feature
+            {
+                Rules = new List<FeatureRule>
+                {
+                    new FeatureRule { HashAttribute = "deviceId", ContextualVariations = new JArray("control", "treatment"), ContextualBanditRef = "cb-bandit" }
+                }
+            }
+        };
+
+        var identifiers = global::GrowthBook.Utilities.ExperimentUtilities.DeriveIdentifierAttributes(
+            features, null, new JObject { ["id"] = "user-1", ["deviceId"] = "device-1" });
+
+        identifiers.Should().Contain("deviceId||device-1",
+            "the rule assigns variations, so the user's documents under that attribute have to be loaded, as the JavaScript SDK does");
+    }
+
     private sealed class PayloadShape
     {
         public IDictionary<string, Feature> Features { get; set; }
