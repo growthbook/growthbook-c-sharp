@@ -117,8 +117,8 @@ namespace GrowthBook
         /// </summary>
         /// <remarks>
         /// A rule carrying a <see cref="FeatureRule.ContextualBanditRef"/> is bucketed with the weights of whichever
-        /// leaf matches the user, instead of the rule's own marginal weights. Like <see cref="SavedGroups"/>, these
-        /// are supplied here rather than read from the feature payload.
+        /// leaf matches the user, instead of the rule's own marginal weights. The definitions that came with the
+        /// loaded features are consulted first, so these only answer for a reference the payload does not carry.
         /// </remarks>
         public IDictionary<string, ContextualBanditDefinition> ContextualBandits { get; set; }
 
