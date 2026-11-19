@@ -149,18 +149,18 @@ namespace GrowthBook.Api
             }
         }
 
-        private void NotifyFeaturesStreamed(IDictionary<string, Feature> features)
+        private void NotifyFeaturesStreamed(FeaturePayload payload)
         {
             var callback = _config?.OnFeaturesStreamed;
 
-            if (callback is null || features is null)
+            if (callback is null || payload?.Features is null)
             {
                 return;
             }
 
             try
             {
-                callback(features);
+                callback(payload);
             }
             catch (Exception ex)
             {
@@ -223,11 +223,11 @@ namespace GrowthBook.Api
                         // refreshed here too - otherwise a bandit's weights would freeze at whatever the last polled
                         // payload had while its features kept updating.
                         var payload = Extensions.HttpClientExtensions.ParsePayloadFrom(sseEvent.Data, _logger, _config);
-                        var features = payload.Features;
+                        var streamed = new FeaturePayload(payload.Features, payload.ContextualBandits);
 
-                        if (features != null && await WriteCacheInOrder(new FeaturePayload(features, payload.ContextualBandits), null, sequence, _refreshWorkerCancellation.Token).ConfigureAwait(false))
+                        if (streamed.Features != null && await WriteCacheInOrder(streamed, null, sequence, _refreshWorkerCancellation.Token).ConfigureAwait(false))
                         {
-                            NotifyFeaturesStreamed(features);
+                            NotifyFeaturesStreamed(streamed);
 
                             _logger.LogInformation("Cache has been refreshed with server sent event features");
                         }

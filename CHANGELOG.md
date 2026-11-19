@@ -40,6 +40,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Wired the spec suite's `contextualBandit` section (35 cases) and the four `feature` cases that need bandit
   definitions, all of which were listed as untested. The nine condition cases this fork keeps beyond the spec suite
   live in `custom-cases.json`, where a spec bump can't delete them.
+- `GrowthBookClient` supports contextual bandits too. It takes the definitions from the payload it loads, and from
+  each streamed update, together with the features they came with. `Options.ContextualBandits` supplies definitions
+  of your own, used for a reference the payload does not carry.
 
 ## [2.1.0] - 2026-11-17
 

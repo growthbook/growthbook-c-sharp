@@ -47,6 +47,13 @@ namespace GrowthBook.MultiUser.Configuration
         /// <summary>Force specific experiments to always assign a specific variation for all users. Used for QA.</summary>
         public IDictionary<string, int> GlobalForcedVariations { get; set; }
 
+        /// <summary>
+        /// Contextual bandit definitions, keyed by the reference a feature rule points at. The definitions that came
+        /// with the loaded features are consulted first, so these only answer for a reference the payload does not
+        /// carry.
+        /// </summary>
+        public IDictionary<string, ContextualBanditDefinition> ContextualBandits { get; set; }
+
         /// <summary>Logger factory for internal diagnostics. If not set, a no-op logger is used.</summary>
         public ILoggerFactory LoggerFactory { get; set; }
 
@@ -122,6 +129,9 @@ namespace GrowthBook.MultiUser.Configuration
             GlobalForcedVariations = GlobalForcedVariations is null
                 ? null
                 : new Dictionary<string, int>(GlobalForcedVariations),
+            ContextualBandits = ContextualBandits is null
+                ? null
+                : new Dictionary<string, ContextualBanditDefinition>(ContextualBandits),
             LoggerFactory = LoggerFactory,
             FeatureRepository = FeatureRepository,
             BackgroundSync = BackgroundSync,
