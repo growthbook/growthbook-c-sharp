@@ -40,7 +40,12 @@ namespace GrowthBook.Api
         /// </remarks>
         public async Task<FeaturePayload> GetPayload(GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null)
         {
-            await EnsureCacheIsFresh(options, cancellationToken).ConfigureAwait(false);
+            var refresh = await EnsureCacheIsFresh(options, cancellationToken).ConfigureAwait(false);
+
+            if (refresh.Waited && refresh.Features is null)
+            {
+                return null;
+            }
 
             if (_cache is IGrowthBookPayloadCache payloadCache)
             {
@@ -64,11 +69,11 @@ namespace GrowthBook.Api
         /// <inheritdoc/>
         public async Task<IDictionary<string, Feature>> GetFeatures(GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null)
         {
-            var refreshed = await EnsureCacheIsFresh(options, cancellationToken).ConfigureAwait(false);
+            var refresh = await EnsureCacheIsFresh(options, cancellationToken).ConfigureAwait(false);
 
-            if (refreshed != null)
+            if (refresh.Waited)
             {
-                return refreshed;
+                return refresh.Features;
             }
 
             _logger.LogInformation("Cache is not expired and the option to force refresh was not set, retrieving features from cache");
@@ -80,10 +85,9 @@ namespace GrowthBook.Api
         /// Refreshes the cache from the API when it has expired or the caller asked for it.
         /// </summary>
         /// <returns>
-        /// The features the refresh produced when this call waited for one, and null when it did not - either
-        /// because no refresh was needed or because it was left to run in the background.
+        /// Whether this call waited for a refresh, and the features it produced, which are null when it failed.
         /// </returns>
-        private async Task<IDictionary<string, Feature>> EnsureCacheIsFresh(GrowthBookRetrievalOptions options, CancellationToken? cancellationToken)
+        private async Task<(bool Waited, IDictionary<string, Feature> Features)> EnsureCacheIsFresh(GrowthBookRetrievalOptions options, CancellationToken? cancellationToken)
         {
             _logger.LogInformation("Getting features from repository, verifying cache expiration and option to force refresh");
 
@@ -115,7 +119,7 @@ namespace GrowthBook.Api
                 {
                     _logger.LogInformation("Either cache currently has no features or the option to wait for completion was set, waiting for cache to refresh");
                     _logger.LogDebug("Feature count: '{CacheFeatureCount}' and option to wait for completion: '{OptionsWaitForCompletion}'", featureCount, options?.WaitForCompletion);
-                    return await refreshTask.ConfigureAwait(false);
+                    return (true, await refreshTask.ConfigureAwait(false));
                 }
                 else
                 {
@@ -128,7 +132,7 @@ namespace GrowthBook.Api
                 }
             }
 
-            return null;
+            return (false, null);
         }
 
         /// <inheritdoc/>
@@ -171,7 +175,7 @@ namespace GrowthBook.Api
         {
             var payload = await EvaluateRemotely(context, options, cancellationToken).ConfigureAwait(false);
 
-            return payload.Features;
+            return payload?.Features;
         }
 
         /// <summary>

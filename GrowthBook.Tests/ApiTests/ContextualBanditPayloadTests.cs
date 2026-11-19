@@ -343,6 +343,36 @@ public class ContextualBanditPayloadTests
             "the features and the weights have to be the ones that arrived together, not one from each of two payloads");
     }
 
+    [Fact]
+    public async Task ALoadThatWaitedForARefreshThatBroughtNothingFails()
+    {
+        var worker = Substitute.For<IGrowthBookFeatureRefreshWorker>();
+
+        worker.RefreshCacheFromApi(Arg.Any<CancellationToken?>()).Returns(Task.FromResult<IDictionary<string, Feature>>(null));
+
+        var repository = new FeatureRepository(Substitute.For<ILogger<FeatureRepository>>(), new InMemoryFeatureCache(60), worker);
+
+        using var growthBook = new GrowthBook(new Context(new { id = "1" }) { FeatureRepository = repository });
+
+        var result = await growthBook.LoadFeaturesWithResult();
+
+        result.Success.Should().BeFalse("the cache is still empty, so an empty feature set would be passed off as a successful load");
+    }
+
+    [Fact]
+    public async Task AContextualReadThatWaitedForARefreshThatBroughtNothingReturnsNull()
+    {
+        var worker = Substitute.For<IGrowthBookFeatureRefreshWorker>();
+
+        worker.RefreshCacheFromApi(Arg.Any<CancellationToken?>()).Returns(Task.FromResult<IDictionary<string, Feature>>(null));
+
+        var repository = new FeatureRepository(Substitute.For<ILogger<FeatureRepository>>(), new InMemoryFeatureCache(60), worker);
+
+        var features = await repository.GetFeaturesWithContext(new Context { RemoteEval = false });
+
+        features.Should().BeNull("a failed load is reported as no features, as GetFeatures reports it");
+    }
+
     private sealed class PayloadShape
     {
         public IDictionary<string, Feature> Features { get; set; }
