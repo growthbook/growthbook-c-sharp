@@ -236,6 +236,45 @@ or pass it during initialization
 
 Sticky bucketing ensures that users see the same experiment variant, even when user session, user login status, or experiment parameters change. See the [Sticky Bucketing docs](/app/sticky-bucketing) for more information. If your organization and experiment supports sticky bucketing, you must implement an instance of the `StickyBucketService` to use Sticky Bucketing. For simple bucket persistence using the browser's LocalStorage (can be polyfilled for other environments).
 
+### Redis
+
+`RedisStickyBucketService` keeps assignments in Redis, in the same format as `RedisStickyBucketService` in the JavaScript SDK, so services written in either SDK can share one Redis. The SDK takes no dependency on a Redis client: implement `IRedisCompatibleClient` over the one you already use. With StackExchange.Redis:
+
+```csharp
+public class StackExchangeRedisClient : IRedisCompatibleClient
+{
+    private readonly IDatabase _database;
+
+    public StackExchangeRedisClient(IDatabase database) => _database = database;
+
+    public string[] MultiGet(string[] keys) =>
+        _database.StringGet(keys.Select(key => (RedisKey)key).ToArray()).Select(value => (string)value).ToArray();
+
+    public void Set(string key, string value) => _database.StringSet(key, value);
+}
+```
+
+```csharp
+context.StickyBucketService = new RedisStickyBucketService(
+    new StackExchangeRedisClient(connection.GetDatabase()),
+    prefix: "gb_sticky_");
+```
+
+Each user identifier is one key, `<prefix><attributeName>||<attributeValue>`. A document that cannot be read, or that names another identifier than its key, is skipped; a client that fails throws.
+
+**Redis Cluster.** All of a user's identifiers are read with one `MGET`, and Redis Cluster rejects a multi-key command whose keys are in different hash slots. A user with more than one identifier, such as `id` and `deviceId`, then gets an error instead of their assignments. Either put a hash tag in the prefix, so every key is hashed on it and lands in one slot:
+
+```csharp
+prefix: "{gb_sticky}:"
+```
+
+This keeps all sticky bucket keys on one node. If that is too much for one node, read the keys one at a time in the adapter instead, at the cost of a round trip per identifier:
+
+```csharp
+public string[] MultiGet(string[] keys) =>
+    keys.Select(key => (string)_database.StringGet(key)).ToArray();
+```
+
 ---
 
 ## Models
