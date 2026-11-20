@@ -123,6 +123,7 @@ namespace GrowthBook
             _experimentEvaluator.FeatureEvaluator = _featureEvaluator;
 
             ApplyEncryptedFeatures(context);
+            RefreshStickyBuckets();
 
             if (context.FeatureRepository != null)
             {
@@ -146,6 +147,74 @@ namespace GrowthBook
                 }
 
                 _featureRepository = new FeatureRepository(featureRepositoryLogger, featureCache, featureRefreshWorker, remoteEvaluationService);
+            }
+        }
+
+        /// <summary>
+        /// Loads the user's sticky assignments from the service, as <c>refreshStickyBuckets</c> does in the JavaScript
+        /// SDK: when the instance is built, when features are loaded, and when the attributes change. <see cref="Run"/>
+        /// loads them for the experiment it is given.
+        /// </summary>
+        /// <remarks>
+        /// Merged into the documents held rather than replacing them: those handed over on the context may not be in
+        /// the service, and an assignment saved while the service was being read is not in its answer. What is held
+        /// takes precedence, as when an assignment is saved. A service that cannot be read leaves them as they are.
+        /// </remarks>
+        private void RefreshStickyBuckets() => RefreshStickyBuckets(Features, Experiments);
+
+        private void RefreshStickyBuckets(IDictionary<string, Feature> features, IList<Experiment> experiments)
+        {
+            if (_stickyBucketService is null)
+            {
+                return;
+            }
+
+            var identifiers = ExperimentUtilities.DeriveIdentifierAttributes(features, experiments, Attributes ?? new JObject()).ToList();
+
+            if (identifiers.Count == 0)
+            {
+                return;
+            }
+
+            IDictionary<string, StickyAssignmentsDocument> stored;
+
+            try
+            {
+                stored = _stickyBucketService.GetAllAssignments(identifiers);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not load sticky bucket assignments, keeping the ones already held");
+
+                return;
+            }
+
+            if (stored is null)
+            {
+                return;
+            }
+
+            lock (_stickyBucketAssignmentDocs)
+            {
+                foreach (var identifier in identifiers)
+                {
+                    if (!stored.TryGetValue(identifier, out var fromService) || fromService is null)
+                    {
+                        continue;
+                    }
+
+                    var assignments = new Dictionary<string, string>(fromService.Assignments ?? new Dictionary<string, string>());
+
+                    if (_stickyBucketAssignmentDocs.TryGetValue(identifier, out var held) && held?.Assignments != null)
+                    {
+                        foreach (var assignment in held.Assignments)
+                        {
+                            assignments[assignment.Key] = assignment.Value;
+                        }
+                    }
+
+                    _stickyBucketAssignmentDocs[identifier] = new StickyAssignmentsDocument(fromService.AttributeName, fromService.AttributeValue, assignments);
+                }
             }
         }
 
@@ -280,6 +349,8 @@ namespace GrowthBook
                 Attributes = new JObject();
                 _logger?.LogDebug("Cleared attributes");
             }
+
+            RefreshStickyBuckets();
         }
 
         /// <summary>
@@ -308,6 +379,8 @@ namespace GrowthBook
                 Attributes = new JObject();
                 _logger?.LogDebug("Cleared attributes");
             }
+
+            RefreshStickyBuckets();
         }
 
         /// <summary>
@@ -333,6 +406,8 @@ namespace GrowthBook
             _previousAttributes = Attributes?.DeepClone() as JObject;
 
             _logger?.LogDebug("Merged {Count} additional attributes", additionalAttributes.Count);
+
+            RefreshStickyBuckets();
         }
 
         /// <summary>
@@ -359,6 +434,8 @@ namespace GrowthBook
             _previousAttributes = Attributes?.DeepClone() as JObject;
 
             _logger?.LogDebug("Merged additional attributes from object");
+
+            RefreshStickyBuckets();
         }
 
         /// <inheritdoc />
@@ -573,6 +650,11 @@ namespace GrowthBook
         {
             try
             {
+                if (experiment != null && !experiment.DisableStickyBucketing)
+                {
+                    RefreshStickyBuckets(null, new[] { experiment });
+                }
+
                 ExperimentResult result = _experimentEvaluator.RunExperiment(experiment, null, BuildEvaluationContext());
 
                 TryAssignExperimentResult(experiment, result);
@@ -627,6 +709,7 @@ namespace GrowthBook
                 }
 
                 Features = features;
+                RefreshStickyBuckets();
                 var featureCount = Features.Count;
 
                 _logger.LogInformation($"Loading features has completed, retrieved '{featureCount}' features");
@@ -820,6 +903,7 @@ namespace GrowthBook
                 if (features != null)
                 {
                     Features = features;
+                    RefreshStickyBuckets();
                     _logger?.LogDebug("Remote evaluation completed, updated {Count} features", features.Count);
                 }
             }
