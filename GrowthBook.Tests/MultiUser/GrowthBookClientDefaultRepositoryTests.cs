@@ -28,40 +28,44 @@ public class GrowthBookClientDefaultRepositoryTests
 
     private static readonly UserContext User = new UserContext { Attributes = JObject.Parse(@"{ ""id"": ""user-1"" }") };
 
+    /// <summary>
+    /// A refresh that starts while another is still in flight shares its request, as the JS SDK does, so through
+    /// this repository a later refresh is never overtaken by an earlier one. The worker still orders responses for
+    /// callers that drive it directly; FeatureRefreshWorkerOrderingTests covers that.
+    /// </summary>
     [Fact]
-    public async Task AnOlderRefreshAnsweredLastDoesNotReplaceANewerOne()
+    public async Task ARefreshStartedWhileAnotherIsInFlightSharesItsRequest()
     {
-        using var olderMayAnswer = new SemaphoreSlim(0);
-        using var olderStarted = new SemaphoreSlim(0);
+        using var firstMayAnswer = new SemaphoreSlim(0);
+        using var firstStarted = new SemaphoreSlim(0);
 
-        // The first request is held back and answers with the older definitions; the second answers at once
         var handler = new ScriptedHandler(async request =>
         {
             if (request == 1)
             {
-                olderStarted.Release();
-                await olderMayAnswer.WaitAsync(TimeSpan.FromSeconds(10));
-                return FlagOff;
+                firstStarted.Release();
+                await firstMayAnswer.WaitAsync(TimeSpan.FromSeconds(10));
+                return FlagOn;
             }
 
-            return FlagOn;
+            return FlagOff;
         });
 
         using var client = CreateClient(handler, cacheExpirationInSeconds: 60);
 
-        var older = Task.Run(() => client.RefreshFeaturesAsync());
-        (await olderStarted.WaitAsync(TimeSpan.FromSeconds(10))).Should().BeTrue();
+        var first = client.RefreshFeaturesAsync();
+        (await firstStarted.WaitAsync(TimeSpan.FromSeconds(10))).Should().BeTrue();
 
-        await client.RefreshFeaturesAsync();
+        // The second call joins before it returns, so this is a join rather than a race to start a request.
+        var second = client.RefreshFeaturesAsync();
+        second.IsCompleted.Should().BeFalse("it waits on the request already in flight");
 
-        olderMayAnswer.Release();
-        await older;
+        firstMayAnswer.Release();
+        var results = await Task.WhenAll(first, second);
 
-        // Room for anything still reacting to the older answer to finish before the result is read
-        await Task.Delay(300);
-
-        client.IsOn("flag", User).Should().BeTrue(
-            "the refresh started later carries the newer definitions, however late the earlier one comes back");
+        handler.Requests.Should().Be(1, "the second refresh shared the first one's request");
+        results.Should().OnlyContain(result => result.Success);
+        client.IsOn("flag", User).Should().BeTrue();
     }
 
     [Fact]
@@ -152,46 +156,6 @@ public class GrowthBookClientDefaultRepositoryTests
     }
 
     /// <summary>
-    /// An overtaken refresh must not leave its older flags in the cache either, or the next load reads them back
-    /// and installs them over the newer ones.
-    /// </summary>
-    [Fact]
-    public async Task ALoadAfterAnOvertakenRefreshDoesNotReinstallIt()
-    {
-        using var olderMayAnswer = new SemaphoreSlim(0);
-        using var olderStarted = new SemaphoreSlim(0);
-
-        var handler = new ScriptedHandler(async request =>
-        {
-            if (request == 2)
-            {
-                olderStarted.Release();
-                await olderMayAnswer.WaitAsync(TimeSpan.FromSeconds(10));
-                return FlagOff;
-            }
-
-            return request == 1 ? FlagOff : FlagOn;
-        });
-
-        using var client = CreateClient(handler, cacheExpirationInSeconds: 60);
-
-        await client.InitializeAsync();
-
-        var older = Task.Run(() => client.RefreshFeaturesAsync());
-        (await olderStarted.WaitAsync(TimeSpan.FromSeconds(10))).Should().BeTrue();
-
-        await client.RefreshFeaturesAsync();
-
-        olderMayAnswer.Release();
-        await older;
-
-        await client.InitializeAsync();
-
-        handler.Requests.Should().Be(3, "the last load read the cache rather than fetching again");
-        client.IsOn("flag", User).Should().BeTrue("the cache has to hold the newer flags, not the overtaken ones");
-    }
-
-    /// <summary>
     /// An older response landing after a streamed update must not overwrite the update in the cache.
     /// </summary>
     [Fact]
@@ -227,51 +191,6 @@ public class GrowthBookClientDefaultRepositoryTests
         await client.InitializeAsync();
 
         client.IsOn("flag", User).Should().BeTrue("the cache still holds the streamed update, not the older response");
-    }
-
-    /// <summary>
-    /// An overtaken refresh must not leave its ETag behind either. The cache would hold the newer flags under the
-    /// older response's ETag, and once the API rolled back to that response, every refresh would get a 304.
-    /// </summary>
-    [Fact]
-    public async Task ARollbackAfterAnOvertakenRefreshIsApplied()
-    {
-        using var olderMayAnswer = new SemaphoreSlim(0);
-        using var olderStarted = new SemaphoreSlim(0);
-
-        var handler = new ETagHandler(async request =>
-        {
-            switch (request)
-            {
-                case 1:
-                    return (FlagOff, "\"v0\"");
-                case 2:
-                    olderStarted.Release();
-                    await olderMayAnswer.WaitAsync(TimeSpan.FromSeconds(10));
-                    return (FlagOff, "\"v1\"");
-                case 3:
-                    return (FlagOn, "\"v2\"");
-                default:
-                    // The API has rolled back to what the overtaken refresh fetched.
-                    return (FlagOff, "\"v1\"");
-            }
-        });
-
-        using var client = CreateClient(handler, cacheExpirationInSeconds: 60);
-
-        await client.InitializeAsync();
-
-        var older = Task.Run(() => client.RefreshFeaturesAsync());
-        (await olderStarted.WaitAsync(TimeSpan.FromSeconds(10))).Should().BeTrue();
-
-        await client.RefreshFeaturesAsync();
-
-        olderMayAnswer.Release();
-        await older;
-
-        await client.RefreshFeaturesAsync();
-
-        client.IsOn("flag", User).Should().BeFalse("the API rolled back, and the refresh has to fetch it rather than get a 304");
     }
 
     private static GrowthBookClient CreateClient(HttpMessageHandler handler, int cacheExpirationInSeconds, bool backgroundSync = false) =>
@@ -400,40 +319,6 @@ public class GrowthBookClientDefaultRepositoryTests
             {
                 Content = new StringContent(json, Encoding.UTF8, "application/json")
             };
-        }
-    }
-
-    /// <summary>
-    /// Answers each request with what the script returns for its number, and with a 304 when the request already
-    /// holds that response's ETag.
-    /// </summary>
-    private sealed class ETagHandler : HttpMessageHandler
-    {
-        private readonly Func<int, Task<(string Json, string ETag)>> _respond;
-        private int _requests;
-
-        public ETagHandler(Func<int, Task<(string Json, string ETag)>> respond) => _respond = respond;
-
-        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-        {
-            var (json, etag) = await _respond(Interlocked.Increment(ref _requests));
-            var tag = new System.Net.Http.Headers.EntityTagHeaderValue(etag);
-
-            if (request.Headers.IfNoneMatch.Contains(tag))
-            {
-                var notModified = new HttpResponseMessage(HttpStatusCode.NotModified);
-                notModified.Headers.ETag = tag;
-
-                return notModified;
-            }
-
-            var response = new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(json, Encoding.UTF8, "application/json")
-            };
-            response.Headers.ETag = tag;
-
-            return response;
         }
     }
 
