@@ -81,6 +81,7 @@ namespace GrowthBook
         /// <returns>Value of a feature cast to the specified type.</returns>
         Task<T> GetFeatureValueAsync<T>(string key, T fallback, CancellationToken? cancellationToken = null);
 
+
         /// <summary>
         /// Returns a map of the latest results indexed by experiment key.
         /// </summary>
