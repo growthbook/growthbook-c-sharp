@@ -7,25 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- Added contextual bandits. A feature rule that references a contextual bandit is bucketed with the weights of the
-  first segment (leaf) whose condition the user matches, instead of being skipped. The definitions come from the
-  payload's `contextualBandits`, or `encryptedContextualBandits` when polling or streaming; remote evaluation reads
-  plain `contextualBandits` only. They can also be supplied through `Context.ContextualBandits` and
-  `Options.ContextualBandits`, which answer for a reference the payload does not carry. `GrowthBook` and
-  `GrowthBookClient` both support them.
-- `ExperimentResult` reports `LeafId`, `VariationWeights` and `BanditVersion` for a real bandit exposure, before the
-  tracking callback runs, and nothing for a forced, QA-mode, filtered-out or sticky-bucketed assignment.
-- Two deliberate differences from the JavaScript SDK: a bandit rule's `ranges` are ignored, so the leaf's weights
-  decide the variation, and a variation restored from a sticky bucket carries no bandit details, since the leaf that
-  chose it is not stored. The backend sends neither case for bandit rules today.
-- Added `FeaturePayload`, `IGrowthBookPayloadCache` and `IGrowthBookContextualBanditSource`, which store and return a
-  payload's features with its bandit definitions as one pair, so a user is never bucketed on one payload's rules and
-  another's weights. `InMemoryFeatureCache` and the built-in repository implement them. They are separate interfaces
-  because the library targets netstandard2.0, which has no default interface members: a custom cache or repository
-  keeps compiling and serves no bandits, and the SDK logs a warning once when a payload's bandits cannot be stored.
-- The spec suite's `contextualBandit` section (35 cases) and the four `feature` cases that need bandit definitions
-  now run.
-
 ## [2.1.0] - 2026-11-17
 
 - Added `GrowthBookClient`, which loads features once and evaluates for a `UserContext` passed to each call, so one
