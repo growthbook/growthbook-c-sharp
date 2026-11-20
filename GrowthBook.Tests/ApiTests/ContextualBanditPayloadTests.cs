@@ -193,6 +193,31 @@ public class ContextualBanditPayloadTests
     }
 
     [Fact]
+    public async Task OverlappingLoadsLeaveTheFeaturesBesideTheirOwnWeights()
+    {
+        var payload = JsonConvert.DeserializeObject<PayloadShape>(PayloadWithBandits);
+        var repository = Substitute.For<IGrowthBookFeatureRepository, IGrowthBookContextualBanditSource>();
+
+        ((IGrowthBookContextualBanditSource)repository)
+            .GetPayload(Arg.Any<GrowthBookRetrievalOptions>(), Arg.Any<CancellationToken?>())
+            .Returns(_ => Task.FromResult(new FeaturePayload(payload.Features, payload.ContextualBandits)));
+
+        using var growthBook = new GrowthBook(new Context(new { id = "1" }) { FeatureRepository = repository });
+
+        for (var round = 0; round < 2000; round++)
+        {
+            using var start = new Barrier(2);
+
+            await Task.WhenAll(
+                Task.Run(() => { start.SignalAndWait(); growthBook.LoadFeatures().GetAwaiter().GetResult(); }),
+                Task.Run(() => { start.SignalAndWait(); growthBook.LoadFeatures().GetAwaiter().GetResult(); }));
+
+            growthBook.EvalFeature("bandit-feature").ExperimentResult.BanditVersion.Should().Be(7,
+                $"both loads delivered the bandit, so whichever finished last must leave its features beside its weights (round {round})");
+        }
+    }
+
+    [Fact]
     public async Task LoadFeatures_WhenThePayloadHasNoBandits_ShouldKeepTheOnesFromTheContext()
     {
         var payload = JsonConvert.DeserializeObject<PayloadShape>(PayloadWithBandits);
