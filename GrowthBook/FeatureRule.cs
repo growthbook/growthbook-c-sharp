@@ -13,7 +13,7 @@ namespace GrowthBook
     public class FeatureRule
     {
         /// <summary>
-        /// Optional rule id, reserved for future use.
+        /// Optional rule id, reported as <see cref="FeatureResult.RuleId"/> when this rule decides the value.
         /// </summary>
         public string Id { get; set; }
 

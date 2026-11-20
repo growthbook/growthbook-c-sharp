@@ -20,6 +20,7 @@ namespace GrowthBook
             public const string Experiment = "experiment";
             public const string CyclicPrerequisite = "cyclicPrerequisite";
             public const string Prerequisite = "prerequisite";
+            public const string Override = "override";
         }
 
         /// <summary>
@@ -62,9 +63,15 @@ namespace GrowthBook
         public bool Off { get { return !On; } }
 
         /// <summary>
-        /// One of "unknownFeature", "defaultValue", "force", "experiment", or "cyclicPrerequisite".
+        /// One of "unknownFeature", "defaultValue", "force", "experiment", "cyclicPrerequisite", "prerequisite",
+        /// or "override".
         /// </summary>
         public string Source { get; set; }
+
+        /// <summary>
+        /// The id of the rule that decided the value, when source is "force" or "experiment". Empty otherwise.
+        /// </summary>
+        public string RuleId { get; set; } = string.Empty;
 
         /// <summary>
         /// When source is "experiment", this will be an Experiment object.
@@ -96,6 +103,7 @@ namespace GrowthBook
                     && Off == objResult.Off
                     && On == objResult.On
                     && Source == objResult.Source
+                    && RuleId == objResult.RuleId
                     && JToken.DeepEquals(Value ?? JValue.CreateNull(), objResult.Value ?? JValue.CreateNull());
             }
             return false;
@@ -113,6 +121,7 @@ namespace GrowthBook
 
                 hash = hash * 31 + On.GetHashCode();
                 hash = hash * 31 + (Source?.GetHashCode() ?? 0);
+                hash = hash * 31 + (RuleId?.GetHashCode() ?? 0);
                 hash = hash * 31 + (Experiment?.GetHashCode() ?? 0);
                 hash = hash * 31 + (ExperimentResult?.GetHashCode() ?? 0);
 
