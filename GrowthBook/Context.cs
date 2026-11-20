@@ -123,6 +123,13 @@ namespace GrowthBook
         public Action<Experiment, ExperimentResult> TrackingCallback { get; set; }
 
         /// <summary>
+        /// Callback told a feature's key and result when the feature is first evaluated and again whenever its value
+        /// changes, as <c>onFeatureUsage</c> in the JavaScript SDK. Prerequisites and rules that force a value are reported
+        /// too; only a value forced from outside the payload, with the <c>override</c> source, is not.
+        /// </summary>
+        public Action<string, FeatureResult> OnFeatureUsage { get; set; }
+
+        /// <summary>
         /// A repository implementation for retrieving and caching features that will override
         /// the default implementation. Optional.
         /// </summary>
@@ -195,6 +202,7 @@ namespace GrowthBook
                 SavedGroups = this.SavedGroups?.DeepClone() as JObject,
                 QaMode = this.QaMode,
                 TrackingCallback = this.TrackingCallback,
+                OnFeatureUsage = this.OnFeatureUsage,
                 FeatureRepository = this.FeatureRepository,
                 LoggerFactory = this.LoggerFactory,
                 CachePath = this.CachePath,

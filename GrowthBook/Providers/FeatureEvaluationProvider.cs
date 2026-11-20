@@ -1,10 +1,12 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using GrowthBook.Extensions;
 using GrowthBook.Evaluation;
 using GrowthBook.Utilities;
 using Microsoft.Extensions.Logging;
+using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
 namespace GrowthBook.Providers
@@ -24,7 +26,24 @@ namespace GrowthBook.Providers
 
         internal ExperimentEvaluationProvider ExperimentEvaluator { get; set; }
 
+        /// <summary>
+        /// Evaluates a feature, and reports its value to the feature usage callbacks, as <c>getFeatureResult</c> does in
+        /// the JavaScript SDK: prerequisites included, since they are evaluated through here too, and so are rules that force
+        /// a value. Only a value forced from outside the payload, with the <c>override</c> source, is left out.
+        /// </summary>
         public FeatureResult EvaluateFeature(string featureId, EvaluationContext context)
+        {
+            var result = EvaluateFeatureRules(featureId, context);
+
+            if (result.Source != FeatureResult.SourceId.Override)
+            {
+                ReportFeatureUsage(featureId, result, context);
+            }
+
+            return result;
+        }
+
+        private FeatureResult EvaluateFeatureRules(string featureId, EvaluationContext context)
         {
             try
             {
@@ -218,6 +237,95 @@ namespace GrowthBook.Providers
             {
                 _logger.LogWarning(ex, "Condition evaluation failed, treating the condition as not matching");
                 return false;
+            }
+        }
+
+        /// <summary>
+        /// Tells the feature usage callbacks a feature's value, unless it is the value last reported for that feature.
+        /// Each callback is guarded separately, so a throwing one changes neither the result nor the others.
+        /// </summary>
+        private void ReportFeatureUsage(string featureId, FeatureResult result, EvaluationContext context)
+        {
+            var global = context.Global.OnFeatureUsage;
+            var perUser = context.User.OnFeatureUsage;
+
+            if (global is null && perUser is null)
+            {
+                return;
+            }
+
+            var tracked = context.User.TrackedFeatureUsage;
+
+            if (tracked != null && !ClaimFeatureUsage(tracked, featureId, (result.Value ?? JValue.CreateNull()).ToString(Formatting.None)))
+            {
+                return;
+            }
+
+            if (global != null)
+            {
+                try
+                {
+                    global(featureId, result, context.User);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "The feature usage callback threw for feature '{FeatureId}'", featureId);
+                }
+            }
+
+            if (perUser != null)
+            {
+                try
+                {
+                    perUser(featureId, result);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "The per-request feature usage callback threw for feature '{FeatureId}'", featureId);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Records the value as reported, and says whether it is new. The check and the update are one step, so threads
+        /// evaluating the same feature at once report a value once: compare-and-swap on a concurrent dictionary, which the
+        /// hot path of a shared instance uses, and a lock on any other.
+        /// </summary>
+        private static bool ClaimFeatureUsage(IDictionary<string, string> tracked, string featureId, string value)
+        {
+            if (tracked is ConcurrentDictionary<string, string> concurrent)
+            {
+                while (true)
+                {
+                    if (concurrent.TryGetValue(featureId, out var previous))
+                    {
+                        if (previous == value)
+                        {
+                            return false;
+                        }
+
+                        if (concurrent.TryUpdate(featureId, value, previous))
+                        {
+                            return true;
+                        }
+                    }
+                    else if (concurrent.TryAdd(featureId, value))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            lock (tracked)
+            {
+                if (tracked.TryGetValue(featureId, out var previous) && previous == value)
+                {
+                    return false;
+                }
+
+                tracked[featureId] = value;
+
+                return true;
             }
         }
 
