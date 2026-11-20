@@ -129,14 +129,21 @@ namespace GrowthBook
         public IGrowthBookFeatureRepository FeatureRepository { get; set; }
 
         /// <summary>
+        /// A cache implementation that overrides the default <see cref="Api.InMemoryFeatureCache"/>.
+        /// Use this to provide a custom cache such as <see cref="Api.FileBasedFeatureCache"/> or a Redis-backed implementation. Optional.
+        /// </summary>
+        public IGrowthBookFeatureCache FeatureCache { get; set; }
+
+        /// <summary>
         /// A logger factory implementation that will enable logging throughout the SDK. Optional.
         /// </summary>
         public ILoggerFactory LoggerFactory { get; set; }
 
         /// <summary>
-        /// Custom cache directory path for cache manager. Optional.
-        /// Uses system temp directory if not specified.
+        /// Not used: the SDK never read it. To keep features on disk, pass the directory to
+        /// <see cref="Api.FileBasedFeatureCache"/> and set that as <see cref="FeatureCache"/>.
         /// </summary>
+        [Obsolete("Never read by the SDK. Pass the directory to FileBasedFeatureCache and set it as Context.FeatureCache instead.")]
         public string CachePath { get; set; }
 
         /// <summary>
@@ -196,8 +203,11 @@ namespace GrowthBook
                 QaMode = this.QaMode,
                 TrackingCallback = this.TrackingCallback,
                 FeatureRepository = this.FeatureRepository,
+                FeatureCache = this.FeatureCache,
                 LoggerFactory = this.LoggerFactory,
+#pragma warning disable CS0618 // Copied so that a clone still reads back what the caller set.
                 CachePath = this.CachePath,
+#pragma warning restore CS0618
                 RemoteEval = this.RemoteEval,
                 CacheKeyAttributes = this.CacheKeyAttributes?.ToArray(),
                 ForcedFeatures = this.ForcedFeatures
