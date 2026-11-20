@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using System.Linq;
 
 namespace GrowthBook
 {
@@ -28,5 +29,16 @@ namespace GrowthBook
         /// The attribute to use (defaults to "id").
         /// </summary>
         public string Attribute { get; set; } = "id";
+
+        /// <summary>
+        /// A copy that shares nothing mutable with this one, for handing to a plugin.
+        /// </summary>
+        internal Filter Copy()
+        {
+            var copy = (Filter)MemberwiseClone();
+            copy.Ranges = Ranges?.Select(range => range?.Copy()).ToArray();
+
+            return copy;
+        }
     }
 }

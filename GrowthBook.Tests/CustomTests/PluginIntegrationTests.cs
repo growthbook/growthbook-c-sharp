@@ -1,0 +1,662 @@
+// GrowthBookFactory is deprecated in favour of GrowthBookClient, and these exercise plugins shared through it on
+// purpose: it still ships and still has to work.
+#pragma warning disable CS0618
+using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
+using FluentAssertions;
+using GrowthBook.Plugin;
+using Microsoft.Extensions.Logging.Abstractions;
+using NSubstitute;
+using GrowthBookSdk = GrowthBook;
+using Newtonsoft.Json.Linq;
+using Xunit;
+
+namespace GrowthBook.Tests.CustomTests
+{
+    public class PluginIntegrationTests
+    {
+        private class RecordingPlugin : IGrowthBookPlugin, IExperimentViewedPlugin, IFeatureEvaluatedPlugin
+        {
+            public List<(Experiment Experiment, ExperimentResult Result)> Experiments { get; } = new List<(Experiment, ExperimentResult)>();
+            public List<(string Key, FeatureResult Result)> Features { get; } = new List<(string, FeatureResult)>();
+            public int InitCount;
+            public int CloseCount;
+
+            public void Init() => Interlocked.Increment(ref InitCount);
+            public void OnExperimentViewed(Experiment e, ExperimentResult r, JObject a) { lock (Experiments) Experiments.Add((e, r)); }
+            public void OnFeatureEvaluated(string k, FeatureResult r, JObject a) { lock (Features) Features.Add((k, r)); }
+            public void Close() => Interlocked.Increment(ref CloseCount);
+        }
+
+        private class ThrowingPlugin : IGrowthBookPlugin, IExperimentViewedPlugin, IFeatureEvaluatedPlugin
+        {
+            public void Init() { }
+            public void OnExperimentViewed(Experiment e, ExperimentResult r, JObject a) => throw new System.Exception("plugin error");
+            public void OnFeatureEvaluated(string k, FeatureResult r, JObject a) => throw new System.Exception("plugin error");
+            public void Close() { }
+        }
+
+        private static GrowthBookSdk.GrowthBook BuildGrowthBook(List<IGrowthBookPlugin> plugins)
+        {
+            return new GrowthBookSdk.GrowthBook(new Context
+            {
+                Enabled = true,
+                Attributes = new JObject { ["id"] = "u1", ["tier"] = "gold" },
+                Features = new Dictionary<string, Feature>
+                {
+                    ["flag-a"] = new Feature { DefaultValue = JToken.FromObject(true) },
+                    ["flag-b"] = new Feature { DefaultValue = JToken.FromObject("x") },
+                },
+                LoggerFactory = NullLoggerFactory.Instance,
+                Plugins = plugins,
+            });
+        }
+
+        [Fact]
+        public void PluginInitCalledOnConstruction()
+        {
+            var plugin = new RecordingPlugin();
+            using var gb = BuildGrowthBook(new List<IGrowthBookPlugin> { plugin });
+
+            plugin.InitCount.Should().Be(1, "Init() must be called exactly once on construction");
+        }
+
+        [Fact]
+        public void PluginObservesFeatureEvaluation()
+        {
+            var plugin = new RecordingPlugin();
+            using var gb = BuildGrowthBook(new List<IGrowthBookPlugin> { plugin });
+
+            gb.EvalFeature("flag-a");
+            gb.EvalFeature("flag-b");
+
+            plugin.Features.Should().HaveCountGreaterOrEqualTo(2);
+            plugin.Features.Should().Contain(f => f.Key == "flag-a");
+            plugin.Features.Should().Contain(f => f.Key == "flag-b");
+        }
+
+        [Fact]
+        public void PluginObservesExperimentViewed()
+        {
+            var plugin = new RecordingPlugin();
+            using var gb = new GrowthBookSdk.GrowthBook(new Context
+            {
+                Enabled = true,
+                Attributes = new JObject { ["id"] = "u1" },
+                Features = new Dictionary<string, Feature>
+                {
+                    ["flag-a"] = new Feature { DefaultValue = JToken.FromObject(true) },
+                },
+                LoggerFactory = NullLoggerFactory.Instance,
+                Plugins = new List<IGrowthBookPlugin> { plugin },
+                TrackingCallback = (e, r) => { },
+            });
+
+            var experiment = new Experiment
+            {
+                Key = "my-exp",
+                Variations = JArray.Parse("[\"A\", \"B\"]"),
+            };
+
+            var result = gb.Run(experiment);
+
+            if (result.InExperiment)
+                plugin.Experiments.Should().HaveCount(1, "plugin should see experiment event exactly once");
+        }
+
+        [Fact]
+        public void PluginCloseCalledOnDispose()
+        {
+            var plugin = new RecordingPlugin();
+            var gb = BuildGrowthBook(new List<IGrowthBookPlugin> { plugin });
+
+            gb.Dispose();
+
+            plugin.CloseCount.Should().Be(1, "Close() should fire when GrowthBook is disposed");
+        }
+
+        [Fact]
+        public void MultiplePluginsEachReceiveEvents()
+        {
+            var first = new RecordingPlugin();
+            var second = new RecordingPlugin();
+            using var gb = BuildGrowthBook(new List<IGrowthBookPlugin> { first, second });
+
+            gb.EvalFeature("flag-a");
+
+            first.Features.Should().HaveCountGreaterOrEqualTo(1);
+            second.Features.Count.Should().Be(first.Features.Count, "both plugins should receive the same number of events");
+        }
+
+        [Fact]
+        public void ThrowingPluginDoesNotBreakEvaluation()
+        {
+            var bad = new ThrowingPlugin();
+            using var gb = BuildGrowthBook(new List<IGrowthBookPlugin> { bad });
+
+            var result = gb.EvalFeature("flag-a");
+
+            result.On.Should().BeTrue("feature evaluation should succeed despite throwing plugin");
+        }
+
+        [Fact]
+        public void PluginReceivesFeatureEventWithoutTrackingCallback()
+        {
+            var plugin = new RecordingPlugin();
+            using var gb = new GrowthBookSdk.GrowthBook(new Context
+            {
+                Enabled = true,
+                Attributes = new JObject { ["id"] = "u1" },
+                Features = new Dictionary<string, Feature>
+                {
+                    ["flag-a"] = new Feature { DefaultValue = JToken.FromObject(true) },
+                },
+                LoggerFactory = NullLoggerFactory.Instance,
+                Plugins = new List<IGrowthBookPlugin> { plugin },
+                // No TrackingCallback, deliberately
+            });
+
+            gb.EvalFeature("flag-a");
+
+            plugin.Features.Should().Contain(f => f.Key == "flag-a",
+                "plugin should observe feature evaluation even without TrackingCallback");
+        }
+
+        [Fact]
+        public void AttributesArePassedToPlugin()
+        {
+            JObject receivedAttributes = null;
+            var plugin = new CapturingAttributesPlugin(attrs => receivedAttributes = attrs);
+
+            using var gb = BuildGrowthBook(new List<IGrowthBookPlugin> { plugin });
+            gb.EvalFeature("flag-a");
+
+            receivedAttributes.Should().NotBeNull();
+            receivedAttributes["id"]?.Value<string>().Should().Be("u1");
+            receivedAttributes["tier"]?.Value<string>().Should().Be("gold");
+        }
+
+        private class CapturingAttributesPlugin : IGrowthBookPlugin, IExperimentViewedPlugin, IFeatureEvaluatedPlugin
+        {
+            private readonly System.Action<JObject> _onFeature;
+            private readonly System.Action<JObject> _onExperiment;
+            public CapturingAttributesPlugin(System.Action<JObject> onFeature, System.Action<JObject> onExperiment = null)
+            {
+                _onFeature = onFeature;
+                _onExperiment = onExperiment;
+            }
+            public void Init() { }
+            public void OnExperimentViewed(Experiment e, ExperimentResult r, JObject a) => _onExperiment?.Invoke(a);
+            public void OnFeatureEvaluated(string k, FeatureResult r, JObject a) => _onFeature(a);
+            public void Close() { }
+        }
+
+        /// <summary>
+        /// A plugin is told about an evaluation with the attributes it was made with. The tracking callback below
+        /// replaces them midway, as another thread calling UpdateAttributes could, and both events used to carry
+        /// the new user's attributes with the old user's result.
+        /// </summary>
+        [Fact]
+        public void EventsCarryTheAttributesTheEvaluationUsed()
+        {
+            JObject featureAttributes = null;
+            JObject experimentAttributes = null;
+            var plugin = new CapturingAttributesPlugin(a => featureAttributes = a, a => experimentAttributes = a);
+            GrowthBookSdk.GrowthBook gb = null;
+
+            gb = new GrowthBookSdk.GrowthBook(new Context
+            {
+                Enabled = true,
+                Attributes = new JObject { ["id"] = "u1" },
+                Features = ForcedRuleWithTrack(),
+                LoggerFactory = NullLoggerFactory.Instance,
+                Plugins = new List<IGrowthBookPlugin> { plugin },
+                TrackingCallback = (e, r) => gb.UpdateAttributes(new Dictionary<string, object> { ["id"] = "u2" }),
+            });
+
+            using (gb)
+            {
+                gb.EvalFeature("flag-a");
+            }
+
+            experimentAttributes.Should().NotBeNull("the rule's track reached the plugin");
+            featureAttributes.Should().NotBeNull("the check reached the plugin");
+            experimentAttributes["id"].Value<string>().Should().Be("u1", "the rule was evaluated for u1");
+            featureAttributes["id"].Value<string>().Should().Be("u1", "the flag was evaluated for u1");
+        }
+
+        /// <summary>
+        /// An instance closes the plugins it was built with. A caller that refills the same list to configure
+        /// another instance afterwards used to have this one close the replacements and leave its own unflushed.
+        /// </summary>
+        [Fact]
+        public void ChangingThePluginListAfterwardsDoesNotChangeWhatTheInstanceCloses()
+        {
+            var original = new RecordingPlugin();
+            var replacement = new RecordingPlugin();
+            var plugins = new List<IGrowthBookPlugin> { original };
+
+            var gb = BuildGrowthBook(plugins);
+
+            plugins.Clear();
+            plugins.Add(replacement);
+
+            gb.Dispose();
+
+            original.CloseCount.Should().Be(1, "the instance was built with it");
+            replacement.CloseCount.Should().Be(0, "the instance never started it");
+        }
+
+        /// <summary>
+        /// What a plugin is told must not depend on which of the public ways of checking a flag the
+        /// caller happened to use.
+        /// </summary>
+        [Theory]
+        [InlineData("EvalFeature")]
+        [InlineData("GetFeatureValue")]
+        [InlineData("IsOn")]
+        [InlineData("IsOff")]
+        [InlineData("IsOnAsync")]
+        [InlineData("IsOffAsync")]
+        [InlineData("GetFeatureValueAsync")]
+        [InlineData("EvalFeatureAsync")]
+        public async Task EveryPublicFeatureCheckIsReportedExactlyOnce(string method)
+        {
+            var plugin = new RecordingPlugin();
+            using var gb = BuildGrowthBook(new List<IGrowthBookPlugin> { plugin });
+
+            switch (method)
+            {
+                case "EvalFeature": gb.EvalFeature("flag-a"); break;
+                case "GetFeatureValue": gb.GetFeatureValue("flag-a", false); break;
+                case "IsOn": gb.IsOn("flag-a"); break;
+                case "IsOff": gb.IsOff("flag-a"); break;
+                case "IsOnAsync": await gb.IsOnAsync("flag-a"); break;
+                case "IsOffAsync": await gb.IsOffAsync("flag-a"); break;
+                case "GetFeatureValueAsync": await gb.GetFeatureValueAsync("flag-a", false); break;
+                case "EvalFeatureAsync": await gb.EvalFeatureAsync("flag-a"); break;
+            }
+
+            plugin.Features.Should().HaveCount(1, $"{method} evaluates a feature, so it reports one")
+                .And.OnlyContain(f => f.Key == "flag-a");
+        }
+
+        /// <summary>
+        /// A prerequisite is evaluated on the way to an answer, not asked about. Reporting it would
+        /// describe work the caller never requested, and would double-count the flags that use one.
+        /// </summary>
+        [Fact]
+        public void APrerequisiteIsNotReportedAsItsOwnEvaluation()
+        {
+            var plugin = new RecordingPlugin();
+
+            using var gb = new GrowthBookSdk.GrowthBook(new Context
+            {
+                Enabled = true,
+                Attributes = new JObject { ["id"] = "u1" },
+                Features = new Dictionary<string, Feature>
+                {
+                    ["parent"] = new Feature { DefaultValue = JToken.FromObject(true) },
+                    ["child"] = new Feature
+                    {
+                        DefaultValue = JToken.FromObject(false),
+                        Rules = new List<FeatureRule>
+                        {
+                            new FeatureRule
+                            {
+                                ParentConditions = new List<ParentCondition>
+                                {
+                                    new ParentCondition { Id = "parent", Condition = JObject.Parse("{\"value\":true}") }
+                                },
+                                Force = JToken.FromObject(true),
+                            }
+                        }
+                    },
+                },
+                LoggerFactory = NullLoggerFactory.Instance,
+                Plugins = new List<IGrowthBookPlugin> { plugin },
+            });
+
+            gb.EvalFeature("child");
+
+            plugin.Features.Should().HaveCount(1, "one feature was asked about")
+                .And.OnlyContain(f => f.Key == "child");
+        }
+
+        /// <summary>
+        /// A context is cloned once per user by <see cref="GrowthBookFactory"/>, and the clone carries
+        /// the same plugin objects. Disposing one user must not close tracking for the others.
+        /// </summary>
+        [Fact]
+        public void DisposingOneUserDoesNotCloseAPluginTheOthersShare()
+        {
+            var plugin = new RecordingPlugin();
+
+            var shared = new Context
+            {
+                Enabled = true,
+                Attributes = new JObject { ["id"] = "u1" },
+                Features = new Dictionary<string, Feature>
+                {
+                    ["flag-a"] = new Feature { DefaultValue = JToken.FromObject(true) },
+                },
+                LoggerFactory = NullLoggerFactory.Instance,
+                Plugins = new List<IGrowthBookPlugin> { plugin },
+            };
+
+            var first = new GrowthBookSdk.GrowthBook(shared.Clone());
+            using var second = new GrowthBookSdk.GrowthBook(shared.Clone());
+
+            first.Dispose();
+
+            plugin.CloseCount.Should().Be(0, "the plugin belongs to the context that was cloned, not to one user");
+
+            second.EvalFeature("flag-a");
+
+            plugin.Features.Should().ContainSingle("and the users still running keep being tracked");
+        }
+
+        /// <summary>
+        /// The owner of the context still closes its plugins, otherwise nothing would ever flush them.
+        /// </summary>
+        [Fact]
+        public void TheInstanceBuiltFromTheOriginalContextStillClosesItsPlugins()
+        {
+            var plugin = new RecordingPlugin();
+            var gb = BuildGrowthBook(new List<IGrowthBookPlugin> { plugin });
+
+            gb.Dispose();
+
+            plugin.CloseCount.Should().Be(1);
+        }
+
+        /// <summary>
+        /// A consumer's callback throwing is their problem; the plugins were going to be told about the
+        /// same assignment and still must be.
+        /// </summary>
+        [Fact]
+        public void AThrowingTrackingCallbackDoesNotHideARuleTrackFromPlugins()
+        {
+            var plugin = new RecordingPlugin();
+
+            using var gb = new GrowthBookSdk.GrowthBook(new Context
+            {
+                Enabled = true,
+                Attributes = new JObject { ["id"] = "u1" },
+                TrackingCallback = (e, r) => throw new System.InvalidOperationException("the consumer's callback is broken"),
+                Features = ForcedRuleWithTrack(),
+                LoggerFactory = NullLoggerFactory.Instance,
+                Plugins = new List<IGrowthBookPlugin> { plugin },
+            });
+
+            gb.EvalFeature("flag-a");
+
+            plugin.Experiments.Should().ContainSingle(e => e.Experiment.Key == "exp-1",
+                "the plugin event is dispatched whatever the legacy callback did");
+        }
+
+        /// <summary>
+        /// A forced rule matches on every evaluation, but the assignment it carries is one assignment,
+        /// and a plugin is promised one call per distinct assignment.
+        /// </summary>
+        [Fact]
+        public void AForcedRuleTrackIsReportedOnceHoweverOftenTheFlagIsChecked()
+        {
+            var plugin = new RecordingPlugin();
+            var callbacks = 0;
+
+            using var gb = new GrowthBookSdk.GrowthBook(new Context
+            {
+                Enabled = true,
+                Attributes = new JObject { ["id"] = "u1" },
+                TrackingCallback = (e, r) => callbacks++,
+                Features = ForcedRuleWithTrack(),
+                LoggerFactory = NullLoggerFactory.Instance,
+                Plugins = new List<IGrowthBookPlugin> { plugin },
+            });
+
+            for (var i = 0; i < 3; i++)
+            {
+                gb.EvalFeature("flag-a").Value.Value<bool>().Should().BeTrue("the forced value is still returned every time");
+            }
+
+            plugin.Experiments.Should().ContainSingle(e => e.Experiment.Key == "exp-1", "three checks, one assignment");
+            callbacks.Should().Be(1, "the callback gets the same guard, as in the JavaScript SDK");
+        }
+
+        private static Dictionary<string, Feature> ForcedRuleWithTrack() => new Dictionary<string, Feature>
+        {
+            ["flag-a"] = new Feature
+            {
+                DefaultValue = JToken.FromObject(false),
+                Rules = new List<FeatureRule>
+                {
+                    new FeatureRule
+                    {
+                        Force = JToken.FromObject(true),
+                        Tracks = new List<TrackData>
+                        {
+                            new TrackData
+                            {
+                                Experiment = new Experiment { Key = "exp-1" },
+                                Result = new ExperimentResult { VariationId = 1, HashAttribute = "id", HashValue = "u1" }
+                            }
+                        }
+                    }
+                }
+            },
+        };
+
+        /// <summary>
+        /// A constructor that throws returns nothing to dispose. Plugins started before the failure would
+        /// keep running with nobody left to close them.
+        /// </summary>
+        [Fact]
+        public void AConstructorThatFailsStartsNoPlugins()
+        {
+            var plugin = new RecordingPlugin();
+
+            var build = () => new GrowthBookSdk.GrowthBook(new Context
+            {
+                // Encrypted features without a key to decrypt them with: the constructor refuses them.
+                EncryptedFeatures = "encrypted-payload",
+                LoggerFactory = NullLoggerFactory.Instance,
+                Plugins = new List<IGrowthBookPlugin> { plugin },
+            });
+
+            build.Should().Throw<System.ArgumentException>();
+
+            plugin.InitCount.Should().Be(0, "nothing was started that nothing could close");
+        }
+
+        /// <summary>
+        /// Every instance a factory creates is built from a clone, and none of them closes the plugins
+        /// they share. The factory does, once, when it is disposed.
+        /// </summary>
+        [Fact]
+        public void DisposingTheFactoryClosesThePluginsItsUsersShared()
+        {
+            var plugin = new RecordingPlugin();
+
+            var factory = new GrowthBookFactory(new Context
+            {
+                Features = new Dictionary<string, Feature>
+                {
+                    ["flag-a"] = new Feature { DefaultValue = JToken.FromObject(true) },
+                },
+                LoggerFactory = NullLoggerFactory.Instance,
+                Plugins = new List<IGrowthBookPlugin> { plugin },
+            });
+
+            using (factory.CreateForUser(new { id = "u1" })) { }
+            using (factory.CreateForUser(new { id = "u2" })) { }
+
+            plugin.CloseCount.Should().Be(0, "users come and go; the plugin outlives them");
+
+            factory.Dispose();
+            factory.Dispose();
+
+            plugin.CloseCount.Should().Be(1, "the factory closes what it was given, and only once");
+        }
+
+        /// <summary>
+        /// The attributes handed to a plugin are a copy. A plugin is a bystander, and one that writes to
+        /// what it was given would change the answers every later evaluation gives.
+        /// </summary>
+        [Fact]
+        public void APluginCannotChangeTheAttributesEvaluationUses()
+        {
+            var plugin = new CapturingAttributesPlugin(attrs => attrs["tier"] = "platinum");
+
+            using var gb = BuildGrowthBook(new List<IGrowthBookPlugin> { plugin });
+
+            gb.EvalFeature("flag-a");
+
+            gb.Attributes["tier"]?.Value<string>().Should().Be("gold",
+                "the plugin was given a copy, so writing to it changed nothing here");
+        }
+
+        /// <summary>
+        /// A plugin is handed a copy of the result. One that writes to it changes neither what the caller is
+        /// answered nor what the plugins after it are told.
+        /// </summary>
+        [Fact]
+        public void APluginCannotChangeTheAnswerTheCallerGets()
+        {
+            var recording = new RecordingPlugin();
+
+            using var gb = BuildGrowthBook(new List<IGrowthBookPlugin> { new RewritingPlugin(), recording });
+
+            var result = gb.EvalFeature("flag-b");
+
+            result.Value.ToString().Should().Be("x", "the plugin rewrote its own copy of the result");
+            recording.Features.Should().ContainSingle().Which.Item2.Value.ToString().Should().Be("x", "the next plugin is told the evaluated value");
+        }
+
+        /// <summary>
+        /// The same for an experiment: the experiment and the result a plugin is told about are copies.
+        /// </summary>
+        [Fact]
+        public void APluginCannotChangeTheExperimentOrItsResult()
+        {
+            var rewriting = new RewritingPlugin();
+
+            using var gb = new GrowthBookSdk.GrowthBook(new Context
+            {
+                Enabled = true,
+                Attributes = new JObject { ["id"] = "u1" },
+                LoggerFactory = NullLoggerFactory.Instance,
+                Plugins = new List<IGrowthBookPlugin> { rewriting },
+            });
+
+            var experiment = new Experiment { Key = "my-exp", Variations = JArray.Parse("[\"A\", \"B\"]") };
+            var result = gb.Run(experiment);
+
+            rewriting.ExperimentsSeen.Should().Be(1, "the plugin has to have been told, for this to show anything");
+            experiment.Variations.ToString(Newtonsoft.Json.Formatting.None).Should().Be("[\"A\",\"B\"]");
+            result.Value.ToString().Should().BeOneOf("A", "B");
+        }
+
+        /// <summary>
+        /// Ownership is per plugin. A plugin swapped into or added to a clone's list was never shared, so the instance
+        /// built from that clone closes it; the plugins that came from the original stay open.
+        /// </summary>
+        [Theory]
+        [InlineData(true)]
+        [InlineData(false)]
+        public void APluginPutOnACloneIsClosedWithIt(bool replaceTheList)
+        {
+            var fromOriginal = new RecordingPlugin();
+            var ownOfTheClone = new RecordingPlugin();
+
+            var original = new Context
+            {
+                Enabled = true,
+                Attributes = new JObject { ["id"] = "u1" },
+                LoggerFactory = NullLoggerFactory.Instance,
+                Plugins = new List<IGrowthBookPlugin> { fromOriginal },
+            };
+
+            var clone = original.Clone();
+
+            if (replaceTheList)
+            {
+                clone.Plugins = new List<IGrowthBookPlugin> { ownOfTheClone };
+            }
+            else
+            {
+                clone.Plugins.Add(ownOfTheClone);
+            }
+
+            new GrowthBookSdk.GrowthBook(clone).Dispose();
+
+            ownOfTheClone.CloseCount.Should().Be(1, "nothing else holds a plugin put on the clone");
+            fromOriginal.CloseCount.Should().Be(0, "the original's plugin is still shared with it");
+        }
+
+        private class RewritingPlugin : IGrowthBookPlugin, IExperimentViewedPlugin, IFeatureEvaluatedPlugin
+        {
+            public int ExperimentsSeen;
+
+            public void Init() { }
+
+            public void OnExperimentViewed(Experiment e, ExperimentResult r, JObject a)
+            {
+                Interlocked.Increment(ref ExperimentsSeen);
+                e.Variations = new JArray("rewritten");
+                r.Value = "rewritten";
+            }
+
+            public void OnFeatureEvaluated(string k, FeatureResult r, JObject a) => r.Value = "rewritten";
+
+            public void Close() { }
+        }
+
+        /// <summary>
+        /// With nothing to report an assignment to, it must not be recorded as reported. The mark is
+        /// shared through the feature repository, so a later instance that does have a callback would
+        /// find the key already there and stay silent about an assignment nobody ever heard.
+        /// </summary>
+        [Fact]
+        public void AnAssignmentNobodyIsListeningForIsNotMarkedAsTracked()
+        {
+            var repository = Substitute.For<IGrowthBookFeatureRepository>();
+
+            using var gb = new GrowthBookSdk.GrowthBook(new Context
+            {
+                Enabled = true,
+                Attributes = new JObject { ["id"] = "u1" },
+                Features = new Dictionary<string, Feature>(),
+                LoggerFactory = NullLoggerFactory.Instance,
+                FeatureRepository = repository,
+                // No TrackingCallback and no plugins: nothing would hear about this assignment.
+            });
+
+            gb.Run(new Experiment { Key = "exp-1", Variations = new JArray(0, 1) });
+
+            repository.DidNotReceive().TryMarkAsTracked(Arg.Any<string>());
+        }
+
+        [Fact]
+        public void AnAssignmentAPluginIsListeningForIsMarkedAsTracked()
+        {
+            var repository = Substitute.For<IGrowthBookFeatureRepository>();
+            repository.TryMarkAsTracked(Arg.Any<string>()).Returns(true);
+
+            using var gb = new GrowthBookSdk.GrowthBook(new Context
+            {
+                Enabled = true,
+                Attributes = new JObject { ["id"] = "u1" },
+                Features = new Dictionary<string, Feature>(),
+                LoggerFactory = NullLoggerFactory.Instance,
+                FeatureRepository = repository,
+                Plugins = new List<IGrowthBookPlugin> { new RecordingPlugin() },
+            });
+
+            gb.Run(new Experiment { Key = "exp-1", Variations = new JArray(0, 1) });
+
+            repository.Received().TryMarkAsTracked(Arg.Any<string>());
+        }
+    }
+}
