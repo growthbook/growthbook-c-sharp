@@ -443,6 +443,129 @@ public class GrowthBookClientTests
         result.FeatureCount.Should().Be(CreateFeatures().Count);
     }
 
+    /// <summary>
+    /// A repository that relays refreshes pushes them into the client, as it does into GrowthBook instances, so a
+    /// client sharing it sees new definitions without loading them itself.
+    /// </summary>
+    [Fact]
+    public async Task AClientReceivesTheRefreshesItsRepositoryRelays()
+    {
+        var repository = new RelayingRepository(FlagSet(false));
+
+        using var client = new GrowthBookClient(new Options { LoggerFactory = NullLoggerFactory.Instance, FeatureRepository = repository });
+        await client.InitializeAsync();
+
+        repository.Push(1, FlagSet(true));
+
+        client.IsOn("flag", new UserContext()).Should().BeTrue("the relayed refresh is newer than what the client loaded");
+    }
+
+    /// <summary>
+    /// Relayed refreshes can overtake each other on the way. One older than a refresh already installed is dropped.
+    /// </summary>
+    [Fact]
+    public async Task AnOlderRefreshRelayedLastIsDropped()
+    {
+        var repository = new RelayingRepository(FlagSet(false));
+
+        using var client = new GrowthBookClient(new Options { LoggerFactory = NullLoggerFactory.Instance, FeatureRepository = repository });
+        await client.InitializeAsync();
+
+        repository.Push(2, FlagSet(true));
+        repository.Push(1, FlagSet(false));
+
+        client.IsOn("flag", new UserContext()).Should().BeTrue("the refresh at version 1 is older than the one already installed");
+    }
+
+    [Fact]
+    public void DisposingTheClientStopsTheRelay()
+    {
+        var repository = new RelayingRepository(FlagSet(false));
+
+        new GrowthBookClient(new Options { LoggerFactory = NullLoggerFactory.Instance, FeatureRepository = repository }).Dispose();
+
+        repository.Subscribers.Should().Be(0, "a disposed client must not stay subscribed to a repository it does not own");
+    }
+
+    private static IDictionary<string, Feature> FlagSet(bool on) =>
+        new Dictionary<string, Feature> { ["flag"] = new Feature { DefaultValue = JToken.FromObject(on) } };
+
+    private sealed class RelayingRepository : IGrowthBookFeatureRepository, global::GrowthBook.Api.IFeatureRefreshSource
+    {
+        private readonly List<Action<global::GrowthBook.Api.FeatureRefresh>> _handlers = new List<Action<global::GrowthBook.Api.FeatureRefresh>>();
+        private readonly IDictionary<string, Feature> _initial;
+
+        public RelayingRepository(IDictionary<string, Feature> initial) => _initial = initial;
+
+        public int Subscribers
+        {
+            get
+            {
+                lock (_handlers)
+                {
+                    return _handlers.Count;
+                }
+            }
+        }
+
+        public void Push(long version, IDictionary<string, Feature> features)
+        {
+            Action<global::GrowthBook.Api.FeatureRefresh>[] handlers;
+
+            lock (_handlers)
+            {
+                handlers = _handlers.ToArray();
+            }
+
+            foreach (var handler in handlers)
+            {
+                handler(new global::GrowthBook.Api.FeatureRefresh(version, features));
+            }
+        }
+
+        public IDisposable SubscribeToRefresh(Action<global::GrowthBook.Api.FeatureRefresh> handler)
+        {
+            lock (_handlers)
+            {
+                _handlers.Add(handler);
+            }
+
+            return new Unsubscriber(() =>
+            {
+                lock (_handlers)
+                {
+                    _handlers.Remove(handler);
+                }
+            });
+        }
+
+        public Task<IDictionary<string, Feature>> GetFeatures(GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null) =>
+            Task.FromResult(_initial);
+
+        public Task<IDictionary<string, Feature>> GetFeaturesWithContext(Context context, GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null) =>
+            Task.FromResult(_initial);
+
+        public void Cancel() { }
+        public bool HasIdenticalAssignment(string experimentKey, ExperimentAssignment assignment) => false;
+        public void RecordAssignment(string experimentKey, ExperimentAssignment assignment) { }
+        public bool IsAlreadyTracked(string trackingKey) => false;
+        public void MarkAsTracked(string trackingKey) { }
+        public bool TryMarkAsTracked(string trackingKey) => true;
+
+        private sealed class Unsubscriber : IDisposable
+        {
+            private Action _unsubscribe;
+
+            public Unsubscriber(Action unsubscribe) => _unsubscribe = unsubscribe;
+
+            public void Dispose()
+            {
+                _unsubscribe?.Invoke();
+                _unsubscribe = null;
+            }
+        }
+    }
+
     [Fact]
     public async Task GetFeatures_ReturnsLoadedFeatures()
     {
