@@ -92,6 +92,13 @@ namespace GrowthBook.Plugin
         [JsonIgnore]
         internal string DedupeKey { get; set; }
 
+        /// <summary>
+        /// Which occurrence of <see cref="DedupeKey"/> this event is, so forgetting it after a failed send cannot
+        /// forget a later occurrence that is still queued. Not sent.
+        /// </summary>
+        [JsonIgnore]
+        internal long DedupeOccurrence { get; set; }
+
         private TrackingEvent() {}
 
         /// <summary>

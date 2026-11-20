@@ -851,6 +851,37 @@ namespace GrowthBook.Tests.CustomTests
         }
 
         /// <summary>
+        /// A failed send forgets its events so they can be sent again, but only the occurrences it carried. With a
+        /// one-entry cache, "a" is evicted by "b" and seen again while the first send hangs, so the cache's entry for
+        /// "a" belongs to the second occurrence, which is queued behind it and delivered.
+        /// </summary>
+        [Fact]
+        public void AFailedSendDoesNotForgetALaterOccurrenceStillQueued()
+        {
+            using var gate = new ManualResetEventSlim(false);
+            var handler = new GatedFailsFirstHandler(gate);
+            var plugin = NewPlugin(handler, c =>
+            {
+                c.BatchSize = 1;
+                c.DedupeCacheSize = 1;
+            });
+
+            plugin.OnFeatureEvaluated("a", MakeFeatureResult(), null);
+            SpinWait.SpinUntil(() => handler.Attempts >= 1, TimeSpan.FromSeconds(5)).Should().BeTrue("the first send is under way");
+
+            plugin.OnFeatureEvaluated("b", MakeFeatureResult(), null);
+            plugin.OnFeatureEvaluated("a", MakeFeatureResult(), null);
+
+            gate.Set();
+            SpinWait.SpinUntil(() => handler.Attempts >= 3, TimeSpan.FromSeconds(5)).Should().BeTrue("all three batches are sent");
+
+            plugin.OnFeatureEvaluated("a", MakeFeatureResult(), null);
+            plugin.Close();
+
+            handler.Delivered("a").Should().Be(1, "the second \"a\" was delivered, so the third is a repeat");
+        }
+
+        /// <summary>
         /// A factory shares one plugin between its users. Two of them seeing the same value are two facts,
         /// not one fact and a repeat.
         /// </summary>
@@ -1000,6 +1031,41 @@ namespace GrowthBook.Tests.CustomTests
                 var events = JArray.Parse(await request.Content.ReadAsStringAsync());
 
                 _gate.Wait(TimeSpan.FromSeconds(10));
+
+                lock (_features) _features.AddRange(events.Select(e => e["properties_json"]?["feature"]?.Value<string>()));
+
+                return new HttpResponseMessage(HttpStatusCode.OK);
+            }
+        }
+
+        /// <summary>
+        /// Holds the first send until the gate opens and then fails it, and counts the features every later send delivered.
+        /// </summary>
+        private sealed class GatedFailsFirstHandler : HttpMessageHandler
+        {
+            private readonly ManualResetEventSlim _gate;
+            private readonly List<string> _features = new List<string>();
+            private int _attempts;
+
+            public GatedFailsFirstHandler(ManualResetEventSlim gate) => _gate = gate;
+
+            public int Attempts => Volatile.Read(ref _attempts);
+
+            public int Delivered(string feature)
+            {
+                lock (_features) return _features.Count(delivered => delivered == feature);
+            }
+
+            protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            {
+                var events = JArray.Parse(await request.Content.ReadAsStringAsync());
+
+                if (Interlocked.Increment(ref _attempts) == 1)
+                {
+                    _gate.Wait(TimeSpan.FromSeconds(10));
+
+                    return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+                }
 
                 lock (_features) _features.AddRange(events.Select(e => e["properties_json"]?["feature"]?.Value<string>()));
 

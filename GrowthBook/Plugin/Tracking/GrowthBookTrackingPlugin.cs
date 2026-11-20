@@ -39,8 +39,9 @@ namespace GrowthBook.Plugin
         /// <summary>
         /// The events sent recently, and the order they were last seen in, for deduplication.
         /// </summary>
-        private readonly Dictionary<string, LinkedListNode<string>> _recentEvents = new Dictionary<string, LinkedListNode<string>>();
+        private readonly Dictionary<string, (LinkedListNode<string> Node, long Occurrence)> _recentEvents = new Dictionary<string, (LinkedListNode<string> Node, long Occurrence)>();
         private readonly LinkedList<string> _recentEventOrder = new LinkedList<string>();
+        private long _occurrences;
 
         private Timer _timer;
         private bool _closed;
@@ -166,7 +167,7 @@ namespace GrowthBook.Plugin
                     return;
                 }
 
-                if (IsRecentlySeen(trackingEvent.DedupeKey))
+                if (IsRecentlySeen(trackingEvent))
                 {
                     return;
                 }
@@ -227,7 +228,7 @@ namespace GrowthBook.Plugin
                 // its entry fresh, so a hot flag first seen while the queue was full would never be sent.
                 foreach (var dropped in batch)
                 {
-                    Forget(dropped.DedupeKey);
+                    Forget(dropped);
                 }
 
                 return;
@@ -266,7 +267,7 @@ namespace GrowthBook.Plugin
                             {
                                 foreach (var failed in batch)
                                 {
-                                    Forget(failed.DedupeKey);
+                                    Forget(failed);
                                 }
                             }
                         }
@@ -327,17 +328,20 @@ namespace GrowthBook.Plugin
         /// one-off events still evicts the oldest first.
         /// </para>
         /// </remarks>
-        private bool IsRecentlySeen(string dedupeKey)
+        private bool IsRecentlySeen(TrackingEvent trackingEvent)
         {
+            var dedupeKey = trackingEvent.DedupeKey;
+
             if (_recentEvents.TryGetValue(dedupeKey, out var existing))
             {
-                _recentEventOrder.Remove(existing);
-                _recentEvents[dedupeKey] = _recentEventOrder.AddLast(dedupeKey);
+                _recentEventOrder.Remove(existing.Node);
+                _recentEvents[dedupeKey] = (_recentEventOrder.AddLast(dedupeKey), existing.Occurrence);
 
                 return true;
             }
 
-            _recentEvents[dedupeKey] = _recentEventOrder.AddLast(dedupeKey);
+            trackingEvent.DedupeOccurrence = ++_occurrences;
+            _recentEvents[dedupeKey] = (_recentEventOrder.AddLast(dedupeKey), trackingEvent.DedupeOccurrence);
 
             while (_recentEvents.Count > _config.ResolvedDedupeCacheSize())
             {
@@ -351,13 +355,18 @@ namespace GrowthBook.Plugin
         }
 
         /// <summary>
-        /// Removes an event from the recently-seen cache. Must be called while holding <see cref="_lock"/>.
+        /// Removes an event from the recently-seen cache, unless the entry now belongs to a later occurrence of
+        /// the same event. Must be called while holding <see cref="_lock"/>.
         /// </summary>
-        private void Forget(string dedupeKey)
+        private void Forget(TrackingEvent trackingEvent)
         {
-            if (dedupeKey != null && _recentEvents.TryGetValue(dedupeKey, out var node))
+            var dedupeKey = trackingEvent.DedupeKey;
+
+            if (dedupeKey != null
+                && _recentEvents.TryGetValue(dedupeKey, out var entry)
+                && entry.Occurrence == trackingEvent.DedupeOccurrence)
             {
-                _recentEventOrder.Remove(node);
+                _recentEventOrder.Remove(entry.Node);
                 _recentEvents.Remove(dedupeKey);
             }
         }
