@@ -11,7 +11,7 @@ namespace GrowthBook.Api
     /// <summary>
     /// Represents a simple in-memory cache for GrowthBook features.
     /// </summary>
-    public class InMemoryFeatureCache : IGrowthBookFeatureCache
+    public class InMemoryFeatureCache : IGrowthBookFeatureCache, IGrowthBookPayloadCache
     {
         // We're providing a lock and locking around every operation within this cache
         // because this is an in-memory cache and may be accessed by multiple threads
@@ -23,6 +23,7 @@ namespace GrowthBook.Api
 
         private readonly object _cacheLock = new object();
         private IDictionary<string, Feature> _cachedFeatures = new Dictionary<string, Feature>();
+        private IDictionary<string, ContextualBanditDefinition> _cachedContextualBandits;
         private readonly int _cacheExpirationInSeconds;
         private readonly Func<DateTime> _utcNow;
         private DateTime _nextCacheExpiration;
@@ -83,6 +84,37 @@ namespace GrowthBook.Api
             lock(_cacheLock)
             {
                 _cachedFeatures = new Dictionary<string, Feature>(features);
+
+                // A refresh that carries features alone says nothing about the definitions that belong beside them,
+                // so keeping the previous ones would pair these features with another payload's weights - exactly
+                // what storing the pair exists to prevent.
+                _cachedContextualBandits = null;
+                _nextCacheExpiration = _utcNow().AddSeconds(_cacheExpirationInSeconds);
+
+                return Task.CompletedTask;
+            }
+        }
+
+        public Task<FeaturePayload> GetPayload(CancellationToken? cancellationToken = null)
+        {
+            lock (_cacheLock)
+            {
+                return Task.FromResult(new FeaturePayload(
+                    new Dictionary<string, Feature>(_cachedFeatures),
+                    _cachedContextualBandits is null
+                        ? null
+                        : new Dictionary<string, ContextualBanditDefinition>(_cachedContextualBandits)));
+            }
+        }
+
+        public Task RefreshWith(FeaturePayload payload, CancellationToken? cancellationToken = null)
+        {
+            lock (_cacheLock)
+            {
+                _cachedFeatures = new Dictionary<string, Feature>(payload.Features);
+                _cachedContextualBandits = payload.ContextualBandits is null
+                    ? null
+                    : new Dictionary<string, ContextualBanditDefinition>(payload.ContextualBandits);
                 _nextCacheExpiration = _utcNow().AddSeconds(_cacheExpirationInSeconds);
 
                 return Task.CompletedTask;

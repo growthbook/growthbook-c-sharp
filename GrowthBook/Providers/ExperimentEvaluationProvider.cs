@@ -240,6 +240,11 @@ namespace GrowthBook.Providers
             _logger.LogInformation("Participation in experiment with key \'{ExperimentKey}\' is allowed, running the experiment", experiment.Key);
             var result = GetExperimentResult(experiment, context, assignedBucket, true, featureId, hash, foundStickyBucket);
 
+            // Attributed here rather than by the caller, because the tracking callback fires below and would
+            // otherwise be handed an exposure whose bandit fields are all null. This is the only path that
+            // tracks, and reaching it means the user was really bucketed on the bandit's weights.
+            AttributeContextualBandit(experiment, result);
+
             // 13.5 Store the value for later if sticky bucketing is enabled.
 
             if (context.Global.StickyBucketService != null && !experiment.DisableStickyBucketing)
@@ -301,6 +306,27 @@ namespace GrowthBook.Providers
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// Records which bandit leaf an exposure was bucketed on, so that tracking carries it.
+        /// </summary>
+        /// <remarks>
+        /// A variation restored from a sticky bucket was not chosen by the leaf selected now, and the leaf that did
+        /// choose it is not stored anywhere. Naming the current one would report weights that could not have produced
+        /// the saved variation - weights of [1, 0] beside a recorded treatment - so a reused assignment carries no
+        /// bandit details rather than borrowed ones.
+        /// </remarks>
+        private static void AttributeContextualBandit(Experiment experiment, ExperimentResult result)
+        {
+            if (experiment.ContextualBandit is null || !result.HashUsed || !result.InExperiment || result.StickyBucketUsed)
+            {
+                return;
+            }
+
+            result.LeafId = experiment.ContextualBandit.LeafId;
+            result.VariationWeights = experiment.ContextualBandit.VariationWeights;
+            result.BanditVersion = experiment.ContextualBandit.BanditVersion;
         }
 
         /// <summary>

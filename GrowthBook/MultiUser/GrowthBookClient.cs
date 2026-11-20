@@ -29,7 +29,7 @@ namespace GrowthBook.MultiUser
         private readonly ILoggerFactory _loggerFactory;
         private readonly bool _ownsLoggerFactory;
         private readonly bool _ownsRepository;
-        private volatile IDictionary<string, Feature> _currentFeatures = new Dictionary<string, Feature>();
+        private volatile FeaturePayload _current = new FeaturePayload(new Dictionary<string, Feature>(), null);
 
         /// <summary>
         /// Orders the feature sets. Refreshes overlap, and one that started earlier carries older
@@ -80,7 +80,7 @@ namespace GrowthBook.MultiUser
             }
             else
             {
-                _repository = CreateRepository(options, _loggerFactory, PublishStreamedFeatures);
+                _repository = CreateRepository(options, _loggerFactory, PublishStreamedPayload);
                 _ownsRepository = true;
             }
         }
@@ -99,16 +99,16 @@ namespace GrowthBook.MultiUser
             // A refresh started here is waited for, since nothing else installs its response. A repository of the
             // caller's own is asked as before.
             var retrievalOptions = _ownsRepository ? new GrowthBookRetrievalOptions { WaitForCompletion = true } : null;
-            var features = await _repository.GetFeatures(retrievalOptions, ct);
+            var payload = await RetrievePayload(retrievalOptions, ct).ConfigureAwait(false);
 
-            if (features == null)
+            if (payload?.Features == null)
             {
                 return FeatureLoadResult.CreateFailure("The feature repository returned no features");
             }
 
-            PublishFeatures(features, sequence);
+            PublishPayload(payload, sequence);
 
-            return FeatureLoadResult.CreateSuccess(features.Count);
+            return FeatureLoadResult.CreateSuccess(payload.Features.Count);
         }
 
         /// <summary>
@@ -121,17 +121,17 @@ namespace GrowthBook.MultiUser
         public async Task<FeatureLoadResult> RefreshFeaturesAsync(CancellationToken ct = default)
         {
             var sequence = Interlocked.Increment(ref _refreshSequence);
-            var features = await _repository.GetFeatures(
-                new GrowthBookRetrievalOptions { ForceRefresh = true, WaitForCompletion = true}, ct);
+            var payload = await RetrievePayload(
+                new GrowthBookRetrievalOptions { ForceRefresh = true, WaitForCompletion = true}, ct).ConfigureAwait(false);
 
-            if (features == null)
+            if (payload?.Features == null)
             {
                 return FeatureLoadResult.CreateFailure("The feature repository returned no features");
             }
 
-            PublishFeatures(features, sequence);
+            PublishPayload(payload, sequence);
 
-            return FeatureLoadResult.CreateSuccess(features.Count);
+            return FeatureLoadResult.CreateSuccess(payload.Features.Count);
         }
 
         /// <summary>
@@ -170,7 +170,7 @@ namespace GrowthBook.MultiUser
         /// </summary>
         public IDictionary<string, Feature> GetFeatures()
         {
-            var features = _currentFeatures;
+            var features = _current.Features;
 
             if (features == null)
             {
@@ -243,11 +243,29 @@ namespace GrowthBook.MultiUser
         }
 
         /// <summary>
-        /// Installs a refreshed feature set unless a later refresh has already published one.
+        /// Retrieves the features with the bandit definitions they were published with, or the features alone from a
+        /// repository that does not supply the pair.
         /// </summary>
-        private void PublishFeatures(IDictionary<string, Feature> features, long sequence)
+        private async Task<FeaturePayload> RetrievePayload(GrowthBookRetrievalOptions options, CancellationToken ct)
         {
-            if (features == null)
+            if (_repository is IGrowthBookContextualBanditSource source)
+            {
+                return await source.GetPayload(options, ct).ConfigureAwait(false);
+            }
+
+            var features = await _repository.GetFeatures(options, ct).ConfigureAwait(false);
+
+            return features is null ? null : new FeaturePayload(features, null);
+        }
+
+        /// <summary>
+        /// Installs a refreshed payload unless a later refresh has already published one. The features and the bandit
+        /// definitions are installed as one reference, so no evaluation sees one payload's rules beside another's
+        /// weights.
+        /// </summary>
+        private void PublishPayload(FeaturePayload payload, long sequence)
+        {
+            if (payload?.Features == null)
             {
                 return;
             }
@@ -260,26 +278,29 @@ namespace GrowthBook.MultiUser
                 }
 
                 _publishedRefresh = sequence;
-                _currentFeatures = features;
+                _current = payload;
             }
         }
 
         /// <summary>
-        /// Installs features a server-sent event delivered. Sequenced when they arrive, so a refresh started
-        /// earlier and answered later cannot replace them.
+        /// Installs a payload a server-sent event delivered. Sequenced when it arrives, so a refresh started
+        /// earlier and answered later cannot replace it.
         /// </summary>
-        private void PublishStreamedFeatures(IDictionary<string, Feature> features) =>
-            PublishFeatures(features, Interlocked.Increment(ref _refreshSequence));
+        private void PublishStreamedPayload(FeaturePayload payload) =>
+            PublishPayload(payload, Interlocked.Increment(ref _refreshSequence));
 
         private EvaluationContext BuildEvaluationContext(UserContext userContext, Experiment experiment = null)
         {
             var stickyBucketService = userContext?.StickyBucketService ?? _options.StickyBucketService;
             var stickyBucketDocs = userContext?.StickyBucketAssignmentDocs;
-            var features = _currentFeatures;
+            var current = _current;
+            var features = current.Features;
 
             var global = new GlobalContext
             {
                 Features = features,
+                ContextualBandits = _options.ContextualBandits,
+                PayloadContextualBandits = current.ContextualBandits,
                 Enabled = _options.Enabled,
                 QaMode = _options.QaMode,
                 TrackingCallback = _options.TrackingCallback,
@@ -330,7 +351,7 @@ namespace GrowthBook.MultiUser
             return context;
         }
 
-        private static IGrowthBookFeatureRepository CreateRepository(Options options, ILoggerFactory loggerFactory, Action<IDictionary<string, Feature>> onFeaturesStreamed)
+        private static IGrowthBookFeatureRepository CreateRepository(Options options, ILoggerFactory loggerFactory, Action<FeaturePayload> onFeaturesStreamed)
         {
             var config = new GrowthBookConfigurationOptions
             {

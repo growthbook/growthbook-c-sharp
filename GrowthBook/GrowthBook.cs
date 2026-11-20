@@ -39,6 +39,8 @@ namespace GrowthBook
         private readonly IDictionary<string, StickyAssignmentsDocument> _stickyBucketAssignmentDocs;
         private readonly ILogger<GrowthBook> _logger;
         private readonly JObject _savedGroups;
+        private readonly IDictionary<string, ContextualBanditDefinition> _contextContextualBandits;
+        private FeaturePayload _loaded = new FeaturePayload(new Dictionary<string, Feature>(), null);
         private readonly ILoggerFactory _loggerFactory;
         private readonly bool _ownsLoggerFactory;
         private readonly Context _context;
@@ -80,6 +82,7 @@ namespace GrowthBook
                 ? new ConcurrentDictionary<string, StickyAssignmentsDocument>()
                 : new ConcurrentDictionary<string, StickyAssignmentsDocument>(context.StickyBucketAssignmentDocs);
             _savedGroups = context.SavedGroups;
+            _contextContextualBandits = context.ContextualBandits;
             _previousAttributes = context.Attributes?.DeepClone() as JObject;
             _previousForcedVariations = context.ForcedVariations?.ToDictionary(k => k.Key, v => v.Value);
 
@@ -186,7 +189,15 @@ namespace GrowthBook
         /// <summary>
         /// Dictionary of the currently loaded feature objects.
         /// </summary>
-        public IDictionary<string, Feature> Features { get; set; }
+        /// <remarks>
+        /// Setting it replaces the loaded features, and the contextual bandit definitions that arrived with them are
+        /// not used beside features they did not arrive with.
+        /// </remarks>
+        public IDictionary<string, Feature> Features
+        {
+            get => Volatile.Read(ref _loaded).Features;
+            set => Volatile.Write(ref _loaded, new FeaturePayload(value, null));
+        }
 
         /// <summary>
         /// The currently loaded experiments (separate from features).
@@ -606,27 +617,33 @@ namespace GrowthBook
             try
             {
                 _logger.LogInformation("Loading features from the repository");
-                IDictionary<string, Feature> features;
+
+                FeaturePayload payload;
 
                 // Use remote evaluation if enabled and configured
                 if (_context.RemoteEval && RemoteEvaluationUtilities.IsValidForRemoteEvaluation(_context))
                 {
                     var currentContext = CreateCurrentContext();
-                    features = await _featureRepository.GetFeaturesWithContext(currentContext, options, cancellationToken).ConfigureAwait(false);
+                    payload = await RetrievePayload(
+                        source => source.GetPayloadWithContext(currentContext, options, cancellationToken),
+                        () => _featureRepository.GetFeaturesWithContext(currentContext, options, cancellationToken)).ConfigureAwait(false);
                 }
                 else
                 {
-                    features = await _featureRepository.GetFeatures(options, cancellationToken).ConfigureAwait(false);
+                    payload = await RetrievePayload(
+                        source => source.GetPayload(options, cancellationToken),
+                        () => _featureRepository.GetFeatures(options, cancellationToken)).ConfigureAwait(false);
                 }
 
-                if (features == null)
+                if (payload?.Features == null)
                 {
                     var errorMessage = "Feature repository returned null - no features were loaded";
                     _logger.LogWarning(errorMessage);
                     return FeatureLoadResult.CreateFailure(errorMessage);
                 }
 
-                Features = features;
+                AdoptPayload(payload);
+
                 var featureCount = Features.Count;
 
                 _logger.LogInformation($"Loading features has completed, retrieved '{featureCount}' features");
@@ -697,10 +714,14 @@ namespace GrowthBook
         /// </remarks>
         private EvaluationContext BuildEvaluationContext()
         {
+            var loaded = Volatile.Read(ref _loaded);
+
             var global = new GlobalContext
             {
-                Features = Features,
+                Features = loaded.Features,
                 SavedGroups = _savedGroups,
+                ContextualBandits = _contextContextualBandits,
+                PayloadContextualBandits = loaded.ContextualBandits,
                 Experiments = Experiments,
                 Enabled = Enabled,
                 QaMode = _qaMode,
@@ -719,6 +740,49 @@ namespace GrowthBook
             };
 
             return new EvaluationContext(global, user);
+        }
+
+        /// <summary>
+        /// Takes on the features and the bandit definitions the repository last published, together.
+        /// </summary>
+        /// <remarks>
+        /// Both halves are written as one reference and read as one, so overlapping loads leave the last one's
+        /// features beside its own weights, and an evaluation never sees one payload's rules beside another's
+        /// weights - a rule supplies its own variation list, so the weights can belong to a list that no longer
+        /// exists.
+        /// <para>
+        /// The definitions are replaced on every adoption, including when the payload carries none. Keeping the
+        /// previous payload's in that case would let a withdrawn bandit go on bucketing new rules under a version
+        /// the backend no longer publishes. Definitions supplied on the context are held separately and are not
+        /// affected, since they are the caller's configuration rather than anything a payload delivered.
+        /// </para>
+        /// </remarks>
+        private void AdoptPayload(FeaturePayload payload)
+        {
+            Volatile.Write(ref _loaded, new FeaturePayload(new Dictionary<string, Feature>(payload.Features), payload.ContextualBandits));
+        }
+
+        /// <summary>
+        /// Retrieves the features and the definitions they were published with in one call, falling back
+        /// to features alone for a repository that does not supply the pair.
+        /// </summary>
+        private async Task<FeaturePayload> RetrievePayload(
+            Func<IGrowthBookContextualBanditSource, Task<FeaturePayload>> fromSource,
+            Func<Task<IDictionary<string, Feature>>> fromRepository)
+        {
+            if (_featureRepository is IGrowthBookContextualBanditSource source)
+            {
+                return await fromSource(source).ConfigureAwait(false);
+            }
+
+            var features = await fromRepository().ConfigureAwait(false);
+
+            if (features is null)
+            {
+                return null;
+            }
+
+            return new FeaturePayload(features, null);
         }
 
         private void TryToTrack(Experiment experiment, ExperimentResult result)
@@ -815,12 +879,19 @@ namespace GrowthBook
                 _logger?.LogDebug("Triggering remote evaluation due to attribute changes");
 
                 var currentContext = CreateCurrentContext();
-                var features = await _featureRepository.GetFeaturesWithContext(currentContext).ConfigureAwait(false);
 
-                if (features != null)
+                var payload = await RetrievePayload(
+                    source => source.GetPayloadWithContext(currentContext),
+                    () => _featureRepository.GetFeaturesWithContext(currentContext)).ConfigureAwait(false);
+
+                if (payload?.Features != null)
                 {
-                    Features = features;
-                    _logger?.LogDebug("Remote evaluation completed, updated {Count} features", features.Count);
+                    // The payload that answered this refresh carries its own bandits. Adopting the features
+                    // without them would bucket the new rules against whatever the last load happened to leave
+                    // behind, or against nothing at all when no load has run.
+                    AdoptPayload(payload);
+
+                    _logger?.LogDebug("Remote evaluation completed, updated {Count} features", Features.Count);
                 }
             }
             catch (Exception ex)
