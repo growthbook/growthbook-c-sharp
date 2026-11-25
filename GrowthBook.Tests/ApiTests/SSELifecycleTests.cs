@@ -355,6 +355,37 @@ public class SSELifecycleTests
     }
 
     [Fact]
+    public async Task ReconnectDiscardsAnIncompleteEventFromThePreviousStream()
+    {
+        const string Payload = "{\"features\":{}}";
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var handler = new ScriptedSseHandler(attempt =>
+        {
+            if (attempt == 1)
+                return "data: {";
+
+            if (attempt == 2)
+                return $"data: {Payload}\n\n";
+
+            cancellation.Cancel();
+            return string.Empty;
+        });
+        using var client = CreateClient(handler);
+        SetRetryTimeMs(client, 1);
+
+        var received = new List<string>();
+        client.AddEventListener(null, sseEvent =>
+        {
+            received.Add(sseEvent.Data);
+            return Task.CompletedTask;
+        });
+
+        await client.ConnectAsync(cancellation.Token);
+
+        received.Should().Equal(Payload);
+    }
+
+    [Fact]
     public async Task AZeroRetryDirectiveStillThrottlesReconnects()
     {
         // A server is allowed to ask for retry: 0, and this one asks on every connection and then closes
