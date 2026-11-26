@@ -23,5 +23,10 @@ namespace GrowthBook
         /// Used to implement holdout groups. Optional.
         /// </summary>
         public bool Passthrough { get; set; }
+
+        /// <summary>
+        /// A copy that shares nothing mutable with this one, for handing to a plugin.
+        /// </summary>
+        internal VariationMeta Copy() => (VariationMeta)MemberwiseClone();
     }
 }
