@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 This project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). From 2.2.0 on,
 [release-please](https://github.com/googleapis/release-please) writes the entries from merged PR titles.
 
+## [2.1.2](https://github.com/growthbook/growthbook-c-sharp/compare/v2.1.1...v2.1.2) (2026-11-26)
+
+
+### Bug Fixes
+
+* discard incomplete SSE events on reconnect ([#137](https://github.com/growthbook/growthbook-c-sharp/issues/137)) ([8fbf3bf](https://github.com/growthbook/growthbook-c-sharp/commit/8fbf3bfae21b3b77ed3185cb8b128a7a90b7adef))
+
 ## [2.1.1](https://github.com/growthbook/growthbook-c-sharp/compare/v2.1.0...v2.1.1) (2026-11-19)
 
 
