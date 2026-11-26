@@ -48,6 +48,7 @@ namespace GrowthBook
         /// </summary>
         private readonly bool _canFetchFeatures;
         private JObject _previousAttributes;
+        private readonly object _attributesLock = new object();
         private IDictionary<string, int> _previousForcedVariations;
         private readonly List<Action<Experiment, ExperimentResult>> _subscribers
             = new List<Action<Experiment, ExperimentResult>>();
@@ -267,18 +268,21 @@ namespace GrowthBook
                 TriggerRemoteEvaluationAsync(newAttributes).ConfigureAwait(false);
             }
 
-            Attributes = newAttributes;
-            _previousAttributes = newAttributes?.DeepClone() as JObject;
+            lock (_attributesLock)
+            {
+                Attributes = newAttributes;
+                _previousAttributes = newAttributes?.DeepClone() as JObject;
 
-            if (attributes != null)
-            {
-                Attributes = JObject.FromObject(attributes);
-                _logger?.LogDebug("Updated attributes with {Count} properties", attributes.Count);
-            }
-            else
-            {
-                Attributes = new JObject();
-                _logger?.LogDebug("Cleared attributes");
+                if (attributes != null)
+                {
+                    Attributes = JObject.FromObject(attributes);
+                    _logger?.LogDebug("Updated attributes with {Count} properties", attributes.Count);
+                }
+                else
+                {
+                    Attributes = new JObject();
+                    _logger?.LogDebug("Cleared attributes");
+                }
             }
         }
 
@@ -295,18 +299,21 @@ namespace GrowthBook
                 TriggerRemoteEvaluationAsync(newAttributes).ConfigureAwait(false);
             }
 
-            Attributes = newAttributes;
-            _previousAttributes = newAttributes?.DeepClone() as JObject;
+            lock (_attributesLock)
+            {
+                Attributes = newAttributes;
+                _previousAttributes = newAttributes?.DeepClone() as JObject;
 
-            if (attributes != null)
-            {
-                Attributes = JObject.FromObject(attributes);
-                _logger?.LogDebug("Updated attributes from object");
-            }
-            else
-            {
-                Attributes = new JObject();
-                _logger?.LogDebug("Cleared attributes");
+                if (attributes != null)
+                {
+                    Attributes = JObject.FromObject(attributes);
+                    _logger?.LogDebug("Updated attributes from object");
+                }
+                else
+                {
+                    Attributes = new JObject();
+                    _logger?.LogDebug("Cleared attributes");
+                }
             }
         }
 
@@ -317,20 +324,15 @@ namespace GrowthBook
         public void MergeAttributes(IDictionary<string, object> additionalAttributes)
         {
             if (additionalAttributes == null) return;
-            var oldAttributes = Attributes?.DeepClone() as JObject;
 
+            var additions = new JObject();
 
             foreach (var kvp in additionalAttributes)
             {
-                Attributes[kvp.Key] = JToken.FromObject(kvp.Value);
+                additions[kvp.Key] = kvp.Value is null ? JValue.CreateNull() : JToken.FromObject(kvp.Value);
             }
 
-            if (_context.RemoteEval && ShouldTriggerRemoteEvaluation(Attributes))
-            {
-                TriggerRemoteEvaluationAsync(Attributes).ConfigureAwait(false);
-            }
-
-            _previousAttributes = Attributes?.DeepClone() as JObject;
+            MergeAttributes(additions);
 
             _logger?.LogDebug("Merged {Count} additional attributes", additionalAttributes.Count);
         }
@@ -343,22 +345,38 @@ namespace GrowthBook
         {
             if (additionalAttributes == null) return;
 
-            var oldAttributes = Attributes?.DeepClone() as JObject;
-
-            var additionalJObject = JObject.FromObject(additionalAttributes);
-            foreach (var property in additionalJObject.Properties())
-            {
-                Attributes[property.Name] = property.Value;
-            }
-
-            if (_context.RemoteEval && ShouldTriggerRemoteEvaluation(Attributes))
-            {
-                TriggerRemoteEvaluationAsync(Attributes).ConfigureAwait(false);
-            }
-
-            _previousAttributes = Attributes?.DeepClone() as JObject;
+            MergeAttributes(JObject.FromObject(additionalAttributes));
 
             _logger?.LogDebug("Merged additional attributes from object");
+        }
+
+        /// <summary>
+        /// Merges into a copy and publishes it in one assignment, as the JavaScript SDK's <c>updateAttributes</c> does.
+        /// Written in place, the object an evaluation in flight was reading changed under it, and so did the caller's
+        /// own <see cref="Context.Attributes"/>.
+        /// </summary>
+        private void MergeAttributes(JObject additions)
+        {
+            JObject merged;
+
+            lock (_attributesLock)
+            {
+                merged = Attributes?.DeepClone() as JObject ?? new JObject();
+
+                foreach (var property in additions.Properties())
+                {
+                    merged[property.Name] = property.Value;
+                }
+
+                Attributes = merged;
+            }
+
+            if (_context.RemoteEval && ShouldTriggerRemoteEvaluation(merged))
+            {
+                TriggerRemoteEvaluationAsync(merged).ConfigureAwait(false);
+            }
+
+            _previousAttributes = merged.DeepClone() as JObject;
         }
 
         /// <inheritdoc />
