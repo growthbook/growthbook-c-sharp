@@ -339,7 +339,10 @@ namespace GrowthBook.MultiUser
                 DecryptionKey = options.DecryptionKey,
                 CacheExpirationInSeconds = options.CacheExpirationInSeconds,
                 PreferServerSentEvents = options.BackgroundSync,
-                OnFeaturesStreamed = onFeaturesStreamed
+                OnFeaturesStreamed = onFeaturesStreamed,
+                ApiHostRequestHeaders = options.ApiHostRequestHeaders,
+                StreamingHost = options.StreamingHost,
+                StreamingHostRequestHeaders = options.StreamingHostRequestHeaders
             };
 
             var cache = new InMemoryFeatureCache(cacheExpirationInSeconds: options.CacheExpirationInSeconds);
