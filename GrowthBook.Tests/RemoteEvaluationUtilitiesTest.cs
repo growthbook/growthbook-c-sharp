@@ -29,6 +29,61 @@ namespace GrowthBook.Tests.Utilities
             result.Should().NotContain("plan"); // Should be filtered out
         }
 
+        /// <summary>
+        /// The server evaluates with the forced values, so a cache keyed without them returned the response made for
+        /// the old override after it changed or was cleared.
+        /// </summary>
+        [Fact]
+        public void GenerateCacheKey_ChangesWhenAForcedFeatureIsSetChangedOrCleared()
+        {
+            string KeyFor(Dictionary<string, JToken> forced) => RemoteEvaluationUtilities.GenerateCacheKey(new Context
+            {
+                RemoteEval = true,
+                ApiHost = "https://api.example.com",
+                ClientKey = "test-key",
+                Attributes = JObject.Parse(@"{""userId"": ""123""}"),
+                ForcedFeatures = forced
+            });
+
+            var none = KeyFor(null);
+            var on = KeyFor(new Dictionary<string, JToken> { ["dark-mode"] = true });
+            var off = KeyFor(new Dictionary<string, JToken> { ["dark-mode"] = false });
+            var forcedToNull = KeyFor(new Dictionary<string, JToken> { ["dark-mode"] = JValue.CreateNull() });
+
+            new[] { none, on, off, forcedToNull }.Should().OnlyHaveUniqueItems();
+            KeyFor(new Dictionary<string, JToken>()).Should().Be(none, "clearing the overrides returns to the key with none");
+        }
+
+        [Fact]
+        public void GenerateCacheKey_IsUnchangedWhenNothingIsForced()
+        {
+            var context = new Context
+            {
+                RemoteEval = true,
+                ApiHost = "https://api.example.com",
+                ClientKey = "test-key",
+                Attributes = JObject.Parse(@"{""userId"": ""123""}")
+            };
+
+            RemoteEvaluationUtilities.GenerateCacheKey(context)
+                .Should().Be(@"https://api.example.com||test-key||{""attributes"":{""userId"":""123""}}", "keys a cache already holds stay valid");
+        }
+
+        [Fact]
+        public void GenerateCacheKey_DoesNotDependOnTheOrderForcedFeaturesWereAdded()
+        {
+            string KeyFor(Dictionary<string, JToken> forced) => RemoteEvaluationUtilities.GenerateCacheKey(new Context
+            {
+                RemoteEval = true,
+                ApiHost = "https://api.example.com",
+                ClientKey = "test-key",
+                ForcedFeatures = forced
+            });
+
+            KeyFor(new Dictionary<string, JToken> { ["a"] = 1, ["b"] = 2 })
+                .Should().Be(KeyFor(new Dictionary<string, JToken> { ["b"] = 2, ["a"] = 1 }));
+        }
+
         [Fact]
         public void GenerateCacheKey_WithRemoteEvalDisabled_ShouldReturnNull()
         {

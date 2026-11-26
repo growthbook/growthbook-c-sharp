@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net.Http;
 using GrowthBook.Services;
 using Microsoft.Extensions.Logging;
@@ -46,6 +47,9 @@ namespace GrowthBook.MultiUser.Configuration
 
         /// <summary>Force specific experiments to always assign a specific variation for all users. Used for QA.</summary>
         public IDictionary<string, int> GlobalForcedVariations { get; set; }
+
+        /// <summary>Values to force features to for all users, by feature key. Used for QA.</summary>
+        public IDictionary<string, JToken> GlobalForcedFeatures { get; set; }
 
         /// <summary>Logger factory for internal diagnostics. If not set, a no-op logger is used.</summary>
         public ILoggerFactory LoggerFactory { get; set; }
@@ -122,6 +126,7 @@ namespace GrowthBook.MultiUser.Configuration
             GlobalForcedVariations = GlobalForcedVariations is null
                 ? null
                 : new Dictionary<string, int>(GlobalForcedVariations),
+            GlobalForcedFeatures = GlobalForcedFeatures?.ToDictionary(k => k.Key, v => v.Value?.DeepClone()),
             LoggerFactory = LoggerFactory,
             FeatureRepository = FeatureRepository,
             BackgroundSync = BackgroundSync,

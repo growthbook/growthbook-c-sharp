@@ -147,6 +147,12 @@ namespace GrowthBook.MultiUser
             => _options.GlobalForcedVariations = forcedVariations;
 
         /// <summary>
+        /// Replaces the values features are forced to for all users. A user's own forced values take precedence.
+        /// </summary>
+        public void SetGlobalForcedFeatures(IDictionary<string, JToken> forcedFeatures)
+            => _options.GlobalForcedFeatures = forcedFeatures;
+
+        /// <summary>
         /// Replaces the saved group definitions that <c>$inGroup</c> and <c>$notInGroup</c> conditions
         /// are evaluated against.
         /// </summary>
@@ -285,6 +291,7 @@ namespace GrowthBook.MultiUser
                 TrackingCallback = _options.TrackingCallback,
                 StickyBucketService = stickyBucketService,
                 ForcedVariations = _options.GlobalForcedVariations,
+                ForcedFeatures = _options.GlobalForcedFeatures,
                 Attributes = _options.GlobalAttributes,
                 SavedGroups = _options.SavedGroups
             };
@@ -294,6 +301,7 @@ namespace GrowthBook.MultiUser
                 Attributes = userContext?.Attributes ?? new JObject(),
                 AttributeOverrides = userContext?.AttributeOverrides,
                 ForcedVariations = userContext?.ForcedVariations,
+                ForcedFeatures = userContext?.ForcedFeatures,
                 TrackingCallback = userContext?.TrackingCallback,
                 StickyBucketService = stickyBucketService,
                 Url = userContext?.Url,
