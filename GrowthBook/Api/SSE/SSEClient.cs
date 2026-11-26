@@ -19,7 +19,6 @@ namespace GrowthBook.Api.SSE
         private readonly Dictionary<string, string> _headers;
         private readonly string _httpClientName;
         private readonly Dictionary<string, Func<SSEEvent, Task>> _eventListeners;
-        private readonly SSEEventParser _parser;
         
         private const int MaxRetryDelayMs = 5 * 60 * 1000;
         private const int MinRetryTimeMs = 1000;
@@ -46,7 +45,6 @@ namespace GrowthBook.Api.SSE
             _headers = headers ?? new Dictionary<string, string>();
             _httpClientName = httpClientName;
             _eventListeners = new Dictionary<string, Func<SSEEvent, Task>>();
-            _parser = new SSEEventParser();
             _connectionStatus = SSEConnectionStatus.Disconnected;
         }
 
@@ -199,6 +197,7 @@ namespace GrowthBook.Api.SSE
         /// </summary>
         private async Task ProcessStreamAsync(StreamReader reader, CancellationToken cancellationToken)
         {
+            var parser = new SSEEventParser();
             var buffer = new char[4096];
 
             while (!cancellationToken.IsCancellationRequested)
@@ -219,7 +218,7 @@ namespace GrowthBook.Api.SSE
                 _currentRetryAttempt = 0;
 
                 var data = new string(buffer, 0, bytesRead);
-                var events = _parser.AppendData(data);
+                var events = parser.AppendData(data);
 
                 foreach (var sseEvent in events)
                 {
