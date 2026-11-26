@@ -29,6 +29,7 @@ namespace GrowthBook.MultiUser
         private readonly ILoggerFactory _loggerFactory;
         private readonly bool _ownsLoggerFactory;
         private readonly bool _ownsRepository;
+        private readonly IDisposable _refreshSubscription;
         private volatile IDictionary<string, Feature> _currentFeatures = new Dictionary<string, Feature>();
 
         /// <summary>
@@ -38,6 +39,7 @@ namespace GrowthBook.MultiUser
         private long _refreshSequence;
         private long _publishedRefresh;
         private readonly object _publishLock = new object();
+        private long _installedRefreshVersion;
         private bool _disposed;
 
         /// <summary>
@@ -80,8 +82,13 @@ namespace GrowthBook.MultiUser
             }
             else
             {
-                _repository = CreateRepository(options, _loggerFactory, PublishStreamedFeatures);
+                _repository = CreateRepository(options, _loggerFactory);
                 _ownsRepository = true;
+            }
+
+            if (_repository is IFeatureRefreshSource refreshSource)
+            {
+                _refreshSubscription = refreshSource.SubscribeToRefresh(InstallRefresh);
             }
         }
 
@@ -186,9 +193,16 @@ namespace GrowthBook.MultiUser
             if (_disposed) return;
             _disposed = true;
 
+            _refreshSubscription?.Dispose();
+
             if (_ownsRepository)
             {
                 _repository.Cancel();
+
+                if (_repository is IDisposable disposableRepository)
+                {
+                    disposableRepository.Dispose();
+                }
             }
 
             if (_ownsLoggerFactory && _loggerFactory is IDisposable disposable)
@@ -265,11 +279,29 @@ namespace GrowthBook.MultiUser
         }
 
         /// <summary>
-        /// Installs features a server-sent event delivered. Sequenced when they arrive, so a refresh started
+        /// Installs a refresh the repository relayed. One that overtook a newer one on the way is dropped by its
+        /// version, and the rest are sequenced as they are installed, under the same lock, so a load started
         /// earlier and answered later cannot replace them.
         /// </summary>
-        private void PublishStreamedFeatures(IDictionary<string, Feature> features) =>
-            PublishFeatures(features, Interlocked.Increment(ref _refreshSequence));
+        private void InstallRefresh(FeatureRefresh refresh)
+        {
+            if (refresh?.Features == null)
+            {
+                return;
+            }
+
+            lock (_publishLock)
+            {
+                if (refresh.Version <= _installedRefreshVersion)
+                {
+                    return;
+                }
+
+                _installedRefreshVersion = refresh.Version;
+
+                PublishFeatures(refresh.Features, Interlocked.Increment(ref _refreshSequence));
+            }
+        }
 
         private EvaluationContext BuildEvaluationContext(UserContext userContext, Experiment experiment = null)
         {
@@ -330,7 +362,7 @@ namespace GrowthBook.MultiUser
             return context;
         }
 
-        private static IGrowthBookFeatureRepository CreateRepository(Options options, ILoggerFactory loggerFactory, Action<IDictionary<string, Feature>> onFeaturesStreamed)
+        private static IGrowthBookFeatureRepository CreateRepository(Options options, ILoggerFactory loggerFactory)
         {
             var config = new GrowthBookConfigurationOptions
             {
@@ -338,8 +370,7 @@ namespace GrowthBook.MultiUser
                 ClientKey = options.ClientKey,
                 DecryptionKey = options.DecryptionKey,
                 CacheExpirationInSeconds = options.CacheExpirationInSeconds,
-                PreferServerSentEvents = options.BackgroundSync,
-                OnFeaturesStreamed = onFeaturesStreamed
+                PreferServerSentEvents = options.BackgroundSync
             };
 
             var cache = new InMemoryFeatureCache(cacheExpirationInSeconds: options.CacheExpirationInSeconds);
