@@ -296,6 +296,9 @@ public class Context
     /// Callback function used for tracking experiment assignments.
     public Action<Experiment, ExperimentResult> TrackingCallback { get; set; }
 
+    /// Told a feature's key and result when it is first evaluated and again whenever its value changes. Optional.
+    public Action<string, FeatureResult> OnFeatureUsage { get; set; }
+
     /// A repository implementation for retrieving and caching features. Optional.
     public IGrowthBookFeatureRepository FeatureRepository { get; set; }
 

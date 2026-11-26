@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Net.Http;
+using GrowthBook.Evaluation;
 using GrowthBook.Services;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json.Linq;
@@ -87,6 +88,14 @@ namespace GrowthBook.MultiUser.Configuration
         /// </summary>
         public Action<Experiment, ExperimentResult> TrackingCallback { get; set; }
 
+        /// <summary>
+        /// Invoked with a feature's key, its result and the user it was evaluated for, when the feature is first seen
+        /// and again whenever its value changes. Deduplicated per evaluation call; to deduplicate for a whole request,
+        /// give each <see cref="UserContext"/> a <see cref="UserContext.TrackedFeatureUsage"/> dictionary that lives as
+        /// long as the request.
+        /// </summary>
+        public Action<string, FeatureResult, UserContext> OnFeatureUsage { get; set; }
+
         /// <summary>Service that provides sticky bucketing to ensure consistent experiment assignments across sessions.</summary>
         public IStickyBucketService StickyBucketService { get; set; }
     
@@ -129,6 +138,7 @@ namespace GrowthBook.MultiUser.Configuration
             HttpRequestTimeoutInSeconds = HttpRequestTimeoutInSeconds,
             HttpClientFactory = HttpClientFactory,
             TrackingCallback = TrackingCallback,
+            OnFeatureUsage = OnFeatureUsage,
             StickyBucketService = StickyBucketService,
             ThrowOnInitializationFailure = ThrowOnInitializationFailure
         };

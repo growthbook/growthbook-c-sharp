@@ -16,6 +16,9 @@ namespace GrowthBook.Evaluation
         public IDictionary<string, int> ForcedVariations { get; set; } = new Dictionary<string, int>();
         public JObject Attributes { get; set; }
         public Action<Experiment, ExperimentResult> TrackingCallback { get; set; }
+
+        /// <summary>Told a feature's value, with the user it was evaluated for, when it is first seen or changes.</summary>
+        public Action<string, FeatureResult, UserContext> OnFeatureUsage { get; set; }
         /// <summary>Records the assignment and notifies subscribers if it changed.</summary>
         internal Action<Experiment, ExperimentResult> OnExperimentAssigned { get; set; }
 
