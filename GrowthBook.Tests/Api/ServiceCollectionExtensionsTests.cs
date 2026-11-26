@@ -407,6 +407,19 @@ public class ServiceCollectionExtensionsTests
             "a property Clone leaves out is lost to every client registered from prepared options");
     }
 
+    [Fact]
+    public void CloningKeepsACopyOfTheContextualBandits()
+    {
+        var contextualBandits = new Dictionary<string, ContextualBanditDefinition> { ["cb-bandit"] = new ContextualBanditDefinition { BanditVersion = 3 } };
+
+        var clone = new Options { ContextualBandits = contextualBandits }.Clone();
+
+        contextualBandits.Clear();
+
+        clone.ContextualBandits.Should().ContainKey("cb-bandit",
+            "the clone carries the definitions, and the caller changing its own map afterwards does not reach it");
+    }
+
     private static IGrowthBookFeatureRepository RepositoryWith(Feature flag)
     {
         var repository = Substitute.For<IGrowthBookFeatureRepository>();

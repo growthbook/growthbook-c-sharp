@@ -491,7 +491,8 @@ namespace GrowthBook.Utilities
             {
                 foreach (var rule in feature?.Rules ?? Enumerable.Empty<FeatureRule>())
                 {
-                    if (rule.Variations.IsNull())
+                    // A contextual bandit rule carries its variations under ContextualVariations.
+                    if (rule.Variations.IsNull() && rule.ContextualVariations.IsNull())
                     {
                         continue;
                     }

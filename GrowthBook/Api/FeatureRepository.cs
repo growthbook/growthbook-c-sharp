@@ -13,7 +13,7 @@ using Newtonsoft.Json.Linq;
 
 namespace GrowthBook.Api
 {
-    public class FeatureRepository : IGrowthBookFeatureRepository
+    public class FeatureRepository : IGrowthBookFeatureRepository, IGrowthBookContextualBanditSource
     {
         private readonly ILogger<FeatureRepository> _logger;
         private readonly IGrowthBookFeatureCache _cache;
@@ -33,10 +33,61 @@ namespace GrowthBook.Api
         }
 
         /// <inheritdoc/>
+        /// <remarks>
+        /// The pair comes out of the cache in one read rather than being assembled here from a feature read and a
+        /// definition read, which would leave a window for a refresh to land between the two and hand back this
+        /// payload's features beside the previous one's weights.
+        /// </remarks>
+        public async Task<FeaturePayload> GetPayload(GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null)
+        {
+            var refresh = await EnsureCacheIsFresh(options, cancellationToken).ConfigureAwait(false);
+
+            if (refresh.Waited && refresh.Features is null)
+            {
+                return null;
+            }
+
+            if (_cache is IGrowthBookPayloadCache payloadCache)
+            {
+                return await payloadCache.GetPayload(cancellationToken).ConfigureAwait(false);
+            }
+
+            // A cache written before bandits existed holds features alone. It cannot say which payload they came
+            // from, so there is nothing here that could honestly be paired with them.
+            return new FeaturePayload(await _cache.GetFeatures(cancellationToken).ConfigureAwait(false), null);
+        }
+
+        /// <inheritdoc/>
+        public async Task<FeaturePayload> GetPayloadWithContext(Context context, GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null)
+        {
+            return await EvaluateRemotely(context, options, cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <inheritdoc/>
         public void Cancel() => _backgroundRefreshWorker.Cancel();
 
         /// <inheritdoc/>
         public async Task<IDictionary<string, Feature>> GetFeatures(GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null)
+        {
+            var refresh = await EnsureCacheIsFresh(options, cancellationToken).ConfigureAwait(false);
+
+            if (refresh.Waited)
+            {
+                return refresh.Features;
+            }
+
+            _logger.LogInformation("Cache is not expired and the option to force refresh was not set, retrieving features from cache");
+
+            return await _cache.GetFeatures(cancellationToken).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Refreshes the cache from the API when it has expired or the caller asked for it.
+        /// </summary>
+        /// <returns>
+        /// Whether this call waited for a refresh, and the features it produced, which are null when it failed.
+        /// </returns>
+        private async Task<(bool Waited, IDictionary<string, Feature> Features)> EnsureCacheIsFresh(GrowthBookRetrievalOptions options, CancellationToken? cancellationToken)
         {
             _logger.LogInformation("Getting features from repository, verifying cache expiration and option to force refresh");
 
@@ -68,7 +119,7 @@ namespace GrowthBook.Api
                 {
                     _logger.LogInformation("Either cache currently has no features or the option to wait for completion was set, waiting for cache to refresh");
                     _logger.LogDebug("Feature count: '{CacheFeatureCount}' and option to wait for completion: '{OptionsWaitForCompletion}'", featureCount, options?.WaitForCompletion);
-                    return await refreshTask.ConfigureAwait(false);
+                    return (true, await refreshTask.ConfigureAwait(false));
                 }
                 else
                 {
@@ -81,9 +132,7 @@ namespace GrowthBook.Api
                 }
             }
 
-            _logger.LogInformation("Cache is not expired and the option to force refresh was not set, retrieving features from cache");
-
-            return await _cache.GetFeatures(cancellationToken).ConfigureAwait(false);
+            return (false, null);
         }
 
         /// <inheritdoc/>
@@ -124,6 +173,17 @@ namespace GrowthBook.Api
  /// <inheritdoc/>
         public async Task<IDictionary<string, Feature>> GetFeaturesWithContext(Context context, GrowthBookRetrievalOptions options = null, CancellationToken? cancellationToken = null)
         {
+            var payload = await EvaluateRemotely(context, options, cancellationToken).ConfigureAwait(false);
+
+            return payload?.Features;
+        }
+
+        /// <summary>
+        /// Performs the remote evaluation and returns its features together with the definitions the same
+        /// response carried.
+        /// </summary>
+        private async Task<FeaturePayload> EvaluateRemotely(Context context, GrowthBookRetrievalOptions options, CancellationToken? cancellationToken)
+        {
             if (context == null)
                 throw new ArgumentNullException(nameof(context));
 
@@ -131,14 +191,14 @@ namespace GrowthBook.Api
             if (!context.RemoteEval)
             {
                 _logger.LogDebug("Remote evaluation is disabled, using regular feature retrieval");
-                return await GetFeatures(options, cancellationToken).ConfigureAwait(false);
+                return await GetPayload(options, cancellationToken).ConfigureAwait(false);
             }
 
             // Validate remote evaluation configuration
             if (_remoteEvaluationService == null)
             {
                 _logger.LogWarning("Remote evaluation is enabled but IRemoteEvaluationService is not available, falling back to regular feature retrieval");
-                return await GetFeatures(options, cancellationToken).ConfigureAwait(false);
+                return await GetPayload(options, cancellationToken).ConfigureAwait(false);
             }
 
             try
@@ -169,7 +229,8 @@ namespace GrowthBook.Api
                 if (response.IsSuccess)
                 {
                     _logger.LogInformation("Remote evaluation successful, received {Count} features", response.Features.Count);
-                    return response.Features;
+
+                    return new FeaturePayload(response.Features, response.ContextualBandits);
                 }
                 else
                 {

@@ -44,9 +44,9 @@ namespace GrowthBook
         public int EtagCacheSize { get; set; } = 100;
 
         /// <summary>
-        /// Called with the features a server-sent event delivered, once they are cached. Set by
-        /// <see cref="MultiUser.GrowthBookClient"/> on the repository it builds.
+        /// Called with the features a server-sent event delivered, and the bandit definitions that came with them,
+        /// once they are cached. Set by <see cref="MultiUser.GrowthBookClient"/> on the repository it builds.
         /// </summary>
-        internal Action<IDictionary<string, Feature>> OnFeaturesStreamed { get; set; }
+        internal Action<FeaturePayload> OnFeaturesStreamed { get; set; }
     }
 }

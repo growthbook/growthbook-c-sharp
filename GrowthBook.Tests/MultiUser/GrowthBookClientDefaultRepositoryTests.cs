@@ -274,9 +274,99 @@ public class GrowthBookClientDefaultRepositoryTests
         client.IsOn("flag", User).Should().BeFalse("the API rolled back, and the refresh has to fetch it rather than get a 304");
     }
 
-    private static GrowthBookClient CreateClient(HttpMessageHandler handler, int cacheExpirationInSeconds, bool backgroundSync = false) =>
+    private static string BanditPayload(int version, string weights, bool withBandits = true) =>
+        @"{ ""features"": { ""bandit-feature"": { ""defaultValue"": ""default"", ""rules"": [ {
+            ""key"": ""bandit-exp"", ""seed"": ""bandit-exp"", ""hashAttribute"": ""id"", ""hashVersion"": 2,
+            ""coverage"": 1, ""contextualVariations"": [ ""control"", ""treatment"" ],
+            ""weights"": [ 0.5, 0.5 ], ""meta"": [ { ""key"": ""0"" }, { ""key"": ""1"" } ],
+            ""contextualBanditRef"": ""cb-bandit"" } ] } }"
+        + (withBandits
+            ? @", ""contextualBandits"": { ""cb-bandit"": { ""banditVersion"": " + version + @",
+                ""contexts"": [ { ""leafId"": 1, ""condition"": {}, ""weights"": " + weights + " } ] } }"
+            : "")
+        + " }";
+
+    [Fact]
+    public async Task ALoadInstallsTheBanditsThatCameWithTheFeatures()
+    {
+        var handler = new ScriptedHandler(_ => Task.FromResult(BanditPayload(7, "[ 0, 1 ]")));
+
+        using var client = CreateClient(handler, cacheExpirationInSeconds: 60);
+
+        await client.InitializeAsync();
+
+        var result = client.EvalFeature("bandit-feature", User);
+
+        result.Value.ToString().Should().Be("treatment", "the leaf sends everyone to the second variation");
+        result.ExperimentResult.LeafId.Should().Be(1);
+        result.ExperimentResult.BanditVersion.Should().Be(7);
+    }
+
+    [Fact]
+    public async Task ARefreshWithoutBanditsWithdrawsTheOnesBefore()
+    {
+        var handler = new ScriptedHandler(request => Task.FromResult(BanditPayload(7, "[ 0, 1 ]", withBandits: request == 1)));
+
+        using var client = CreateClient(handler, cacheExpirationInSeconds: 60);
+
+        await client.InitializeAsync();
+        await client.RefreshFeaturesAsync();
+
+        client.EvalFeature("bandit-feature", User).ExperimentResult.BanditVersion.Should().BeNull(
+            "the payload in use no longer carries the bandit, so its rule runs on its own weights");
+    }
+
+    [Fact]
+    public async Task AStreamedUpdateInstallsItsBanditsWithItsFeatures()
+    {
+        using var handler = new StreamingHandler(_ => Task.FromResult(BanditPayload(7, "[ 1, 0 ]")));
+        using var client = CreateClient(handler, cacheExpirationInSeconds: 60, backgroundSync: true);
+
+        await client.InitializeAsync();
+        client.EvalFeature("bandit-feature", User).ExperimentResult.BanditVersion.Should().Be(7);
+
+        // An event's data is one line, so the payload is streamed without its line breaks.
+        handler.Stream(System.Text.RegularExpressions.Regex.Replace(BanditPayload(8, "[ 0, 1 ]"), @"\s+", " "));
+
+        SpinWait.SpinUntil(() => client.EvalFeature("bandit-feature", User).ExperimentResult.BanditVersion == 8, TimeSpan.FromSeconds(10))
+            .Should().BeTrue("the streamed payload carried a new bandit version, and its weights have to arrive with its features");
+        client.EvalFeature("bandit-feature", User).Value.ToString().Should().Be("treatment");
+    }
+
+    [Fact]
+    public async Task TheCallersDefinitionsAnswerOnlyForAReferenceThePayloadDoesNotCarry()
+    {
+        var handler = new ScriptedHandler(_ => Task.FromResult(BanditPayload(7, "[ 0, 1 ]", withBandits: false)));
+        var callers = new System.Collections.Generic.Dictionary<string, ContextualBanditDefinition>
+        {
+            ["cb-bandit"] = new ContextualBanditDefinition
+            {
+                BanditVersion = 3,
+                Contexts = new System.Collections.Generic.List<ContextualBanditContext>
+                {
+                    new ContextualBanditContext { LeafId = 2, Condition = new JObject(), Weights = new System.Collections.Generic.List<double> { 1, 0 } }
+                }
+            }
+        };
+
+        using var client = CreateClient(handler, cacheExpirationInSeconds: 60, contextualBandits: callers);
+
+        await client.InitializeAsync();
+
+        client.EvalFeature("bandit-feature", User).ExperimentResult.BanditVersion.Should().Be(3);
+
+        handler.Respond = _ => Task.FromResult(BanditPayload(7, "[ 0, 1 ]"));
+        await client.RefreshFeaturesAsync();
+
+        client.EvalFeature("bandit-feature", User).ExperimentResult.BanditVersion.Should().Be(7,
+            "the definition that came with the features in use wins over the caller's");
+    }
+
+    private static GrowthBookClient CreateClient(HttpMessageHandler handler, int cacheExpirationInSeconds, bool backgroundSync = false,
+        System.Collections.Generic.IDictionary<string, ContextualBanditDefinition> contextualBandits = null) =>
         new GrowthBookClient(new Options
         {
+            ContextualBandits = contextualBandits,
             ClientKey = "sdk-test",
             ApiHost = "https://growthbook.test",
             LoggerFactory = NullLoggerFactory.Instance,
@@ -385,16 +475,17 @@ public class GrowthBookClientDefaultRepositoryTests
     /// </summary>
     private sealed class ScriptedHandler : HttpMessageHandler
     {
-        private readonly Func<int, Task<string>> _respond;
         private int _requests;
 
-        public ScriptedHandler(Func<int, Task<string>> respond) => _respond = respond;
+        public ScriptedHandler(Func<int, Task<string>> respond) => Respond = respond;
+
+        public Func<int, Task<string>> Respond { get; set; }
 
         public int Requests => Volatile.Read(ref _requests);
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            var json = await _respond(Interlocked.Increment(ref _requests));
+            var json = await Respond(Interlocked.Increment(ref _requests));
 
             return new HttpResponseMessage(HttpStatusCode.OK)
             {

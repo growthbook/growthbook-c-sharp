@@ -14,6 +14,7 @@ public class StandardCasesMetadataTests
     private static readonly HashSet<string> TestedCategories = new HashSet<string>
     {
         "chooseVariation",
+        "contextualBandit",
         "decrypt",
         "evalCondition",
         "feature",
@@ -41,8 +42,6 @@ public class StandardCasesMetadataTests
     private static readonly HashSet<string> IntentionallyUntestedCategories = new HashSet<string>
     {
         "urlRedirect",
-        // Contextual bandits aren't implemented in this SDK yet
-        "contextualBandit",
         // Remote saved groups (the savedGroupReferencesRemote capability) aren't implemented in this SDK yet
         "savedGroupReferencesRemote.evalCondition",
         "savedGroupReferencesRemote.feature"

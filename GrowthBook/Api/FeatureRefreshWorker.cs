@@ -20,13 +20,6 @@ namespace GrowthBook.Api
 {
     public class FeatureRefreshWorker : IGrowthBookFeatureRefreshWorker, IDisposable
     {
-        private sealed class FeaturesResponse
-        {
-            public int FeatureCount => Features?.Count ?? 0;
-            public Dictionary<string, Feature> Features { get; set; }
-            public string EncryptedFeatures { get; set; }
-        }
-
         private readonly ILogger<FeatureRefreshWorker> _logger;
         private readonly IHttpClientFactory _httpClientFactory;
         private readonly GrowthBookConfigurationOptions _config;
@@ -42,6 +35,7 @@ namespace GrowthBook.Api
         private readonly SemaphoreSlim _cacheWriteLock = new SemaphoreSlim(1, 1);
         private long _cacheWriteSequence;
         private long _cachedSequence;
+        private int _warnedAboutUnstoredBandits;
         private CancellationTokenSource _refreshWorkerCancellation = new CancellationTokenSource();
 
         public FeatureRefreshWorker(ILogger<FeatureRefreshWorker> logger, IHttpClientFactory httpClientFactory, GrowthBookConfigurationOptions config, IGrowthBookFeatureCache cache)
@@ -97,7 +91,7 @@ namespace GrowthBook.Api
                 return null;
             }
 
-            if (!await WriteCacheInOrder(response.Features, response.ETag, sequence, cancellationToken ?? _refreshWorkerCancellation.Token).ConfigureAwait(false))
+            if (!await WriteCacheInOrder(new FeaturePayload(response.Features, response.ContextualBandits), response.ETag, sequence, cancellationToken ?? _refreshWorkerCancellation.Token).ConfigureAwait(false))
             {
                 return await _cache.GetFeatures(cancellationToken).ConfigureAwait(false);
             }
@@ -115,7 +109,7 @@ namespace GrowthBook.Api
             return response.Features;
         }
 
-        private async Task<bool> WriteCacheInOrder(IDictionary<string, Feature> features, string etag, long sequence, CancellationToken cancellationToken)
+        private async Task<bool> WriteCacheInOrder(FeaturePayload payload, string etag, long sequence, CancellationToken cancellationToken)
         {
             await _cacheWriteLock.WaitAsync(cancellationToken).ConfigureAwait(false);
 
@@ -126,7 +120,9 @@ namespace GrowthBook.Api
                     return false;
                 }
 
-                await _cache.RefreshWith(features, cancellationToken).ConfigureAwait(false);
+                // Stored as one pair, and only by the write that wins, so an overtaken response can replace neither the
+                // features nor the weights that belong beside them.
+                await StoreInCache(payload, cancellationToken).ConfigureAwait(false);
                 _cachedSequence = sequence;
 
                 if (etag != null)
@@ -142,18 +138,18 @@ namespace GrowthBook.Api
             }
         }
 
-        private void NotifyFeaturesStreamed(IDictionary<string, Feature> features)
+        private void NotifyFeaturesStreamed(FeaturePayload payload)
         {
             var callback = _config?.OnFeaturesStreamed;
 
-            if (callback is null || features is null)
+            if (callback is null || payload?.Features is null)
             {
                 return;
             }
 
             try
             {
-                callback(features);
+                callback(payload);
             }
             catch (Exception ex)
             {
@@ -211,11 +207,16 @@ namespace GrowthBook.Api
                         _logger.LogDebug("Received SSE event: {Data}", sseEvent.Data?.Substring(0, Math.Min(sseEvent.Data?.Length ?? 0, 100)));
                         
                         var sequence = Interlocked.Increment(ref _cacheWriteSequence);
-                        var features = GetFeaturesFrom(sseEvent.Data);
 
-                        if (features != null && await WriteCacheInOrder(features, null, sequence, _refreshWorkerCancellation.Token).ConfigureAwait(false))
+                        // A streamed payload carries contextual bandits like any other, so the definitions have to be
+                        // refreshed here too - otherwise a bandit's weights would freeze at whatever the last polled
+                        // payload had while its features kept updating.
+                        var payload = Extensions.HttpClientExtensions.ParsePayloadFrom(sseEvent.Data, _logger, _config);
+                        var streamed = new FeaturePayload(payload.Features, payload.ContextualBandits);
+
+                        if (streamed.Features != null && await WriteCacheInOrder(streamed, null, sequence, _refreshWorkerCancellation.Token).ConfigureAwait(false))
                         {
-                            NotifyFeaturesStreamed(features);
+                            NotifyFeaturesStreamed(streamed);
 
                             _logger.LogInformation("Cache has been refreshed with server sent event features");
                         }
@@ -264,24 +265,22 @@ namespace GrowthBook.Api
             }
         }
 
-
-        private IDictionary<string, Feature> GetFeaturesFrom(string json)
+        /// <summary>
+        /// Stores the payload whole when the cache can hold one, and its features alone when it cannot.
+        /// </summary>
+        private Task StoreInCache(FeaturePayload payload, CancellationToken? cancellationToken)
         {
-            var featuresResponse = JsonConvert.DeserializeObject<FeaturesResponse>(json, JsonUtilities.PayloadSettings);
-
-            if (featuresResponse.EncryptedFeatures.IsNullOrWhitespace())
+            if (_cache is IGrowthBookPayloadCache payloadCache)
             {
-                _logger.LogInformation("API response JSON contained no encrypted features, returning \'{FeaturesResponseFeatureCount}\' unencrypted features", featuresResponse.FeatureCount);
-                return featuresResponse.Features;
+                return payloadCache.RefreshWith(payload, cancellationToken);
             }
 
-            _logger.LogInformation("API response JSON contained encrypted features, decrypting them now");
+            if (payload.ContextualBandits?.Count > 0 && Interlocked.Exchange(ref _warnedAboutUnstoredBandits, 1) == 0)
+            {
+                _logger.LogWarning("The payload carries contextual bandits, but the feature cache does not implement {Interface}, so they are not stored and bandit rules use their own weights", nameof(IGrowthBookPayloadCache));
+            }
 
-            var decryptedFeaturesJson = featuresResponse.EncryptedFeatures.DecryptWith(_config.DecryptionKey);
-
-            _logger.LogDebug("Decrypted the features payload into \'{CharacterCount}\' characters of JSON", decryptedFeaturesJson?.Length ?? 0);
-
-            return JsonConvert.DeserializeObject<Dictionary<string, Feature>>(decryptedFeaturesJson, JsonUtilities.PayloadSettings);
+            return _cache.RefreshWith(payload.Features, cancellationToken);
         }
 
         public void Dispose()
