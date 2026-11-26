@@ -53,7 +53,8 @@ namespace GrowthBook.Api
             var url = GetRemoteEvaluationUrl(apiHost, clientKey);
 
             _logger.LogInformation("Starting remote evaluation request to {Url}", url);
-            _logger.LogDebug("Remote evaluation request payload: {Payload}", JsonConvert.SerializeObject(request));
+            _logger.LogDebug("Remote evaluation request carries {AttributeCount} attributes, {ForcedFeatureCount} forced features and {ForcedVariationCount} forced variations",
+                request.Attributes?.Count ?? 0, request.ForcedFeatures?.Count ?? 0, request.ForcedVariations?.Count ?? 0);
 
             try
             {
@@ -88,8 +89,8 @@ namespace GrowthBook.Api
                         {
                             var responseContent = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
 
-                            _logger.LogDebug("Received response with status {StatusCode}: {Response}",
-                                response.StatusCode, responseContent);
+                            _logger.LogDebug("Received response with status {StatusCode} and {CharacterCount} characters of content",
+                                response.StatusCode, responseContent?.Length ?? 0);
 
                             if (response.IsSuccessStatusCode)
                             {
